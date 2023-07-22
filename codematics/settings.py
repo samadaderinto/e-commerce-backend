@@ -40,9 +40,21 @@ INSTALLED_APPS = [
     
      'core.apps.CoreConfig',
      'cart.apps.CartConfig',
+     'store.apps.StoreConfig',
      
      
-     'taggit'
+     
+    'django_filters',
+    "corsheaders",
+    "rest_framework",
+    "phonenumber_field",
+    'django_crontab',
+    'rest_framework_simplejwt',
+    "push_notifications",
+    'taggit',
+     
+    
+     
      
      
 

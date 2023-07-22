@@ -1,7 +1,16 @@
 from django.db import models
 
+from django.core.validators import MinValueValidator, MaxValueValidator
+
+
+
+
+
+
 # Create your models here.
-from core.utilities import CATEGORIES_CHOICE, LABEL_CHOICE, USPS_SERVICE_CHOICE
+from core.utilities import CATEGORIES_CHOICE, LABEL_CHOICE, USPS_SERVICE_CHOICE,DELIVERY_METHOD_CHOICE
+
+from core.models import User
 from django.core.validators import MinValueValidator, MaxValueValidator
 from nanoid import generate
 from taggit.managers import TaggableManager
@@ -41,3 +50,37 @@ class Product(models.Model):
     
     def set_sponsorship(self,switch_to: bool):
             self.sponsored = switch_to
+            
+class ProductImg(models.Model):
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="images")
+    image = models.ImageField(
+        upload_to="images", default="", null=True, blank=True)
+    
+                
+class Specifications(models.Model):
+    product = models.ForeignKey(Product,on_delete=models.CASCADE)
+    weight = models.DecimalField(decimal_places=2, max_digits=4)
+    height = models.DecimalField(max_digits=4, decimal_places=2)
+    width = models.DecimalField(max_digits=4, decimal_places=2)
+    breadth = models.DecimalField(max_digits=4, decimal_places=2)
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)            
+    
+    
+class Cart(models.Model):
+    id = models.CharField(max_length=15, default=generate(
+        size=15), primary_key=True, editable=False, unique=True)
+    userId = models.ForeignKey(User, on_delete=models.CASCADE)
+    created = models.DateTimeField(auto_now_add=True)
+    ordered = models.BooleanField(default=False)
+
+
+class CartItem(models.Model):
+    cartId = models.ForeignKey(Cart, on_delete=models.CASCADE)
+    productId = models.ForeignKey(Product, on_delete=models.CASCADE)
+    quantity = models.PositiveSmallIntegerField(
+        validators=[MinValueValidator(0)], default=0)    
+    
+    
+    

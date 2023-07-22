@@ -3,8 +3,11 @@ from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
 from phonenumber_field.modelfields import PhoneNumberField
 
-from cart.models import Product
+
+
 from core.utilities import DELIVERY_METHOD_CHOICE
+
+
 # Create your models here.
 
 
@@ -85,8 +88,9 @@ class Address(models.Model):
     updated = models.DateTimeField(auto_now=True)
 
 
-
-
+# do not modify the position of this code..
+# it is to avoid aving circular imports error 
+from cart.models import Product
 
 class Review(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -159,4 +163,4 @@ class Recent(models.Model):
     productId = models.ForeignKey(Product, on_delete=models.CASCADE)
     viewed = models.BooleanField(default=True)
     created = models.DateTimeField(auto_now_add=True)
-    
+        
