@@ -1,6 +1,5 @@
 from rest_framework import permissions
-
-# from store.models import Store
+from store.models import Store
 
 
 class IsStaffEditor(permissions.DjangoModelPermissions):
@@ -42,7 +41,7 @@ class IsUserOrReadOnly(permissions.DjangoModelPermissions):
 class IsStoreOwnerOrReadOnly(permissions.DjangoModelPermissions):
 
     def has_permission(self, request, view):
-        # if not Store.filter(user = request.user.pk):
-        #    return False
+        if not Store.filter(user = request.user.pk):
+           return False
         return super().has_permission(request, view)
 

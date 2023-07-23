@@ -1,16 +1,17 @@
 from django.db import models
-from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.contrib.auth.models import BaseUserManager, AbstractUser
+
+from cart.models import CartItem, Product
+from core.utilities import DELIVERY_METHOD_CHOICE, USPS_SERVICE_CHOICE
+from store.models import StoreAddress
+
+from datetime import datetime
+from nanoid import generate
 from phonenumber_field.modelfields import PhoneNumberField
-
-
-
-from core.utilities import DELIVERY_METHOD_CHOICE
-
+from functools import partial
 
 # Create your models here.
-
-
 class UserManager(BaseUserManager):
 
     def create_user(self, email=None, password=None, **extra_fields):
@@ -73,7 +74,6 @@ class User(AbstractUser):
     REQUIRED_FIELDS = ['firstname', 'lastname', 'phone1', 'password']
 
     objects = UserManager()
-    
 
 
 class Address(models.Model):
@@ -88,9 +88,13 @@ class Address(models.Model):
     updated = models.DateTimeField(auto_now=True)
 
 
-# do not modify the position of this code..
-# it is to avoid aving circular imports error 
-from cart.models import Product
+class Refund(models.Model):
+    user = models.ForeignKey(User,
+                             on_delete=models.CASCADE, blank=True, null=True)
+    order = models.ForeignKey(CartItem, on_delete=models.CASCADE)
+    reason = models.TextField()
+    accepted = models.BooleanField(default=False)
+
 
 class Review(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
@@ -124,17 +128,17 @@ class Review(models.Model):
         return Review.objects.filter(productId=self.productId.pk).count()
 
 
-# class DeliveryEstimates(models.Model):
-#     usps_service = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=20)
-#     usps_delivery_date = models.IntegerField(
-#         default=0, blank=False, null=False)
-#     destination_zip = models.ForeignKey(Address, on_delete=models.CASCADE)
-#     origin_zip = models.ForeignKey(StoreAddress, on_delete=models.CASCADE)
-#     pick_up = models.IntegerField(default=25, blank=False, null=False)
-#     standard_delivery = models.DecimalField(
-#         max_digits=15, decimal_places=2, default=0, blank=False, null=False)
-#     express_delivery = models.DecimalField(
-#         max_digits=15, decimal_places=2, default=0, blank=False, null=False)
+class DeliveryEstimates(models.Model):
+    usps_service = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=20)
+    usps_delivery_date = models.IntegerField(
+        default=0, blank=False, null=False)
+    destination_zip = models.ForeignKey(Address, on_delete=models.CASCADE)
+    origin_zip = models.ForeignKey(StoreAddress, on_delete=models.CASCADE)
+    pick_up = models.IntegerField(default=25, blank=False, null=False)
+    standard_delivery = models.DecimalField(
+        max_digits=15, decimal_places=2, default=0, blank=False, null=False)
+    express_delivery = models.DecimalField(
+        max_digits=15, decimal_places=2, default=0, blank=False, null=False)
 
 
 class DeliveryInfo(models.Model):
@@ -163,4 +167,3 @@ class Recent(models.Model):
     productId = models.ForeignKey(Product, on_delete=models.CASCADE)
     viewed = models.BooleanField(default=True)
     created = models.DateTimeField(auto_now_add=True)
-        
