@@ -1,10 +1,5 @@
-from django.db import transaction
-from django import setup
+from django.shortcuts import render
 from django.contrib.auth.models import Group
-setup()
-
-from core.models import User
-from payment.models import Coupon
 
 
 from rest_framework.parsers import JSONParser
@@ -12,17 +7,27 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAdminUser
 from rest_framework.response import Response
 
-from staff.serializers import CouponSerializer, CouponSerializer
-from core.utilities import get_tokens_for_user, methods
+from payment.models import Coupon
+
+from payment.serializers import CouponSerializer
+
+
+
 from core.serializers import UserSerializer, VerifyUserSerializer
-from core.permissions import IsStaffEditor, IsUserOrReadOnly, IsUserOrReadOnly
+from core.permissions import IsStaffEditor,IsUserOrReadOnly
+from core.utilities import get_auth_tokens_for_user, methods, send_mail
+from core.models import User
 
 
 
-@api_view([methods.post])
+
+# Create your views here.
+
+
+@api_view([methods["post"]])
 def create_staff(request):
 
-    if request.method == methods.post:
+    if request.method == methods["post"]:
         data = JSONParser().parse(request)
         serializer = UserSerializer(data=data)
         if serializer.is_valid():
@@ -39,13 +44,13 @@ def create_staff(request):
             else:
                 VerifyUserSerializer.validate(data=data)
                 user = User.objects.create_staffuser(
-                    email=email, password=password, firstname=firstname, lastname=lastname, phone1=phone1, phone2=phone2)
-                auth_token = get_tokens_for_user(user)
+                    email=email, password=password, firstname=firstname, lastname=lastname, phone1=phone1, phone2=phone2,gender=gender)
+                auth_token = get_auth_tokens_for_user(user)
             return Response(serializer.data, status=201, headers={"Authorization": auth_token}, message="Account successfully created, permissions may be granted within 1 to 3 business days")
         return Response(serializer.errors, status=400)
 
 
-@api_view([methods.post])
+@api_view([methods["post"]])
 @permission_classes(IsAdminUser,)
 def give_staff_permission(request):
     data = JSONParser().parse(request)
@@ -60,7 +65,7 @@ def give_staff_permission(request):
         return Response(status=404)
 
 
-@api_view([methods.post])
+@api_view([methods["post"]])
 @permission_classes([IsStaffEditor])
 def edit_staff_detail(request, userId):
     data = JSONParser().parse(request)
@@ -71,7 +76,7 @@ def edit_staff_detail(request, userId):
     except:
         return Response(status=404)
 
-    if request.method == methods.post:
+    if request.method == methods["post"]:
 
         serializer = UserSerializer(user, data=data)
         if serializer.is_valid():
@@ -80,21 +85,21 @@ def edit_staff_detail(request, userId):
         return Response(serializer.errors, status=400)
 
 
-@api_view([methods.post])
+@api_view([methods["delete"]])
 @permission_classes([IsUserOrReadOnly, IsStaffEditor])
 def delete_staff_account(request):
-    if request.method == methods.post:
+    if request.method == methods["delete"]:
         data = JSONParser().parse(request)
         serializer = UserSerializer(data=data)
         if serializer.is_valid():
             serializer.validated_data()
             serializer.create(serializer)
-            # send_html_mail('welcome', serializer.validated_data["email"], None)
+            send_mail('welcome', serializer.validated_data["email"], None)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
 
 
-@api_view([methods.post])
+@api_view([methods["post"]])
 @permission_classes(IsAdminUser,)
 def revoke_staff_permission(request):
     data = JSONParser().parse(request)
@@ -105,15 +110,15 @@ def revoke_staff_permission(request):
     try:
         user = User.objects.get(email=email, is_superuser=True)
         user.groups.remove(Group.objects.get(name='staff'))
-        # send_html_mail()
+        send_mail()
     except:
         return Response(status=404)
 
 
-@api_view([methods.get, methods.post])
+@api_view([methods["get"], methods["post"]])
 @permission_classes([IsAdminUser])
 def get_staffs(request):
-    if request.method == methods.get:
+    if request.method == methods["get"]:
         staffs = User.objects.all().order_by("created").reverse()
         serializer = UserSerializer(
             staffs, many=True)
@@ -121,10 +126,10 @@ def get_staffs(request):
 
 
 @permission_classes([IsStaffEditor])
-@api_view([methods.get])
+@api_view([methods["get"]])
 def get_staff(request, userId):
     staff = User.objects.get(pk=userId, is_staff=True)
-    if request.method == methods.get:
+    if request.method == methods["get"]:
 
         serializer = User(staff)
         if serializer.is_valid():
@@ -133,7 +138,7 @@ def get_staff(request, userId):
     return Response(serializer.errors, status=400)
 
 
-@api_view([methods.get])
+@api_view([methods["get"]])
 @permission_classes([IsStaffEditor, IsUserOrReadOnly])
 def get_coupons(request):
     try:
@@ -141,12 +146,12 @@ def get_coupons(request):
     except:
         return Response(status=404)
 
-    if request.method == methods.get:
+    if request.method == methods["get"]:
         serializer = CouponSerializer(coupons, many=True)
         return Response(serializer.data, safe=False)
 
 
-@api_view([methods.delete])
+@api_view([methods["delete"]])
 @permission_classes([IsAdminUser])
 def delete_coupon(request, codeId):
     try:
@@ -154,15 +159,15 @@ def delete_coupon(request, codeId):
     except:
         return Response(status=404)
 
-    if request.method == 'DELETE':
+    if request.method == methods["delete"]:
         coupons.delete()
     return Response(status=201)
 
 
-@api_view([methods.post])
+@api_view([methods["post"]])
 @permission_classes([IsAdminUser])
 def create_coupon(request):
-    if request.method == methods.post:
+    if request.method == methods["post"]:
         data = JSONParser().parse(request)
         serializer = CouponSerializer(data=data)
         if serializer.is_valid():
@@ -171,7 +176,7 @@ def create_coupon(request):
         return Response(serializer.errors, status=400)
 
 
-@api_view([methods.post, methods.patch])
+@api_view([methods["post"], methods["patch"]])
 @permission_classes([IsAdminUser])
 def alter_coupon(request, code):
 

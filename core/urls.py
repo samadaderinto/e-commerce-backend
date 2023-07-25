@@ -1,7 +1,9 @@
 from django.urls import path
 
-from staff.views import get_coupons
-from core.views import EmailTokenObtainPairView, Reset_password, UserLogout, edit_review_by_product_id, product_by_id, product_list, search_productListView
+
+
+
+from core.views import EmailTokenObtainPairView, Reset_password, create_user, UserLogout, edit_review_by_product_id, product_by_id, product_list, search_productListView,edit_user_detail
 from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
@@ -16,13 +18,16 @@ urlpatterns = [
     
     
     path("productcard/<int:id>/", product_by_id, name="product"),
-
-    path("coupons/", get_coupons, name="products"),
+    
+    
+    
+    path("users/<int:userId>/edit/",edit_user_detail,name="edit_user_info"),
    
-
-    path('auth/login/', EmailTokenObtainPairView.as_view(),
+   
+    path('auth/user/signup/', create_user, name="user_signup"),
+    path('auth/user/login/', EmailTokenObtainPairView.as_view(),
          name='token_obtain_pair'),
-    path('auth/login/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('auth/user/login/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('auth/logout/', UserLogout, name='logout'),
     path('auth/password_reset/', Reset_password.as_view(), name='reset_password'),
 

@@ -1,8 +1,7 @@
 from django.contrib.sites.shortcuts import get_current_site
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.utils.encoding import smart_str, smart_bytes, force_str, DjangoUnicodeDecodeError
-from django.contrib.auth.models import User as authUser
 from django.urls import reverse
+from django.contrib.auth import password_validation
 
 
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -16,57 +15,67 @@ from core.models import Address, Recent, Review, User, Wishlist
 
 
 from core.utilities import generate_token, send_mail
-from cart.serializers import ProductSerializer, ProductCardSerializer
+from product.serializers import ProductSerializer, ProductCardSerializer
 
 
 
-
-class RefundsSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Address
-        fields = ['user',
-                  'address',
-                  'zip',
-                  'country',
-                  'state',
-                  'city',
-                  'is_default',
-                  'created',
-                  'updated']
 
 
 class UserSerializer(serializers.ModelSerializer):
-
+    
+    # hides password on response by overriding the init method
+    # note: extr_kwargs didn't work
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+       
+        self.fields['password'].write_only = True
+ 
+        
     class Meta:
         model = User
-        fields = ("id",
-                  'firstname',
-                  'lastname',
-                  "email",
-                  "phone1",
-                  "gender",
-                  "password",
-                  "phone2",
-                  "created",
-                  "updated")
-    extra_kwargs = {
-        "password": {'write_only': True}
-    }
+        fields = [
+            'id',
+            "email",
+            "first_name",
+            "last_name",
+            "phone1",
+            "phone2",
+            "gender",
+            "password",
+            "created",
+            "updated"
+        ]
 
-
-class AddressSerializer(serializers.ModelSerializer):
-
+  
+class RefundsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
-        fields = ['user',
-                  'address',
-                  'zip',
-                  'country',
-                  'state',
-                  'city',
-                  'is_default',
-                  'created',
-                  'updated']
+        fields = [
+            "user",
+            "address",
+            "zip",
+            "country",
+            "state",
+            "city",
+            "is_default",
+            "created",
+            "updated"
+        ]
+
+class AddressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Address
+        fields = [
+            "user",
+            "address",
+            "zip",
+            "country",
+            "state",
+            "city",
+            "is_default",
+            "created",
+            "updated",
+        ]
 
 
 class VerifyUserSerializer(serializers.Serializer):
@@ -76,20 +85,19 @@ class VerifyUserSerializer(serializers.Serializer):
         fields = ["email"]
 
         def validate(self, attrs):
-
-            email = attrs["data"].get('email', "")
-            mode = attrs["data"].get('mode', "signup")
+            email = attrs["data"].get("email", "")
+            mode = attrs["data"].get("mode", "signup")
 
             if mode == "signup":
                 user = User.objects.get(email=email)
                 uidb64 = urlsafe_base64_encode(user.id)
                 token = str(generate_token.make_token(user))
                 current_domain = get_current_site(
-                    request=attrs["data"].get('request')).domain
-                relative_link = reverse('email-verify')
-                absolute_url = f'https://{current_domain}\{relative_link}?token={token}'
-                data = {"firstname": user.firstname,
-                        "absolute_url": absolute_url}
+                    request=attrs["data"].get("request")
+                ).domain
+                relative_link = reverse("email-verify")
+                absolute_url = f"https://{current_domain}\{relative_link}?token={token}"
+                data = {"firstname": user.firstname, "absolute_url": absolute_url}
                 send_mail("onboarding-user", user.email, data=data)
 
             else:
@@ -98,11 +106,13 @@ class VerifyUserSerializer(serializers.Serializer):
                     uidb64 = urlsafe_base64_encode(user.id)
                     token = str(generate_token.make_token(user))
                     current_domain = get_current_site(
-                        request=attrs["data"].get('request')).domain
-                    relative_link = reverse('email-verify')
-                    absolute_url = f'https://{current_domain}\{relative_link}?token={token}'
-                    data = {"firstname": user.firstname,
-                            "absolute_url": absolute_url}
+                        request=attrs["data"].get("request")
+                    ).domain
+                    relative_link = reverse("email-verify")
+                    absolute_url = (
+                        f"https://{current_domain}\{relative_link}?token={token}"
+                    )
+                    data = {"firstname": user.firstname, "absolute_url": absolute_url}
                     send_mail("password-reset", user.email, data=data)
                 except:
                     Response("Account does not exist", status=404)
@@ -117,18 +127,13 @@ class UserMailSerializer(serializers.ModelSerializer):
 class StoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
-        fields = ["id",
-                  "user",
-                  "username",
-                  "name",
-                  "created"]
+        fields = ["id", "user", "username", "name", "created"]
 
 
 class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
-        fields = ["url",
-                  "name"]
+        fields = ["url", "name"]
 
 
 class WishlistSerializer(serializers.ModelSerializer):
@@ -136,15 +141,13 @@ class WishlistSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Wishlist
-        fields = ["liked",
-                  "product_details"]
+        fields = ["liked", "product_details"]
 
 
 class WishlistPostSerializer(serializers.ModelSerializer):
     class Meta:
         model = Wishlist
-        fields = ['user',
-                  "productId"]
+        fields = ["user", "productId"]
 
 
 class RecentsSerializer(serializers.ModelSerializer):
@@ -160,11 +163,9 @@ class RecentsSerializer(serializers.ModelSerializer):
 
 
 class RecentsPostSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = Recent
-        fields = ["productId",
-                  "user"]
+        fields = ["productId", "user"]
 
 
 class ReviewsSerializer(serializers.ModelSerializer):
@@ -172,35 +173,36 @@ class ReviewsSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Review
-        fields = ["user_details",
-                  "user",
-                  "productId",
-                  "label",
-                  "comment",
-                  "rating",
-                  'created',
-                  'updated']
+        fields = [
+            "user_details",
+            "user",
+            "productId",
+            "label",
+            "comment",
+            "rating",
+            "created",
+            "updated",
+        ]
 
-    extra_kwargs = {
-        "user_details": {'read_only': True}
-    }
+    extra_kwargs = {"user_details": {"read_only": True}}
 
 
 class ReviewsPostSerializer(serializers.ModelSerializer):
-
     class Meta:
         model = Review
-        fields = ["user",
-                  "productId",
-                  "label",
-                  "comment",
-                  "rating",
-                  'created',
-                  'updated']
+        fields = [
+            "user",
+            "productId",
+            "label",
+            "comment",
+            "rating",
+            "created",
+            "updated",
+        ]
 
 
 class EmailTokenObtainSerializer(TokenObtainSerializer):
-    username_field = authUser.EMAIL_FIELD
+    username_field = User.EMAIL_FIELD
 
 
 class CustomTokenObtainPairSerializer(EmailTokenObtainSerializer):
