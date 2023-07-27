@@ -1,11 +1,12 @@
 from django.conf import settings
 
+
 from payment.models import Coupon, Order
 
 from product.models import Product
 from core.models import Address
 
-from core.permissions import IsUserOrReadOnly
+from core.permissions import EcommerceAccessPolicy
 from core.utilities import methods, calculate_order_amount
 from payment.serializers import OrdersSerializer
 
@@ -22,6 +23,10 @@ stripe.api_key = settings.STRIPE_SECRET
 
 
 # Create your views here.
+
+
+@api_view([methods["post"]])
+@permission_classes((EcommerceAccessPolicy,))
 def create_checkout_session(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
@@ -59,7 +64,7 @@ def create_checkout_session(request):
 
 
 @api_view([methods["post"]])
-@permission_classes(IsUserOrReadOnly)
+@permission_classes((EcommerceAccessPolicy,))
 def capture_checkout_session(request):
     if request.method == methods["post"]:
         try:
@@ -96,24 +101,20 @@ def capture_checkout_session(request):
             # total = round(Decimal(sum(subtotal) + tax), 2)
             # stripe_total = int(total*100)
 
-            # intent = stripe.PaymentIntent.create(
-            #     amount=stripe_total,
-            #     currency="usd",
-            #     automatic_payment_methods={"enabled": True},
-            # )
             intent = stripe.PaymentIntent.create(
                 amount=calculate_order_amount(cart["items"]),
                 currency="usd",
                 automatic_payment_methods={
                     "enabled": True,
                 },
+                receipt_email="test@example.com",
             )
 
             return ""
 
 
 @api_view([methods["post"]])
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def redeem_coupon(request):
     data = JSONParser().parse(request)
 

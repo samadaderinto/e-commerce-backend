@@ -17,12 +17,12 @@ from product.serializers import (
     CartSerializer,
     JoinCartSerializer,
 )
-from core.permissions import IsStaffEditor, IsStoreOwnerOrReadOnly, IsUserOrReadOnly
+from core.permissions import EcommerceAccessPolicy
 
 
 # Create your views here.
 @api_view([methods["get"]])
-@permission_classes([IsStaffEditor, IsUserOrReadOnly, IsStoreOwnerOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def get_cart(request, userId, ordered):
     try:
         user = Cart.objects.get(pk=userId, ordered=ordered)
@@ -36,8 +36,11 @@ def get_cart(request, userId, ordered):
 
 
 # @api_view([methods["post"],methods["get"]])
+
+
 class CartViewSet(CreateModelMixin, GenericViewSet):
     queryset = Cart.objects.all()
+    permission_classes = (EcommerceAccessPolicy,)
     serializer_class = CartSerializer
 
 
@@ -53,19 +56,12 @@ class CartItemViewSet(ModelViewSet):
     def get_serializer_context(self):
         return {"cartId": self.kwargs["cart_pk"]}
 
+    permission_classes = (EcommerceAccessPolicy,)
 
-@api_view([methods["post"]])
-def cart_list(request):
-    if request.method == methods["post"]:
-        data = JSONParser().parse(request)
-        serializer = CartSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
 
 
 @api_view([methods["get"], methods["delete"], methods["put"]])
+@permission_classes((EcommerceAccessPolicy,))
 def cart_by_user(request, user):
     try:
         cart = Cart.objects.filter(user=user)
@@ -89,6 +85,7 @@ def cart_by_user(request, user):
 
 
 @api_view([methods["get"], methods["delete"], methods["put"]])
+@permission_classes((EcommerceAccessPolicy,))
 def cart_item_by_id(request, pk):
     try:
         cart_item = CartItem.objects.filter(pk=pk)
@@ -113,6 +110,7 @@ def cart_item_by_id(request, pk):
 
 
 @api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
 def cart_item_by_cart(request, cartId):
     try:
         cart_item = CartItem.objects.filter(cartId=cartId)
@@ -124,6 +122,8 @@ def cart_item_by_cart(request, cartId):
         return Response(serializer.data, safe=False)
 
 
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
 def cart_item_by_cart_id(request, cartId):
     try:
         cart_item = (
@@ -139,6 +139,8 @@ def cart_item_by_cart_id(request, cartId):
         return Response(serializer.data, safe=False)
 
 
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
 def cart_item_detect_same_item(request, cartId, productId):
     try:
         cart_item = CartItem.objects.filter(cartId=cartId).filter(productId=productId)

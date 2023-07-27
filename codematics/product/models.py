@@ -10,7 +10,7 @@ from core.utilities import (
     USPS_SERVICE_CHOICE,
     DELIVERY_METHOD_CHOICE,
 )
-\
+
 from nanoid import generate
 
 from taggit.managers import TaggableManager
