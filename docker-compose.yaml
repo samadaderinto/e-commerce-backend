@@ -1,0 +1,36 @@
+version: "3.9"
+services:
+  web:
+    depends_on:
+      - postgres_db
+    build:
+      context: ./backend wahab
+      dockerfile: DockerFile
+    image: ./codematics:1.0.0
+    enviroment:
+      - PORT=8020
+    env_file:
+      - codematics/codematics/.env
+    ports:
+      - "8001:8020"
+    command: sh -c "chmod +x /app/migrate.sh && sh chmod /app/migrate.sh && /app/entrypoint.sh"
+    volumes:
+      - staticfiles:/app/staticfiles/
+
+  postgres_db:
+    image: postgres
+    restart: always
+    command: -p 5434
+    ports:
+      - "5434:5434"
+    env file:
+      - web/.env
+    expose:
+      - 5432
+    volumes:
+      - postgres_data: /var/lib/postgresql/data/
+
+volumes:
+  staticfiles:
+    external: true
+  postgres_data:
