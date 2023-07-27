@@ -1,40 +1,114 @@
-from rest_framework import permissions
-
-from store.models import Store
-
-# from store.models import Store
+from rest_access_policy import AccessPolicy
 
 
-class IsStaffEditor(permissions.DjangoModelPermissions):
-
-    perms_map = {
-        'GET': ['%(app_label)s.view_%(model_name)s'],
-        'OPTIONS': [],
-        'HEAD': [],
-        'POST': ['%(app_label)s.add_%(model_name)s'],
-        'PUT': ['%(app_label)s.change_%(model_name)s'],
-        'PATCH': ['%(app_label)s.change_%(model_name)s'],
-        'DELETE': ['%(app_label)s.delete_%(model_name)s'],
-    }
-
-    def has_permission(self, request, view):
-        if not request.user.groups.filter(name="staffs").exists():
-           return False
-        return super().has_permission(request, view)
-
-
-class IsUserOrReadOnly(permissions.DjangoModelPermissions):
-
-    def has_permission(self, request, view):
-        if not request.user:
-           return False
-        return super().has_permission(request, view)
-
-
-class IsStoreOwnerOrReadOnly(permissions.DjangoModelPermissions):
-
-    def has_permission(self, request, view):
-        if not Store.filter(user = request.user.pk):
-            return False
-        return super().has_permission(request, view)
-
+class EcommerceAccessPolicy(AccessPolicy):
+    statements = [
+        {
+            "action": [
+                "create_user",
+                "Reset_password",
+                "usps_estimate_delivery",
+                "productcard_by_id",
+                "product_by_id",
+                "product_image_list",
+                "product_images_by_product_id",
+                "product_image_by_id",
+                "search_productListView",
+                "get_store",
+                "create_marketer" "store_products",
+                "get_reviews_by_product_id",
+                "get_specifications",
+            ],
+            "principal": "*",
+            "effect": "allow",
+        },
+        {
+            "action": [
+                "<method:get>",
+                "edit_user_detail",
+                "delete_user_account",
+                "get_user",
+                "create_wishlist",
+                "get_wishlist_by_user_id",
+                "reviews_by_user_id",
+                "create_review",
+                "recent_product_by_user",
+                "create_recent",
+                "orders_by_user",
+                "create_store" "orders_by_user_and_status",
+                "orders_by_user_and_status_and_id",
+                "create_address",
+                "edit_review_by_product_id",
+                "request_refund",
+                "UserLogout",
+                "get_cart",
+                "CartItemViewSet",
+                "cart_by_user",
+                "cart_item_by_id",
+                "redeem_coupon",
+                "capture_checkout_session",
+                "create_checkout_session",
+            ],
+            "principal": "authenticated",
+            "effect": "allow",
+        },
+        {
+            "action": [
+                "get_staff",
+                "get_staffs",
+                "get_coupons",
+                "get_stores" "create_coupon",
+                "delete_coupon",
+                "edit_coupon",
+                "revoke_staff_permission",
+                "delete_staff_account",
+                "give_staff_permission",
+                "CartViewSet",
+                "get_marketers",
+            ],
+            "principal": ["admin"],
+            "effect": "allow",
+        },
+        {
+            "action": [
+                "create_marketer",
+                "edit_marketer_detail",
+                "get_link",
+                "get_marketer",
+                "delete_marketer_account",
+            ],
+            "principal": ["group:marketer"],
+            "effect": "allow",
+        },
+        {
+            "action": [
+                "get_staff",
+                "get_staffs",
+                "get_coupons",
+                "get_stores" "edit_staff_detail",
+                "delete_staff_account",
+                "CartViewSet",
+                "get_marketers",
+                "delete_marketer_account",
+            ],
+            "principal": ["group:staff"],
+            "effect": "allow",
+        },
+        {
+            "action": [
+                "publish",
+                "create_schedule",
+                "delete_file",
+                "create_specifications",
+                "specifications",
+                "store_products",
+                "schedule_visiblity",
+                "get_stores",
+                "delete_store",
+                "edit_store_info",
+                "create_schedule",
+            ],
+            "principal": ["group:seller"],
+            "effect": "allow",
+        },
+    ]

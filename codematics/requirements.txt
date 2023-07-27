@@ -19,3 +19,4 @@ django-taggit
 nanoid
 pytest-django
 django-dotenv
+drf-access-policy

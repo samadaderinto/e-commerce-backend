@@ -7,12 +7,12 @@ from rest_framework.permissions import AllowAny
 from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
 
-from core.permissions import IsStoreOwnerOrReadOnly, IsStaffEditor, IsUserOrReadOnly
+from core.permissions import EcommerceAccessPolicy
 from core.utilities import methods
 
 
 @api_view([methods["post"]])
-@permission_classes([AllowAny])
+@permission_classes((EcommerceAccessPolicy,))
 def create_marketer(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
@@ -24,7 +24,7 @@ def create_marketer(request):
 
 
 @api_view([methods["patch"]])
-# @permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def edit_marketer_detail(request, userId):
     data = JSONParser().parse(request)
 
@@ -42,8 +42,8 @@ def edit_marketer_detail(request, userId):
 
 
 @api_view([methods["delete"]])
-# @permission_classes([IsUserOrReadOnly])
-def delete_user_account(request, userId):
+@permission_classes((EcommerceAccessPolicy,))
+def delete_marketer_account(request, userId):
     try:
         marketer = Marketer.objects.get(pk=userId)
 
@@ -56,8 +56,8 @@ def delete_user_account(request, userId):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsStaffEditor])
-def get_marketer(request):
+@permission_classes((EcommerceAccessPolicy,))
+def get_marketers(request):
     try:
         marketer = Marketer.objects.all().order_by("created").reverse()
     except:
@@ -69,8 +69,8 @@ def get_marketer(request):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsStaffEditor, IsUserOrReadOnly, IsStoreOwnerOrReadOnly])
-def get_user(request, userId):
+@permission_classes((EcommerceAccessPolicy,))
+def get_marketer(request, userId):
     try:
         marketer = Marketer.objects.get(pk=userId)
     except:
@@ -84,7 +84,7 @@ def get_user(request, userId):
 
 
 @api_view([methods["get"]])
-@permission_classes([AllowAny])
+@permission_classes((EcommerceAccessPolicy,))
 def get_link(request):
     
     if request.method == methods["get"]:

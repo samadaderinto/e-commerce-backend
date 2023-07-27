@@ -1,6 +1,8 @@
 from django_filters import rest_framework
 from django.conf import settings
 
+
+from rest_framework import status
 from rest_framework.filters import SearchFilter
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
@@ -10,7 +12,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 
-from core.permissions import IsStoreOwnerOrReadOnly, IsStaffEditor, IsUserOrReadOnly
+from core.permissions import EcommerceAccessPolicy
 from core.utilities import get_auth_tokens_for_user, methods
 
 from payment.models import Order
@@ -39,15 +41,15 @@ from payment.serializers import OrdersSerializer
 
 
 @api_view([methods["post"]])
-@permission_classes([AllowAny])
+@permission_classes((EcommerceAccessPolicy,))
 def create_user(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
-        if User.objects.filter(email=data['email']).exists():
-            return Response({'error': 'Email already registered'}, status=400)
+        if User.objects.filter(email=data["email"]).exists():
+            return Response({"error": "Email already registered"}, status=status.HTTP_400_BAD_REQUEST)
         else:
             serializer = UserSerializer(data=data)
-        
+
         if serializer.is_valid():
             # email = serializer.validated_data["email"]
             # password = serializer.validated_data["password"]
@@ -70,12 +72,12 @@ def create_user(request):
             # headers={"Authorization": auth_token}
             serializer.save()
 
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=404)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["patch"]])
-# @permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def edit_user_detail(request, userId):
     data = JSONParser().parse(request)
 
@@ -89,11 +91,11 @@ def edit_user_detail(request, userId):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["delete"]])
-# @permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def delete_user_account(request, userId):
     try:
         user = User.objects.get(pk=userId)
@@ -107,7 +109,7 @@ def delete_user_account(request, userId):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsStaffEditor])
+@permission_classes((EcommerceAccessPolicy,))
 def get_users(request):
     try:
         users = User.objects.all().order_by("created").reverse()
@@ -120,7 +122,7 @@ def get_users(request):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsStaffEditor, IsUserOrReadOnly, IsStoreOwnerOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def get_user(request, userId):
     try:
         user = User.objects.get(pk=userId)
@@ -133,7 +135,7 @@ def get_user(request, userId):
     return Response(serializer.data, status=201)
 
 
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["post"]])
 def create_wishlist(request, userId, productId):
     try:
@@ -148,11 +150,11 @@ def create_wishlist(request, userId, productId):
         else:
             if serializer.is_valid():
                 serializer.save()
-                return Response({"status": "successfully added"}, status=200)
-            return Response(serializer.errors, status=400)
+                return Response({"status": "successfully added"}, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["get"]])
 def get_wishlist_by_user_id(request, userId):
     try:
@@ -162,10 +164,10 @@ def get_wishlist_by_user_id(request, userId):
 
     if request.method == methods["get"]:
         serializer = WishlistSerializer(wishlist, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data, safe=False, status=status.HTTP_200_OK)
 
 
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["get"]])
 def reviews_by_user_id(request, userId):
     try:
@@ -178,7 +180,7 @@ def reviews_by_user_id(request, userId):
         return Response(serializer.data, safe=False)
 
 
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["post"]])
 def create_review(request):
     if request.method == methods["post"]:
@@ -206,7 +208,7 @@ def create_review(request):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def recent_product_by_user(request, userId):
     try:
         recent = (
@@ -224,7 +226,7 @@ def recent_product_by_user(request, userId):
 
 
 @api_view([methods["post"]])
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def create_recent(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
@@ -232,11 +234,11 @@ def create_recent(request):
         if serializer.is_valid():
             serializer.save()
             return Response(status=201)
-        return Response(serializer.errors, status=400)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["get"]])
-@permission_classes([IsUserOrReadOnly, IsStaffEditor])
+@permission_classes((EcommerceAccessPolicy,))
 def orders_by_user(request, userId):
     try:
         orders = Order.objects.filter(user=userId).order_by("created").reverse()
@@ -249,7 +251,7 @@ def orders_by_user(request, userId):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsUserOrReadOnly, IsStaffEditor])
+@permission_classes((EcommerceAccessPolicy,))
 def orders_by_user_and_status(request, userId, status):
     try:
         recent = (
@@ -269,7 +271,7 @@ def orders_by_user_and_status(request, userId, status):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsUserOrReadOnly, IsStaffEditor])
+@permission_classes((EcommerceAccessPolicy,))
 def orders_by_user_and_status_and_id(request, userId, status, id):
     try:
         recent = (
@@ -286,8 +288,8 @@ def orders_by_user_and_status_and_id(request, userId, status, id):
         return Response(serializer.data, safe=False)
 
 
-@api_view([methods["get"], methods["post"]])
-@permission_classes([AllowAny])
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
 def product_list(request):
     if request.method == methods["get"]:
         products = Product.objects.all().order_by("created").reverse()
@@ -298,7 +300,7 @@ def product_list(request):
 
 
 @api_view([methods["get"], methods["delete"]])
-@permission_classes(AllowAny)
+@permission_classes((EcommerceAccessPolicy,))
 def productcard_by_id(request, id):
     try:
         product = Product.objects.prefetch_related("productId").get(pk=id)
@@ -314,7 +316,7 @@ def productcard_by_id(request, id):
 
 
 @api_view([methods["get"], methods["delete"]])
-@permission_classes(AllowAny)
+@permission_classes((EcommerceAccessPolicy,))
 def product_by_id(request, id):
     try:
         product = Product.objects.prefetch_related("productId").get(pk=id)
@@ -330,7 +332,7 @@ def product_by_id(request, id):
 
 
 @api_view([methods["get"], methods["put"]])
-@permission_classes(AllowAny)
+@permission_classes((EcommerceAccessPolicy,))
 def product_image_list(request):
     if request.method == methods["get"]:
         productImages = ProductImg.objects.all()
@@ -343,11 +345,11 @@ def product_image_list(request):
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data)
-        return Response(serializer.errors, status=400)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["get"]])
-@permission_classes(AllowAny)
+@permission_classes((EcommerceAccessPolicy,))
 def product_images_by_product_id(request, productId):
     try:
         productImg = ProductImg.objects.filter(productId=productId)
@@ -360,7 +362,7 @@ def product_images_by_product_id(request, productId):
 
 
 @api_view([methods["get"], methods["delete"]])
-@permission_classes(AllowAny)
+@permission_classes((EcommerceAccessPolicy,))
 def product_image_by_id(request, id):
     try:
         productImg = ProductImg.objects.filter(pk=id)
@@ -377,7 +379,7 @@ def product_image_by_id(request, id):
 
 
 @api_view([methods["post"]])
-@permission_classes(IsUserOrReadOnly)
+@permission_classes((EcommerceAccessPolicy,))
 def create_address(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
@@ -385,13 +387,11 @@ def create_address(request):
         if serializer.is_valid():
             serializer.save()
             return Response(status=201)
-        return Response(serializer.errors, status=400)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["post"]])
-@permission_classes(
-    IsUserOrReadOnly,
-)
+@permission_classes((EcommerceAccessPolicy,))
 def edit_review_by_product_id(request, productId):
     try:
         review = Review.objects.get(productId=productId)
@@ -412,7 +412,7 @@ def edit_review_by_product_id(request, productId):
 
 
 @api_view([methods["get"]])
-@permission_classes([IsStaffEditor, IsStoreOwnerOrReadOnly, IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def get_reviews_by_product_id(request, productId):
     try:
         product = (
@@ -427,7 +427,7 @@ def get_reviews_by_product_id(request, productId):
 
 
 class search_productListView(ListAPIView):
-    permission_classes = [AllowAny]
+    permission_classes = (EcommerceAccessPolicy,)
     queryset = Product.objects.all()
     serializer = ProductSerializer()
     search_field = (
@@ -457,18 +457,19 @@ class search_productListView(ListAPIView):
 
 
 @api_view([methods["post"]])
-@permission_classes(IsUserOrReadOnly)
+@permission_classes((EcommerceAccessPolicy,))
 def request_refund(request):
     data = JSONParser().parse(request)
     serializer = RefundsSerializer(data=data)
     if serializer.is_valid():
         serializer.save()
         return Response(status=201)
-    return Response(serializer.errors, status=400)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class Reset_password(GenericAPIView):
     serializer_class = VerifyUserSerializer
+    permission_classes = (EcommerceAccessPolicy,)
 
     def post(self, request):
         data = {"request": request, "data": request.data}
@@ -476,7 +477,7 @@ class Reset_password(GenericAPIView):
 
 
 class Password_token_checkAPI(GenericAPIView):
-    permission_classes = [AllowAny]
+    permission_classes = (EcommerceAccessPolicy,)
 
     def get(self, request, uidb64, token):
         pass
@@ -487,7 +488,7 @@ class EmailTokenObtainPairView(TokenObtainPairView):
 
 
 @api_view([methods["post"], methods["get"]])
-@permission_classes([IsUserOrReadOnly])
+@permission_classes((EcommerceAccessPolicy,))
 def usps_estimate_delivery(request, service, origin_zip, destination_zip):
     usps_api_route = f'https://secure.shippingapis.com/ShippingAPI.dll?API=FirstClassMail&XML=<FirstClassMailRequest USERID="{settings.USPS_USERNAME}"> <OriginZip>{origin_zip}</OriginZip> <DestinationZip>{destination_zip}</DestinationZip><FirstClassMailRequest>'
 
@@ -495,6 +496,7 @@ def usps_estimate_delivery(request, service, origin_zip, destination_zip):
 
 
 @api_view([methods["post"]])
+@permission_classes((EcommerceAccessPolicy,))
 def UserLogout(request):
     if request.method == methods["post"]:
         try:

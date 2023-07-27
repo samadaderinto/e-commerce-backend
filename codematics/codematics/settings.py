@@ -60,6 +60,7 @@ INSTALLED_APPS = [
     "taggit",
     "stripe",
     "psycopg2",
+    'rest_access_policy'
 ]
 
 MIDDLEWARE = [
