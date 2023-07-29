@@ -1,41 +1,48 @@
 from django.urls import path
 
-
-
-
-from core.views import EmailTokenObtainPairView, Reset_password, create_user, UserLogout, edit_review_by_product_id, product_by_id, product_list, search_productListView,edit_user_detail
+from core.views import (
+    EmailTokenObtainPairView,
+    ResetPassword,
+    create_user,
+    UserLogout,
+    edit_review_by_product_id,
+    edit_user_detail,
+    delete_user_account,
+    get_user,
+    request_refund,
+    PasswordTokenCheckAPI,
+    ResetPassword,
+    SetNewPassword,
+    create_wishlist
+)
 from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
-
-
-    path("products/<int:id>/", product_by_id, name="product"),
-
-    path("products/", product_list, name="products"),
-    path("products/find/", search_productListView.as_view(), name="products"),
-    path("products/<int:productId>/reviews/",
-         edit_review_by_product_id, name="products"),
-    
-    
-    path("productcard/<int:id>/", product_by_id, name="product"),
     
     
     
-    path("users/<int:userId>/edit/",edit_user_detail,name="edit_user_info"),
-   
-   
+    
+    
+    path('users/<int:userId>/wishlist/create/<int:productId>',create_wishlist,name='create_wishlist'),
     path('auth/user/signup/', create_user, name="user_signup"),
     path('auth/user/login/', EmailTokenObtainPairView.as_view(),
          name='token_obtain_pair'),
+    
     path('auth/user/login/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
-    path('auth/logout/', UserLogout, name='logout'),
-    path('auth/password_reset/', Reset_password.as_view(), name='reset_password'),
+    path('auth/password_reset/', ResetPassword.as_view(), name='reset_password'),
+    path('auth/password-reset/<uidb64>/<token>/', PasswordTokenCheckAPI.as_view(), name="password_reset"),
+    path ('password-reset-complete/', SetNewPassword.as_view(), name='password_reset_complete'),
 
-    path('refunds/', Reset_password.as_view()),
-    path('refunds/<int:orderId>/', Reset_password.as_view()),
-    path('refund/<int:orderId>/<str:email>/request/', Reset_password.as_view()),
-    path('refund/<int:orderId>/<str:email>/request/response/', Reset_password.as_view()),
 
+    path('refund/<int:orderId>/<str:userId>/request/', request_refund),
+
+      # tested
+     path("users/<int:userId>/edit/",edit_user_detail,name="edit_user_info"),
+     path("users/<int:userId>/delete/",delete_user_account,name="edit_user_info"),
+     path("users/<int:userId>/",get_user,name="edit_user_info"),
+     
+     
+     path('auth/logout/', UserLogout.as_view(), name='logout'),
 
 
 ]

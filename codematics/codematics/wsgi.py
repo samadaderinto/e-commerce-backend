@@ -15,7 +15,7 @@ import pathlib
 from django.core.wsgi import get_wsgi_application
 
 
-# acess .env file
+# access .env file
 CURRENT_DIR = pathlib.Path(__file__).resolve().parent.parent
 ENV_FILE_PATH = CURRENT_DIR / ".env.prod"
 dotenv.read_dotenv(str(ENV_FILE_PATH))

@@ -2,19 +2,28 @@ from django.contrib.sites.shortcuts import get_current_site
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.urls import reverse
 from django.contrib.auth import password_validation
-
+from django.utils.encoding import (
+    smart_str,
+    force_str,
+    smart_bytes,
+    DjangoUnicodeDecodeError,
+)
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.contrib.auth.hashers import make_password
+from rest_framework import status
 
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenObtainSerializer
 from rest_framework.response import Response
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
 
 
 from store.models import Store
-from core.models import Address, Recent, Review, User, Wishlist
+from core.models import Address, Recent, Review, User, Wishlist, Refund
 
 
-from core.utilities import generate_token, send_mail,get_auth_tokens_for_user
+from core.utilities import generate_token, send_mail
 from product.serializers import ProductSerializer, ProductCardSerializer
 
 
@@ -23,7 +32,7 @@ class UserSerializer(serializers.ModelSerializer):
     # def __init__(self, *args, **kwargs):
     #     super().__init__(*args, **kwargs)
 
-    #     self.fields['password'].write_only = True
+    #     self.fields['password'].write_only = True]
 
     class Meta:
         model = User
@@ -41,20 +50,19 @@ class UserSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             "password": {"write_only": True},
-          
         }
 
         def create(self, validated_data):
-            user = User.objects.create_user(password=validated_data.password,**validated_data)
-            headers={"Authorization": get_auth_tokens_for_user}
+            user = User.objects.create_user(**validated_data)
+            user.set_password(self.password)
+            user.save()
+
             return user
-        
-        
 
 
 class RefundsSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Address
+        model = Refund
         fields = [
             "user",
             "address",
@@ -84,44 +92,54 @@ class AddressSerializer(serializers.ModelSerializer):
         ]
 
 
+class SetNewPasswordSerializer(serializers.Serializer):
+    password = serializers.CharField(min_length=6, max_length=90, write_only=True)
+    token = serializers.CharField(min_length=6, max_length=90, write_only=True)
+    uidb64 = serializers.CharField(min_length=6, max_length=90, write_only=True)
+
+    fields = ["password", "token", "uidb64"]
+
+    def validate(self, attrs):
+        try:
+            password = attrs.get("password")
+            token = attrs.get("token")
+            uidb64 = attrs.get("uidb64")
+            id = force_str(urlsafe_base64_decode(uidb64))
+            user = User.objects.get(id=id)
+            if not PasswordResetTokenGenerator().check_token(user, token):
+                raise AuthenticationFailed(
+                    "The reset link is invalid", status.HTTP_401_UNAUTHORIZED
+                )
+            user.set_password(password)
+            user.save()
+        except:
+            raise AuthenticationFailed(
+                "The reset link is invalid", status.HTTP_401_UNAUTHORIZED
+            )
+        return super().validate(attrs)
+
+
 class VerifyUserSerializer(serializers.Serializer):
-    email = serializers.EmailField(max_length=150)
+    email = serializers.EmailField(max_length=150, min_length=3)
 
     class Meta:
         fields = ["email"]
 
-        def validate(self, attrs):
-            email = attrs["data"].get("email", "")
-            mode = attrs["data"].get("mode", "signup")
+        def validate(self, data):
+            email = data.get("email", "")
+            request = data.get("request")
+            user = User.objects.get(email=email)
+            uidb64 = urlsafe_base64_encode(user.id)
+            token = PasswordResetTokenGenerator().make_token(user)
+            current_site = get_current_site(request).domain
+            relativeLink = reverse(
+                "password-reset-confirm", kwargs={"uidb64": uidb64, "token": token}
+            )
+            absolute_url = f"http://{current_site}{relativeLink}"
+            data = {"firstname": user.firstname, "absolute_url": absolute_url}
 
-            if mode == "signup":
-                user = User.objects.get(email=email)
-                uidb64 = urlsafe_base64_encode(user.id)
-                token = str(generate_token.make_token(user))
-                current_domain = get_current_site(
-                    request=attrs["data"].get("request")
-                ).domain
-                relative_link = reverse("email-verify")
-                absolute_url = f"https://{current_domain}\{relative_link}?token={token}"
-                data = {"firstname": user.firstname, "absolute_url": absolute_url}
-                send_mail("onboarding-user", user.email, data=data)
-
-            else:
-                try:
-                    user = User.objects.get(email=email)
-                    uidb64 = urlsafe_base64_encode(user.id)
-                    token = str(generate_token.make_token(user))
-                    current_domain = get_current_site(
-                        request=attrs["data"].get("request")
-                    ).domain
-                    relative_link = reverse("email-verify")
-                    absolute_url = (
-                        f"https://{current_domain}\{relative_link}?token={token}"
-                    )
-                    data = {"firstname": user.firstname, "absolute_url": absolute_url}
-                    send_mail("password-reset", user.email, data=data)
-                except:
-                    Response("Account does not exist", status=404)
+            send_mail("onboarding-user", user.email, data=data)
+            return data
 
 
 class UserMailSerializer(serializers.ModelSerializer):

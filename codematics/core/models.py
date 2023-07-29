@@ -3,6 +3,9 @@ from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
 from phonenumber_field.modelfields import PhoneNumberField
 
+from django.contrib.auth.hashers import make_password
+
+
 from product.models import Product
 from core.utilities import USPS_SERVICE_CHOICE, GENDER_STATUS,DELIVERY_METHOD_CHOICE
 from store.models import StoreAddress
@@ -16,23 +19,22 @@ from datetime import datetime
 
 class UserManager(BaseUserManager):
 
-    def create_user(self, **extra_fields):
+    def create_user(self, email=None, password=None,**extra_fields):
         """
         Create and save a user with the given email and password.
         """
-        email = extra_fields["email"]
-        password = extra_fields["password"]
+        
+        
         if not email:
             raise ValueError("Email Address Is Needed")
         if not password:
             raise ValueError("Password Must Be Provided")
 
         emailnew = self.normalize_email(email)
-        user = self.model(username=emailnew, email=emailnew, **extra_fields)
+        user = self.model(email=emailnew, **extra_fields)
         
-     
-
         user.set_password(password)
+        # user.password = make_password(password)
 
         user.save(using=self._db)
 
@@ -67,7 +69,8 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser):
-
+    # username is set to none because it is not needed and this is the only hack to remove it
+    username = None
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
     gender = models.CharField(choices=GENDER_STATUS,max_length=7)
@@ -172,3 +175,10 @@ class Recent(models.Model):
     viewed = models.BooleanField(default=True)
     created = models.DateTimeField(auto_now_add=True)
         
+
+class Refund(models.Model):
+    user = models.ForeignKey(User,
+                             on_delete=models.CASCADE, blank=True, null=True)
+    order = models.ForeignKey('payment.Order', on_delete=models.CASCADE)
+    reason = models.TextField()
+    accepted = models.BooleanField(default=False)       

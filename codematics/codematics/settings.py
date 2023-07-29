@@ -29,10 +29,9 @@ SECRET_KEY = "django-insecure-8+hci%w(-_$!(btr%h72o@8zn%3po=v@q!$h5ea--nn+k3ybqv
 DEBUG = True
 
 ENV_ALLOWED_HOST = str(os.environ.get("ENV_ALLOWED_HOST"))
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
 # if ENV_ALLOWED_HOST:
 #     ALLOWED_HOSTS = [ ENV_ALLOWED_HOST ]
-
 
 
 # Application definition
@@ -56,11 +55,14 @@ INSTALLED_APPS = [
     "phonenumber_field",
     "django_crontab",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "push_notifications",
     "taggit",
     "stripe",
     "psycopg2",
-    'rest_access_policy'
+    "rest_access_policy",
+    
+    'django_use_email_as_username.apps.DjangoUseEmailAsUsernameConfig'
 ]
 
 MIDDLEWARE = [
@@ -135,8 +137,8 @@ DB_IGNORE_SSL = os.environ.get("DB_ IGNORE_SSL") == "true"
 
 # if not DB_IGNORE_SSL:
 #     DATABASES["default"]["OPTIONS"] = {"sslmode": "require"}
-    
-    
+
+
 # Password validation
 # https://docs.djangoproject.com/en/4.1/ref/settings/#auth-password-validators
 
@@ -197,9 +199,15 @@ CORS_ALLOW_METHODS = [
 ]
 
 
-CORS_ALLOWED_ORIGINS = ["http://localhost:3000", "http://127.0.0.1:3000"]
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
-CORS_ORIGIN_WHITELIST = ["http://localhost:3000", "http://127.0.0.1:3000"]
+CORS_ORIGIN_WHITELIST = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [

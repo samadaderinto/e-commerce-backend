@@ -14,7 +14,11 @@ class TokenGenerator(PasswordResetTokenGenerator):
 
 generate_token = TokenGenerator()
 
-PAYMENT_STATUS_CHOICE = (("pnd", "pending"), ("sfl", "successful"), ("fld", "failed"))
+PAYMENT_STATUS_CHOICE = (
+    ("pnd", "pending"),
+    ("sfl", "successful"),
+    ("fld", "failed"),
+)
 
 CATEGORIES_CHOICE = (
     ("FSHN", "fishing"),
@@ -49,7 +53,10 @@ LABEL_CHOICE = (
 )
 
 
-GENDER_STATUS = (("male", "male"), ("female", "female"))
+GENDER_STATUS = (
+    ("male", "male"),
+    ("female", "female"),
+)
 
 USPS_SERVICE_CHOICE = (
     ("express", "none"),
@@ -57,7 +64,10 @@ USPS_SERVICE_CHOICE = (
     ("firstclass", "bestseller"),
 )
 
-DELIVERY_METHOD_CHOICE = (("pckup", "pick up"), ("hmdlvry", "home delivery"))
+DELIVERY_METHOD_CHOICE = (
+    ("pckup", "pick up"),
+    ("hmdlvry", "home delivery"),
+)
 
 
 methods = {
@@ -85,7 +95,7 @@ def send_mail(file_name, reciever_email, data=None):
     email_msg.send(fail_silently=False)
 
 
-def get_auth_tokens_for_user(user):
+def auth_token(user):
     refresh = RefreshToken.for_user(user)
 
     return {
