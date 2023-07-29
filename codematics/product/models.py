@@ -19,7 +19,7 @@ from taggit.managers import TaggableManager
 class Product(models.Model):
     store = models.ForeignKey("store.Store", on_delete=models.CASCADE)
     title = models.CharField(max_length=110, blank=False, null=False)
-    description = models.TextField(null=True, blank=True)
+    description = models.TextField(null=False, blank=False)
     price = models.DecimalField(
         max_digits=15, decimal_places=2, blank=False, null=False
     )
@@ -44,7 +44,7 @@ class Product(models.Model):
     usps_service = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=20)
 
     tags = TaggableManager()
-    sponsored = models.BooleanField()
+    sponsored = models.BooleanField(default=False)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 

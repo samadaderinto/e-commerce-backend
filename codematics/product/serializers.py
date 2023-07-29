@@ -16,10 +16,7 @@ class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
         fields = ["url", "name"]
 
 
-class ProductImgSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ProductImg
-        field = ["id", "productId", "image"]
+
 
 
 class CartProductInfoSerializer(serializers.ModelSerializer):
@@ -33,6 +30,10 @@ class CartProductInfoSerializer(serializers.ModelSerializer):
 class RelatedProductSerializer(serializers.Serializer):
     url = serializers
 
+class ProductImgSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductImg
+        field = ["id", "productId", "image"]
 
 class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     # store_info = StoreInfoForProductCardSerializer(source="store",read_only=True)
@@ -40,14 +41,15 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     images = ProductImgSerializer(many=True, read_only=True)
     uploaded_images = serializers.ListField(
         child=serializers.ImageField(
-            max_length=7, allow_empty_file=False, use_url=False
+            max_length=100, allow_empty_file=False, use_url=False
         ),
-        write_only=True,
+       
     )
 
-    related_products = RelatedProductSerializer(many=True, read_only=True)
+    # related_products = RelatedProductSerializer(many=True, read_only=True)
 
     class Meta:
+        model = Product
         fields = [
             "id",
             "store",
@@ -62,7 +64,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "tags",
             "images",
             "uploaded_images",
-            "related_products",
+            #"related_products"
         ]
 
         def create(self, validated_data):
@@ -102,8 +104,6 @@ class CartProductInfoSerializer(serializers.ModelSerializer):
             "discount",
             "price",
         ]
-
-
 
 
 class CartItemSerializer(serializers.ModelSerializer):

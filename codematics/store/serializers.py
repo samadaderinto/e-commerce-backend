@@ -13,7 +13,8 @@ class StoreSerializer(serializers.ModelSerializer):
                   "user",
                   "username",
                   "name",
-                  "created"]
+                  "created",
+                  "updated"]
 
 
 class StoreInfoForProductCardSerializer(serializers.ModelSerializer):

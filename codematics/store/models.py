@@ -2,7 +2,7 @@ from django.db import models
 
 
 from product.models import Product
-
+from nanoid import generate
 
 
 
@@ -10,9 +10,10 @@ from product.models import Product
 
 class Store(models.Model):
     user = models.ForeignKey('core.User', on_delete=models.CASCADE)
-    username = models.CharField(max_length=30, unique=True)
-    name = models.CharField(max_length=70, default="official store")
+    username = models.CharField(max_length=17,unique=True,default=generate(size=15))
+    name = models.CharField(max_length=40)
     created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)   
 
 class Schedule(models.Model):
     store = models.ForeignKey(Store, on_delete=models.CASCADE)

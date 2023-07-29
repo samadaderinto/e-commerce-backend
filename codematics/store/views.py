@@ -1,10 +1,10 @@
 # Create your views here
 import os
-
+from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
-from rest_framework.parsers import JSONParser
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.parsers import JSONParser,MultiPartParser
+from rest_framework.decorators import api_view, permission_classes,parser_classes
 
 
 from product.models import Product
@@ -69,15 +69,15 @@ def delete_store(request, storeId):
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_store(request, user):
+def get_store(request, userId):
     try:
-        store = Store.objects.filter(user=user)
+        store = Store.objects.filter(user=userId)
     except:
         return Response(status=404)
     if request.method == methods["get"]:
         serializer_context = {"request": request}
         serializer = StoreSerializer(store, context=serializer_context, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"]])
@@ -89,7 +89,7 @@ def get_stores(request):
         return Response(status=404)
     if request.method == methods["get"]:
         serializer = StoreSerializer(store, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data,)
 
 
 @api_view([methods["get"]])
@@ -102,7 +102,7 @@ def store_products(request, store):
 
     if request.method == methods["get"]:
         serializer = ProductSerializer(product, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data,)
 
 
 @api_view([methods["get"], methods["delete"]])
@@ -120,7 +120,6 @@ def schedule_visiblity(request, userId):
     elif request.method == methods["delete"]:
         schedules.delete()
         return Response(status=201)
-
 
 @api_view([methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
@@ -150,9 +149,10 @@ def get_specifications(request, userId):
 
 @permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["post"]])
+@parser_classes([MultiPartParser])
 def create_product(request):
     if request.method == methods["post"]:
-        data = JSONParser().parse(request)
+        data = request.data
         serializer = ProductSerializer(data=data, context={"request": request})
         if serializer.is_valid():
             serializer.save()
