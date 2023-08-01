@@ -1,12 +1,22 @@
 from django.shortcuts import render
 from django.contrib.auth.models import Group
 from django.conf import settings
+
+
 from rest_framework import status
 from rest_framework.parsers import JSONParser
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.generics import ListAPIView
+
+
 from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
+
+
+from codematics.payment.models import Order
+from codematics.payment.serializers import OrdersSerializer
 
 
 from payment.models import Coupon
@@ -22,6 +32,8 @@ from store.models import StoreAddress, Store
 
 from usps import USPSApi, Address as uspsAddress
 from usps import SERVICE_PRIORITY, LABEL_ZPL
+
+
 
 # Create your views here.
 
@@ -294,3 +306,27 @@ def get_marketers(request):
     if request.method == methods["get"]:
         serializer = MarketerSerializer(marketer, many=True)
         return Response(serializer.data, safe=False)
+    
+    
+class GetOrders(ListAPIView):
+    permission_classes = (EcommerceAccessPolicy,)
+
+    serializer_class = OrdersSerializer
+
+    search_field = (
+        "id",
+        "status",
+        "orderId",
+        "ordered_date",
+    )
+
+    filter_backends = [SearchFilter,OrderingFilter]
+    ordering_fields = ["ordered_date"]
+
+    paginate_by = 15
+
+    def get_queryset(self):
+        return Order.objects.all()
+
+    def get_serializer_context(self):
+        return {"request": self.request}    

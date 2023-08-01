@@ -8,13 +8,14 @@ from rest_framework.decorators import api_view, permission_classes,parser_classe
 from rest_framework.filters import SearchFilter, OrderingFilter, BaseFilterBackend
 from rest_framework_word_filter import FullWordSearchFilter
 
-from product.models import Product
+
+from product.models import Product,Specification
 from store.models import StoreInfo, StoreAddress, StoreImg, Schedule, Store
 
 from rest_framework.generics import ListAPIView, GenericAPIView
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import methods
-from product.serializers import ProductSerializer
+from product.serializers import ProductSerializer,SpecificationSerializer
 from store.serializers import ScheduleSerializer, StoreSerializer
 
 
@@ -108,9 +109,9 @@ def store_products(request, store):
 
 @api_view([methods["get"], methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
-def schedules(request, userId):
+def schedules(request, storeId,productId):
     try:
-        schedules = Schedule.objects.filter(user=userId)
+        schedules = Schedule.objects.filter(store=storeId,productId=productId)
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -124,27 +125,27 @@ def schedules(request, userId):
 
 @api_view([methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
-def specifications(request, userId):
+def delete_specifications(request, productId):
     try:
-        schedules = Schedule.objects.filter(user=userId)
+        specification = Specification.objects.filter(product=productId)
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["delete"]:
-        schedules.delete()
+        specification.delete()
         return Response(status=status.HTTP_202_ACCEPTED)
 
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_specifications(request, userId):
+def get_specifications(request, productId):
     try:
-        schedules = Schedule.objects.filter(user=userId)
+        specifications = Specification.objects.filter(product=productId)
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
-        serializer = ScheduleSerializer(schedules)
+        serializer = SpecificationSerializer(specifications)
         return Response(serializer.data,status=status.HTTP_200_OK)
 
 

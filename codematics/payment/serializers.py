@@ -12,8 +12,10 @@ class OrdersSerializer(serializers.ModelSerializer):
         model = Order
 
         fields = [
+            "id",
             "orderId",
-            "subtotal" "status",
+            "subtotal",
+            "status",
             "delivery_info",
             "ordered_date",
         ]

@@ -1,5 +1,8 @@
 from django.db import transaction
 from django.conf import settings
+from django.core.paginator import Paginator
+
+
 from rest_framework_word_filter import FullWordSearchFilter
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.parsers import JSONParser
@@ -9,6 +12,8 @@ from rest_framework.mixins import CreateModelMixin
 from rest_framework.viewsets import ModelViewSet, GenericViewSet
 from rest_framework import status
 from rest_framework.generics import ListAPIView, GenericAPIView
+
+
 from core.models import Recent, Review
 from core.serializers import RecentsSerializer,ReviewsSerializer
 
@@ -42,7 +47,7 @@ def product_images_by_product_id(request, productId):
 
     if request.method == methods["get"]:
         serializer = ProductImgSerializer(productImg, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"], methods["delete"]])
@@ -61,6 +66,8 @@ def product_image_by_id(request, id):
         productImg.delete()
         return Response(status=status.HTTP_202_ACCEPTED)
 
+# you will also need to request further permissions by emailing uspstechnicalsupport@mailps.custhelp.com about Label API access.
+# get labelzpi and change value in constants.py 
 
 @api_view([methods["get"], methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
@@ -91,13 +98,15 @@ def view_product(request, id):
             )
             validate_to_address = usps.validate_address(to_address)
             validate_from_address = usps.validate_address(from_address)
-            weight = 10
+            weight = 10 # in ounce
             if validate_to_address.result and validate_from_address.result:
+                # this is to get estimate if user orders product in certain range of time
                 label = usps.create_label(
                     to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
                 )
 
-            return Response(serializer.data, label.result, status=status.HTTP_200_OK)
+                return Response(serializer.data, label.result, status=status.HTTP_200_OK)
+            return Response(serializer.data, status=status.HTTP_400_BAD_REQUEST)
         return Response(serializer.data,status=status.HTTP_200_OK)
     
     
@@ -109,10 +118,11 @@ def view_product(request, id):
 @api_view([methods["get"], methods["put"]])
 @permission_classes((EcommerceAccessPolicy,))
 def product_image_list(request):
+    
     if request.method == methods["get"]:
         productImages = ProductImg.objects.all()
         serializer = ProductImgSerializer(productImages, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
     elif request.method == methods["post"]:
         data = JSONParser().parse(request)
@@ -138,7 +148,7 @@ class SearchProduct(ListAPIView):
         "average_rating",
     )
 
-    filter_backends = (SearchFilter,)
+    filter_backends = [SearchFilter,OrderingFilter]
     ordering_fields = ["price"]
 
     paginate_by = 15
@@ -154,12 +164,16 @@ class SearchProduct(ListAPIView):
 @permission_classes((EcommerceAccessPolicy,))
 def get_product_reviews(request, productId):
     try:
-        product = (
+        reviews = (
             Review.objects.filter(productId=productId).order_by("created").reverse()
         )
     except:
-        return Response(status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
-        serializer = ReviewsSerializer(product, many=True)
+        page_number = request.GET.get("offset", 1)
+        per_page = request.GET.get("limit", 15)
+        paginator = Paginator(reviews, per_page=per_page)
+        items = paginator.get_page(number=page_number)
+        serializer = ReviewsSerializer(items, many=True)
         return Response(serializer.data,status=status.HTTP_200_OK)    

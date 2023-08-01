@@ -120,14 +120,14 @@ def redeem_coupon(request):
         coupon = Coupon.objects.get(code=data.get("code", ""))
 
     except:
-        return Response("coupon does not exist", status=404)
+        return Response("coupon does not exist", status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["post"]:
         if coupon.can_use():
             coupon.used()
             return Response(
                 {"discount": coupon.discount, "message": "discount successfully used"},
-                safe=False,
+                status=status.HTTP_200_OK
             )
     return Response("invalid coupon", status=status.HTTP_401_UNAUTHORIZED)
 
