@@ -20,14 +20,15 @@ from core.views import (
     get_recents,
     create_wishlist,
     create_review,
-    create_address
+    create_address,
+    redirect_url
 
 )
 from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
     
-    
+    path('/<str:refferal_url>', redirect_url, name='redirect_on_affiliate_link_click'),
     
     
     

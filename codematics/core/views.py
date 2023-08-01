@@ -1,5 +1,6 @@
 
 from django.conf import settings
+from django.shortcuts import redirect
 from django.utils.encoding import smart_str
 from django.contrib.sites.shortcuts import get_current_site
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -16,6 +17,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
 from rest_framework.generics import GenericAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView
+from affiliates.models import Redirect
 
 
 from core.permissions import EcommerceAccessPolicy
@@ -451,3 +453,17 @@ class UserLogout(GenericAPIView):
             return Response(status=status.HTTP_205_RESET_CONTENT)
         except:
             return Response(status=status.HTTP_400_BAD_REQUEST)
+
+
+def redirect_url(request, refferal_url):
+    try:
+        url = Redirect.objects.get(refferal_url=refferal_url)
+        url.click_rate += 1
+        url.save()
+
+        return redirect(
+            url.product_url, permanent=True, status=status.HTTP_308_PERMANENT_REDIRECT
+        )
+
+    except:
+        return Response("Sorry link is broken or unable to get product :(", status=status.HTTP_403_FORBIDDEN)

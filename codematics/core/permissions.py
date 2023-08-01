@@ -11,7 +11,7 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "ResetPassword",
                 "PasswordTokenCheckAPI",
                 "SetNewPassword",
-                
+                "redirect_url",
                 "get_store",
                 "create_marketer",
                 "store_products",

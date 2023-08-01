@@ -1,5 +1,4 @@
 # Create your views here.
-from django.shortcuts import redirect
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
@@ -71,9 +70,6 @@ def get_marketer(request, userId):
     return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-# get link for particular product that will be used as refferal for that product
-# track if link is clicked will be coded later
-# still working on the logic and requirements
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
 def get_product_link(request):
@@ -89,3 +85,5 @@ def get_product_link(request):
             )
             return Response(url.data["abs_url"], status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+

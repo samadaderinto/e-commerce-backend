@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from affiliates.models import Marketer, Url
+from affiliates.models import Marketer, Url, Redirect
 
 
 class MarketerSerializer(serializers.ModelSerializer):
@@ -28,3 +28,5 @@ class UrlSerializer(serializers.ModelSerializer):
             "created",
             "updated",
         ]
+        
+        

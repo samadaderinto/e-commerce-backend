@@ -33,8 +33,12 @@ class Url(models.Model):
         self.abs_url = f"https://www.{domain}.com/{marketer}/{product}/{identifier}/"
     
     
-            
-            
+class Redirect(models.Model):   
+    product_url = models.URLField()
+    refferal_url = models.CharField(max_length=15, unique=True, blank=True)
+    click_rate = models.PositiveIntegerField(default=0)  
+    
+
             
             
             
