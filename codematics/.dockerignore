@@ -1,0 +1,15 @@
+# virtual enviroments
+venv/
+.venv
+.venv.baks
+
+# enviroments
+.env
+env/
+ENV/
+.ENV
+.env.baks
+
+
+# database
+db.sqlite3
