@@ -6,7 +6,7 @@ from core.models import User
 from taggit.managers import TaggableManager
 # Create your models here.
 
-class Blog(models.Model):
+class Post(models.Model):
     staff = models.ForeignKey(User, on_delete=models.CASCADE)
     title = models.CharField(max_length=300)
     tags = TaggableManager()
@@ -14,8 +14,8 @@ class Blog(models.Model):
     updated = models.DateTimeField(auto_now=True)
     
     
-class BlogPost(models.Model):
-    blog_id = models.ForeignKey(Blog, on_delete=models.CASCADE)
+class Content(models.Model):
+    blog_id = models.ForeignKey(Post, on_delete=models.CASCADE)
     content =  models.TextField()   
     
     

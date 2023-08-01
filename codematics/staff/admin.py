@@ -1,8 +1,8 @@
 from django.contrib import admin
 
-from staff.models import BlogPost, Blog
+from staff.models import Post,Content
 
 # Register your models here.
 
-admin.site.register(BlogPost)
-admin.site.register(Blog)
+admin.site.register(Post)
+admin.site.register(Content)

@@ -1,21 +1,27 @@
 from django.shortcuts import render
 from django.contrib.auth.models import Group
-
+from django.conf import settings
 from rest_framework import status
 from rest_framework.parsers import JSONParser
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
+from affiliates.models import Marketer
+from affiliates.serializers import MarketerSerializer
+
 
 from payment.models import Coupon
-
 from payment.serializers import CouponSerializer
 
 
-from core.serializers import UserSerializer, VerifyUserSerializer
+from core.serializers import UserSerializer, VerifyUserSerializer, RefundsSerializer
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import auth_token, methods, send_mail
-from core.models import User
+from core.models import User, Refund
+from product.models import Specification
+from store.models import StoreAddress, Store
 
+from usps import USPSApi, Address as uspsAddress
+from usps import SERVICE_PRIORITY, LABEL_ZPL
 
 # Create your views here.
 
@@ -86,9 +92,8 @@ def delete_staff_account(request):
         data = JSONParser().parse(request)
         serializer = UserSerializer(data=data)
         if serializer.is_valid():
-            serializer.validated_data()
-            serializer.create(serializer)
-            send_mail("welcome", serializer.validated_data["email"], None)
+            send_mail("account-delete-confirmation", serializer.validated_data["email"], None)
+            # on button click in email, account automatically deletes
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -115,7 +120,7 @@ def get_staffs(request):
     if request.method == methods["get"]:
         staffs = User.objects.all().order_by("created").reverse()
         serializer = UserSerializer(staffs, many=True)
-        return Response(serializer.data, safe=False,status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @permission_classes((EcommerceAccessPolicy,))
@@ -140,7 +145,7 @@ def get_coupons(request):
 
     if request.method == methods["get"]:
         serializer = CouponSerializer(coupons, many=True)
-        return Response(serializer.data, safe=False,status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @api_view([methods["delete"]])
@@ -153,7 +158,7 @@ def delete_coupon(request, codeId):
 
     if request.method == methods["delete"]:
         coupons.delete()
-    return Response(status=status.HTTP_200_OK)
+    return Response(status=status.HTTP_202_ACCEPTED)
 
 
 @api_view([methods["post"]])
@@ -168,17 +173,17 @@ def create_coupon(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view([methods["post"], methods["patch"]])
+# will properly write this later
+@api_view([methods["put"]])
 @permission_classes((EcommerceAccessPolicy,))
 def edit_coupon(request, code):
-    if request.method == methods["patch"]:
+    if request.method == methods["put"]:
         queryset = Coupon.objects.filter(code=code)
         serializer = CouponSerializer(queryset)
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 
 
 @api_view([methods["get"]])
@@ -191,4 +196,101 @@ def get_users(request):
 
     if request.method == methods["get"]:
         serializer = UserSerializer(users, many=True)
-        return Response(serializer.data,status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view([methods["post"]])
+@permission_classes((EcommerceAccessPolicy,))
+def create_shipment(request, test: bool):
+    
+    usps = USPSApi(settings.USPS_USERNAME, test=test)
+    # will use actua addresses later for both
+    to_address = uspsAddress(
+        name="Tobin Brown",
+        address_1="1234 Test Ave.",
+        city="Test",
+        state="NE",
+        zipcode="55555",
+        phone="",
+    )
+
+    from_address = uspsAddress(
+        name="Tobin Brown",
+        address_1="1234 Test Ave.",
+        city="Test",
+        state="NE",
+        zipcode="55555",
+        phone="",
+    )
+    validate_to_address = usps.validate_address(to_address)
+    validate_from_address = usps.validate_address(from_address)
+    weight = 10
+    if validate_to_address.result and validate_from_address.result:
+        label = usps.create_label(
+            to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
+        )
+        return Response(
+            {"success": "shipment created"}, label.result, status=status.HTTP_200_OK
+        )
+    return Response(
+        {"error": "wrong shipment information"},
+        label.result,
+        status=status.HTTP_400_BAD_REQUEST,
+    )
+
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_refunds(request):
+    try:
+        refunds = Refund.objects.all().order_by("created").reverse()
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == methods["get"]:
+        serializer = RefundsSerializer(refunds, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_refund(request,refundId):
+    try:
+        refunds = Refund.objects.get(id=refundId)
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == methods["get"]:
+        serializer = RefundsSerializer(refunds)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    
+@api_view([methods["post"]])
+@permission_classes((EcommerceAccessPolicy,))
+def refund_response(request):
+    data = JSONParser().parse(request)
+    serializer = RefundsSerializer(data=data)
+    if serializer.is_valid():
+        serializer.save()
+        user = User.objects.get(id=serializer.validated_data["user"])
+        email = user.email
+        data = {
+            "firstname": user.first_name,
+            "order": serializer.validated_data["order"],
+            "products": [],
+        }
+        send_mail("refund-request-acknowledged", email, data=data)
+        return Response(status=status.HTTP_202_ACCEPTED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_marketers(request):
+    try:
+        marketer = Marketer.objects.all().order_by("created").reverse()
+    except:
+        return Response(status=404)
+
+    if request.method == methods["get"]:
+        serializer = MarketerSerializer(marketer, many=True)
+        return Response(serializer.data, safe=False)
