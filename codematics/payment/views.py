@@ -1,16 +1,14 @@
 from django.conf import settings
 
 
-from payment.models import Coupon, Order
-
+from payment.models import Coupon, Order, Payment
 from product.models import Product
 from core.models import Address
-
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import methods, calculate_order_amount
 from payment.serializers import OrdersSerializer
 
-
+from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.parsers import JSONParser
@@ -75,7 +73,7 @@ def capture_checkout_session(request):
             coupon = Coupon.objects.get(code=code)
 
         except:
-            return Response(status=404)
+            return Response(status=status.HTTP_404_NOT_FOUND)
         discount = 0
 
         if coupon.can_use():
@@ -131,4 +129,9 @@ def redeem_coupon(request):
                 {"discount": coupon.discount, "message": "discount successfully used"},
                 safe=False,
             )
-    return Response("invalid coupon", status=401)
+    return Response("invalid coupon", status=status.HTTP_401_UNAUTHORIZED)
+
+
+
+
+

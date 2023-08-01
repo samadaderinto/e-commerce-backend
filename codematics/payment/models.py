@@ -2,9 +2,10 @@ from django.db import models
 
 
 from django.core.validators import MinValueValidator, MaxValueValidator
+from nanoid import generate
 
 
-from product.models import Cart
+from cart.models import Cart
 from core.utilities import ORDER_STATUS_CHOICE, PAYMENT_STATUS_CHOICE
 from core.models import DeliveryInfo, User
 
@@ -45,7 +46,12 @@ class Coupon(models.Model):
 
 class Order(models.Model):
     cartId = models.ForeignKey(Cart, on_delete=models.CASCADE)
-    orderId = models.CharField(max_length=15, default="0000000000")
+    orderId = models.CharField(
+        max_length=15,
+        default=generate(size=10),
+        unique=True,
+        editable=False,
+    )
     coupon_used = models.CharField(max_length=50)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=3)
