@@ -1,0 +1,24 @@
+# virtual enviroments
+venv/
+.venv
+.venv.baks
+
+# enviroments
+backend wahab/.env
+backend wahab/.env.prod
+.env
+.env.prod
+env/
+ENV/
+.ENV
+.env.baks
+
+
+# database
+db.sqlite3
+
+
+# kubernetes
+.kube/
+
+__pycahe__/ 
