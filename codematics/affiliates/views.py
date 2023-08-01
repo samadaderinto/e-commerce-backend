@@ -19,8 +19,8 @@ def create_marketer(request):
         serializer = MarketerSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["patch"]])
@@ -37,8 +37,8 @@ def edit_marketer_detail(request, userId):
         serializer = MarketerSerializer(marketer, data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["delete"]])
@@ -57,19 +57,6 @@ def delete_marketer_account(request, userId):
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_marketers(request):
-    try:
-        marketer = Marketer.objects.all().order_by("created").reverse()
-    except:
-        return Response(status=404)
-
-    if request.method == methods["get"]:
-        serializer = MarketerSerializer(marketer, many=True)
-        return Response(serializer.data, safe=False)
-
-
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
 def get_marketer(request, userId):
     try:
         marketer = Marketer.objects.get(pk=userId)
@@ -79,21 +66,23 @@ def get_marketer(request, userId):
     if request.method == methods["get"]:
         serializer = MarketerSerializer(marketer)
 
-    return Response(serializer.data, status=201)
+    return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-
+# get link for particular product that will be used as refferal for that product
+# track if link is clicked will be coded later
+# still working on the logic and requirements
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_link(request):
+def get_product_link(request):
     
     if request.method == methods["get"]:
         data = JSONParser().parse(request)
         serializer = MarketerSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data.get("abs_url"), status=201)
-        return Response(serializer.errors, status=404)
+            return Response(serializer.data.get("abs_url"), status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     
     
