@@ -2,15 +2,16 @@
 import os
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny
 from rest_framework.parsers import JSONParser,MultiPartParser
 from rest_framework.decorators import api_view, permission_classes,parser_classes
 
+from rest_framework.filters import SearchFilter, OrderingFilter, BaseFilterBackend
+from rest_framework_word_filter import FullWordSearchFilter
 
 from product.models import Product
 from store.models import StoreInfo, StoreAddress, StoreImg, Schedule, Store
 
-
+from rest_framework.generics import ListAPIView, GenericAPIView
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import methods
 from product.serializers import ProductSerializer
@@ -25,20 +26,20 @@ def create_store(request):
         serializer = StoreSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
-def create_schedule(request):
+def schedule_product_visibility(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
         serializer = ScheduleSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(f"visible to be updated by {serializer.make_visible_at}")
-        return Response(serializer.errors, status=400)
+            return Response(f"visible will be updated by {serializer.make_visible_at}",status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["delete"]])
@@ -47,11 +48,11 @@ def edit_store_info(request, storeId):
     try:
         store = Store.objects.get(pk=storeId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["delete"]:
         store.delete()
-        return Response(status=201)
+        return Response(status=status.HTTP_202_ACCEPTED)
 
 
 @api_view([methods["delete"]])
@@ -60,11 +61,11 @@ def delete_store(request, storeId):
     try:
         store = Store.objects.get(id=storeId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["delete"]:
         store.delete()
-        return Response(status=201)
+        return Response(status=status.HTTP_202_ACCEPTED)
 
 
 @api_view([methods["get"]])
@@ -73,7 +74,7 @@ def get_store(request, userId):
     try:
         store = Store.objects.filter(user=userId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
     if request.method == methods["get"]:
         serializer_context = {"request": request}
         serializer = StoreSerializer(store, context=serializer_context, many=True)
@@ -86,10 +87,10 @@ def get_stores(request):
     try:
         store = Store.objects.all().order_by("user").reverse()
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
     if request.method == methods["get"]:
         serializer = StoreSerializer(store, many=True)
-        return Response(serializer.data,)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"]])
@@ -98,28 +99,28 @@ def store_products(request, store):
     try:
         product = Product.objects.filter(store=store)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
         serializer = ProductSerializer(product, many=True)
-        return Response(serializer.data,)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"], methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
-def schedule_visiblity(request, userId):
+def schedules(request, userId):
     try:
         schedules = Schedule.objects.filter(user=userId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
         serializer = ScheduleSerializer(schedules)
-        return Response(serializer.data)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
     elif request.method == methods["delete"]:
         schedules.delete()
-        return Response(status=201)
+        return Response(status=status.HTTP_202_ACCEPTED)
 
 @api_view([methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
@@ -127,11 +128,11 @@ def specifications(request, userId):
     try:
         schedules = Schedule.objects.filter(user=userId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["delete"]:
         schedules.delete()
-        return Response(status=201)
+        return Response(status=status.HTTP_202_ACCEPTED)
 
 
 @api_view([methods["get"]])
@@ -140,11 +141,11 @@ def get_specifications(request, userId):
     try:
         schedules = Schedule.objects.filter(user=userId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
         serializer = ScheduleSerializer(schedules)
-        return Response(serializer.data)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
 
 @permission_classes((EcommerceAccessPolicy,))
@@ -156,8 +157,8 @@ def create_product(request):
         serializer = ProductSerializer(data=data, context={"request": request})
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=201)
-    return Response(serializer.errors, status=400)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @permission_classes((EcommerceAccessPolicy,))
@@ -168,8 +169,8 @@ def create_specifications(request):
         serializer = ProductSerializer(data=data, context={"request": request})
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data, status=201)
-    return Response(serializer.errors, status=400)
+            return Response(serializer.data, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["delete"]])
@@ -181,5 +182,33 @@ def delete_file(request, filename):
         fileDir = "%s/%s.%s" % ("img", filenamenoExt, ext)
         if os.path.isfile((f"media/images/{filename}")):
             os.remove(fileDir)
-            return Response(f"{filename} deleted")
-        return Response("file not found")
+            return Response(f"{filename} deleted",status=status.HTTP_202_ACCEPTED)
+        return Response("file not found",status=status.HTTP_404_NOT_FOUND)
+
+
+class IsOwnerSearchProduct(ListAPIView):
+    """
+    Filter that only allows store to see their own products.
+    """
+    serializer_class = ProductSerializer
+    permission_classes = (EcommerceAccessPolicy,)
+   
+    filter_backends = (SearchFilter,)
+    search_field = (
+        "title",
+        "description",
+        "category",
+        "discount",
+        "average_rating",
+        "tags",
+        "store",
+        "price"
+    )
+    ordering_fields = ["price"]
+    paginate_by = 15
+    
+    def get_queryset(self):
+        
+        store = self.request.data["store"]
+        
+        return Product.objects.filter(store=store)

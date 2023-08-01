@@ -1,6 +1,6 @@
 from django.db import models
 
-
+from phonenumber_field.modelfields import PhoneNumberField
 from product.models import Product
 from nanoid import generate
 
@@ -12,6 +12,8 @@ class Store(models.Model):
     user = models.ForeignKey('core.User', on_delete=models.CASCADE)
     username = models.CharField(max_length=17,unique=True,default=generate(size=15))
     name = models.CharField(max_length=40)
+    phone1 = PhoneNumberField(region="US")
+    phone2 = PhoneNumberField(region="US")
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)   
 
@@ -38,7 +40,9 @@ class StoreAddress(models.Model):
     city = models.CharField(max_length=100)
     is_default = models.BooleanField()
     created = models.DateTimeField(auto_now_add=True)
-    updated = models.DateTimeField(auto_now=True)    
+    updated = models.DateTimeField(auto_now=True)   
+    
+     
     
     
 
