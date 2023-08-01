@@ -1,4 +1,4 @@
-# deployment of containers
+# containers
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -36,3 +36,29 @@ spec:
       targetPort: 80
   selector:
     app: nginx-deployment
+
+
+
+---
+
+
+# cron-jobs
+# will set up correctly 
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: helloworld
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: task
+              image: busybox
+              command:
+                - /bin/sh
+                - -c
+                - date; echo 'Hello World from Cronitor.io';
