@@ -1,21 +1,18 @@
 from django_filters import rest_framework
 from django.conf import settings
-from django.utils.encoding import (
-    smart_str,
-    force_str,
-    smart_bytes,
-    DjangoUnicodeDecodeError,
-)
+from django.utils.encoding import smart_str
+from rest_framework.generics import ListAPIView
 from django.contrib.sites.shortcuts import get_current_site
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.urls import reverse
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.core.paginator import Paginator
 
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
-from rest_framework.generics import ListAPIView, GenericAPIView
+from rest_framework.generics import GenericAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 
@@ -23,14 +20,13 @@ from core.permissions import EcommerceAccessPolicy
 from core.utilities import auth_token, methods, send_mail
 
 from payment.models import Order
-from core.models import Recent, Review, User, Wishlist
-
-
+from core.models import Recent, Review, User, Wishlist, Address
 
 
 from core.serializers import (
     AddressSerializer,
     CustomTokenObtainPairSerializer,
+    WishlistPostSerializer,
     RecentsPostSerializer,
     RecentsSerializer,
     RefundsSerializer,
@@ -51,7 +47,10 @@ def create_user(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
         if User.objects.filter(email=data["email"]).exists():
-            return Response({"error": "Email already registered"},status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"error": "Email already registered"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         else:
             serializer = UserSerializer(data=data)
 
@@ -60,7 +59,11 @@ def create_user(request):
             VerifyUserSerializer(data)
             token = auth_token(user)
 
-            return Response(serializer.data, headers={"Authorization": token}, status=status.HTTP_201_CREATED)
+            return Response(
+                serializer.data,
+                headers={"Authorization": token},
+                status=status.HTTP_201_CREATED,
+            )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -97,7 +100,6 @@ def delete_user_account(request, userId):
         return Response(status=status.HTTP_202_ACCEPTED)
 
 
-
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
 def get_user(request, userId):
@@ -109,7 +111,7 @@ def get_user(request, userId):
     if request.method == methods["get"]:
         serializer = UserSerializer(user)
 
-    return Response(serializer.data, status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @permission_classes((EcommerceAccessPolicy,))
@@ -118,82 +120,106 @@ def create_wishlist(request, userId, productId):
     try:
         wishlist = Wishlist.objects.get(productId=productId, user=userId)
     except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
+        data = {"productId": productId, "user": userId}
+        serializer = WishlistPostSerializer(data=data)
+        if serializer.is_valid():
+            serializer.save()
+
+        return Response(
+            {"success": "Added to wishlist"}, status=status.HTTP_201_CREATED
+        )
 
     if request.method == methods["post"]:
-        serializer = WishlistSerializer(wishlist)
-        if wishlist.exists():
-            wishlist.delete()
-        else:
-            if serializer.is_valid():
-                serializer.save()
-                return Response(
-                    {"status": "successfully added"}, status=status.HTTP_201_CREATED
-                )
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        wishlist.delete()
+        return Response(
+            {"success": "Removed from wishlist"}, status=status.HTTP_202_ACCEPTED
+        )
 
 
 @permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["get"]])
-def get_wishlist_by_user_id(request, userId):
+def get_wishlist(request, userId):
     try:
         wishlist = Wishlist.objects.filter(user=userId).order_by("created").reverse()
     except:
-        return Response(status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
-        serializer = WishlistSerializer(wishlist, many=True)
-        return Response(serializer.data, safe=False, status=status.HTTP_200_OK)
+        page_number = request.GET.get("offset", 1)
+        per_page = request.GET.get("limit", 15)
+        paginator = Paginator(wishlist, per_page=per_page)
+        items = paginator.get_page(number=page_number)
+
+        serializer = WishlistSerializer(items, many=True, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["get"]])
-def reviews_by_user_id(request, userId):
+def get_reviews(request, userId):
     try:
         reviews = Review.objects.filter(user=userId).order_by("created").reverse()
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
-        serializer = ReviewsSerializer(reviews, many=True)
-        return Response(serializer.data, safe=False, status=status.HTTP_200_OK)
+        page_number = request.GET.get("offset", 1)
+        per_page = request.GET.get("limit", 15)
+        paginator = Paginator(reviews, per_page=per_page)
+        items = paginator.get_page(number=page_number)
+        serializer = ReviewsSerializer(items, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["post"]])
 def create_review(request):
     if request.method == methods["post"]:
+        # will add checker so only user who bought product can create review
         data = JSONParser().parse(request)
-
         user = data.get("user")
         productId = data.get("productId")
-        rate = data.get("rating")
         serializer = ReviewsPostSerializer(data=data)
 
         if serializer.is_valid():
             try:
                 review = Review.objects.get(user=user, productId=productId)
             except:
+                # create review
                 serializer.save()
-                return Response(serializer.data)
+                review = Review.objects.get(user=user, productId=productId)
+                # update product rating
+                review.set_avg_rating()
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-            review = Review.objects.get(user=user, productId=productId)
-
+            # update review
             serializer = ReviewsPostSerializer(review, data=data)
             if serializer.is_valid():
                 serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+                # update product rating
+                review.set_avg_rating()
+            return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@api_view([methods["delete"]])
+@permission_classes((EcommerceAccessPolicy,))
+def delete_review(request, userId, productId):
+    try:
+        review = Review.objects.get(user=userId, productId=productId)
+    except:
+        return Response(status.HTTP_404_NOT_FOUND)
 
+    if request.method == methods["delete"]:
+        review.delete()
+        return Response(status=status.HTTP_202_ACCEPTED)
 
 
 @api_view([methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
-def create_recent(request):
+def create_recent(request, productId, userId):
     if request.method == methods["post"]:
-        data = JSONParser().parse(request)
+        data = {"productId": productId, "user": userId}
         serializer = RecentsPostSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
@@ -203,7 +229,25 @@ def create_recent(request):
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def orders_by_user(request, userId):
+def get_recents(request, userId):
+    try:
+        orders = Recent.objects.filter(user=userId).order_by("created").reverse()
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == methods["get"]:
+        page_number = request.GET.get("offset", 1)
+        per_page = request.GET.get("limit", 15)
+        paginator = Paginator(orders, per_page=per_page)
+        items = paginator.get_page(number=page_number)
+        serializer = RecentsSerializer(items, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def orders(request, userId):
     try:
         orders = Order.objects.filter(user=userId).order_by("created").reverse()
     except:
@@ -211,12 +255,12 @@ def orders_by_user(request, userId):
 
     if request.method == methods["get"]:
         serializer = OrdersSerializer(orders, many=True)
-        return Response(serializer.data, safe=False, status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def orders_by_user_and_status(request, userId, status):
+def orders_by_status(request, userId, status):
     try:
         recent = (
             Recent.objects.filter(user=userId)
@@ -231,12 +275,12 @@ def orders_by_user_and_status(request, userId, status):
 
     if request.method == methods["get"]:
         serializer = RecentsSerializer(recent, many=True)
-        return Response(serializer.data, safe=False, status=status.HTTP_200_OK)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def orders_by_user_and_status_and_id(request, userId, status, id):
+def orders_by_status_and_id(request, userId, status, id):
     try:
         recent = (
             Recent.objects.filter(user=userId)
@@ -249,8 +293,7 @@ def orders_by_user_and_status_and_id(request, userId, status, id):
 
     if request.method == methods["get"]:
         serializer = RecentsSerializer(recent, many=True)
-        return Response(serializer.data, safe=False, status=status.HTTP_200_OK)
-
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @api_view([methods["post"]])
@@ -260,60 +303,54 @@ def create_address(request):
         data = JSONParser().parse(request)
         serializer = AddressSerializer(data=data)
         if serializer.is_valid():
-            serializer.save()
-            return Response(status=status.HTTP_202_ACCEPTED)
+            if serializer.validated_data.get("is_default", False) == True:
+                try:
+                    default_address = Address.objects.get(
+                        user=serializer.validated_data["user"], is_default=True
+                    )
+                    default_address.is_default = False
+                    default_address.save()
+                    serializer.save()
+                except:
+                    serializer.save()
+                    return Response(status=status.HTTP_202_ACCEPTED)
+            else:
+                serializer.save()
+                return Response(status=status.HTTP_202_ACCEPTED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view([methods["post"]])
+@api_view([methods["put"]])
 @permission_classes((EcommerceAccessPolicy,))
-def edit_review_by_product_id(request, productId):
-    try:
-        review = Review.objects.get(productId=productId)
-    except:
-        return Response(status.HTTP_404_NOT_FOUND)
+def edit_address(request, userId):
+    data = JSONParser().parse(request)
 
-    if request.method == methods["post"]:
-        data = JSONParser().parse(request)
-        serializer = ReviewsPostSerializer(data=data)
+    try:
+        user = Address.objects.filter(user=userId,id=data["id"])
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == methods["put"]:
+        serializer = AddressSerializer(user, data=data)
         if serializer.is_valid():
-            review.rate(serializer.validated_data["rating"])
             serializer.save()
-            review.set_avg_rating()
-
-    elif request.method == methods["delete"]:
-        review.delete()
-        return Response(status=status.HTTP_202_ACCEPTED)
-
-
-@api_view([methods["get"]])
+            return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    
+    
+    
+@api_view([methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_reviews_by_product_id(request, productId):
+def delete_address(request, userId, AddressId):
     try:
-        product = (
-            Review.objects.filter(productId=productId).order_by("created").reverse()
-        )
+        user = Address.objects.get(user=userId, id=AddressId)
+
     except:
-        return Response(status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
-    if request.method == methods["get"]:
-        serializer = ReviewsSerializer(product, many=True)
-        return Response(serializer.data, safe=False)
-
-
-
-
-# @permission_classes(AllowAny,)
-# def filter_all_max_rating(request, minprice, maxprice, minrating, categories, colors):
-#     try:
-#         products = Product.objects.filter(price__range(minprice, maxprice)).filter(
-#             categories=categories).filter(rating__get(minrating)).filter(colors=colors)
-#     except:
-#         return Response(status.HTTP_404_NOT_FOUND)
-
-#     if request.method == methods["get"]:
-#         serializer = ProductSerializer(products, many=True)
-#         return Response(serializer.data, safe=False)
+    if request.method == methods["delete"]:
+        user.delete()
+        return Response(status=status.HTTP_202_ACCEPTED)
 
 
 @api_view([methods["post"]])
@@ -323,7 +360,21 @@ def request_refund(request):
     serializer = RefundsSerializer(data=data)
     if serializer.is_valid():
         serializer.save()
-        return Response(status=status.HTTP_202_ACCEPTED)
+        user = User.objects.get(id=serializer.validated_data["user"])
+        email = user.email
+        data = {
+            "firstname": user.first_name,
+            "order": serializer.validated_data["order"],
+            "product": [],
+            "created": serializer.validated_data["created"],
+        }
+        send_mail("refund-request-acknowledged", email, data=data)
+        return Response(
+            {
+                "message": "Refund accepted, this may take 3 to 7 business days before you get a response"
+            },
+            status=status.HTTP_201_CREATED,
+        )
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -352,13 +403,14 @@ class ResetPassword(GenericAPIView):
                 "to email": user.email,
                 "email subject": "Verify your email",
             }
-
+            # will put actual data later
             send_mail("onboarding-user", user.email, data=data)
 
         return Response(
             {"success": "We have sent you a link to reset your password"},
             status=status.HTTP_200_OK,
         )
+
 
 class PasswordTokenCheckAPI(GenericAPIView):
     permission_classes = (EcommerceAccessPolicy,)
@@ -375,50 +427,41 @@ class PasswordTokenCheckAPI(GenericAPIView):
                 )
 
             return Response(
-                {"success": True,
-                "message": "Credentials Valid",
-                "uidb64": uidb64,
-                "token": token},
+                {
+                    "success": True,
+                    "message": "Credentials Valid",
+                    "uidb64": uidb64,
+                    "token": token,
+                },
                 status=status.HTTP_200_OK,
             )
-            
-            
+
         except:
             Response(
                 {"error": "Token is not valid, please request a new one"},
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
+
 class SetNewPassword(generics.GenericAPIView):
     serializer_class = SetNewPasswordSerializer
     permission_classes = (EcommerceAccessPolicy,)
-    
-    
-    def patch(self,request):
-        serializer=self.serializer_class(data=request.data)
+
+    def patch(self, request):
+        serializer = self.serializer_class(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+
         Response(
-                {"sucess": True,"message": "Password reset successful"},
-                status=status.HTTP_200_OK,
-            )
-        
+            {"sucess": True, "message": "Password reset successful"},
+            status=status.HTTP_200_OK,
+        )
+
+
 class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
 
 
-@api_view([methods["post"], methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
-def usps_estimate_delivery(request, service, origin_zip, destination_zip):
-    usps_api_route = f'https://secure.shippingapis.com/ShippingAPI.dll?API=FirstClassMail&XML=<FirstClassMailRequest USERID="{settings.USPS_USERNAME}"> <OriginZip>{origin_zip}</OriginZip> <DestinationZip>{destination_zip}</DestinationZip><FirstClassMailRequest>'
-
-    return usps_api_route.text
-
 class UserLogout(GenericAPIView):
-    """
-    An endpoint to logout users.
-    """
-
     permission_classes = (EcommerceAccessPolicy,)
 
     def post(self, request, *args, **kwargs):

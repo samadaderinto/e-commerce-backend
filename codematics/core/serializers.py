@@ -64,15 +64,11 @@ class RefundsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Refund
         fields = [
+            "id",
             "user",
-            "address",
-            "zip",
-            "country",
-            "state",
-            "city",
-            "is_default",
-            "created",
-            "updated",
+            "order",
+            "reason",
+            'created',
         ]
 
 
@@ -80,6 +76,7 @@ class AddressSerializer(serializers.ModelSerializer):
     class Meta:
         model = Address
         fields = [
+            "id",
             "user",
             "address",
             "zip",
@@ -161,11 +158,11 @@ class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
 
 
 class WishlistSerializer(serializers.ModelSerializer):
-    product_details = ProductSerializer(source="productId")
+    product = ProductCardSerializer(source="productId")
 
     class Meta:
         model = Wishlist
-        fields = ["liked", "product_details"]
+        fields = ["liked", "product"]
 
 
 class WishlistPostSerializer(serializers.ModelSerializer):
@@ -175,15 +172,11 @@ class WishlistPostSerializer(serializers.ModelSerializer):
 
 
 class RecentsSerializer(serializers.ModelSerializer):
-    product_details = ProductCardSerializer(source="productId")
-    # store_info = StoreInfoForProductCardSerializer(source="productId")
+    product = ProductCardSerializer(source="productId")
 
     class Meta:
         model = Recent
-        fields = [
-            "product_details",
-            #   "store_info"
-        ]
+        fields = ["product"]
 
 
 class RecentsPostSerializer(serializers.ModelSerializer):
@@ -193,13 +186,12 @@ class RecentsPostSerializer(serializers.ModelSerializer):
 
 
 class ReviewsSerializer(serializers.ModelSerializer):
-    user_details = UserMailSerializer(source="user", read_only=True)
+    email = UserMailSerializer(source="user", read_only=True)
 
     class Meta:
         model = Review
         fields = [
-            "user_details",
-            "user",
+            "email",
             "productId",
             "label",
             "comment",

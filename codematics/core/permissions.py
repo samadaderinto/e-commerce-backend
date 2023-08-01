@@ -1,6 +1,6 @@
 from rest_access_policy import AccessPolicy
 
-
+# all views with permitted users in json 
 class EcommerceAccessPolicy(AccessPolicy):
     statements = [
         {
@@ -22,47 +22,105 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "PasswordTokenCheckAPI",
                 "ResetPassword",
                 "SetNewPassword",
+                "delete_address",
             ],
             "principal": "*",
             "effect": "allow",
         },
         {
             "action": [
-                "<method:get>",
                 "edit_user_detail",
                 "delete_user_account",
                 "get_user",
+                
+                
+                
+                "create_staff",
+                
+                
+                
                 "create_wishlist",
-                "get_wishlist_by_user_id",
-                "reviews_by_user_id",
+                "get_wishlist",
+                
+                
+                
+                
+                "get_reviews",
                 "create_review",
-                "recent_product_by_user",
+                "delete_review",
+                
+                
+                
+                
+                "get_recents",
                 "create_recent",
-                "orders_by_user",
-                "create_store",
-                "orders_by_user_and_status",
-                "orders_by_user_and_status_and_id",
+                
+                
+                
+                
                 "create_address",
-                "edit_review_by_product_id",
+                "delete_address",
+                "edit_address",
+                
+                
+                
+                "orders",
+                "orders_status",
+                "orders_by_status_and_id",
+                
+                
+                
+                
+                "recents",
                 "request_refund",
-                "UserLogout",
+                
+                
+                
+                "create_store",
+                
+                
                 "get_cart",
                 "CartItemViewSet",
                 "cart_by_user",
+                "CartViewSet",
                 "cart_item_by_id",
+                "cart_item_by_cartId",
+                "cart_items_by_cart_id",
+                "cart_item_detect_same_item",
+                
+                
+                
                 "redeem_coupon",
                 "capture_checkout_session",
                 "create_checkout_session",
+                
+                
+                
+                "UserLogout",
+                "ResetPassword",
+                "PasswordTokenCheckAPI",
+                "SetNewPassword",
+                
+                
+                
+                "view_product",
+                "product_images_by_product_id",
+                "product_image_by_id",
+                "product_image_list",
+                "SearchProduct",
+                "get_product_reviews",
             ],
             "principal": "authenticated",
             "effect": "allow",
         },
         {
             "action": [
+                "get_users",
                 "get_staff",
                 "get_staffs",
                 "get_coupons",
-                "get_stores" "create_coupon",
+                "get_stores",
+                "create_coupon",
                 "delete_coupon",
                 "edit_coupon",
                 "revoke_staff_permission",
@@ -70,50 +128,74 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "give_staff_permission",
                 "CartViewSet",
                 "get_marketers",
+                "create_shipment",
+                "get_refunds",
+                "store_products",
+                "get_refund",
+                "refund_response",
+                "IsOwnerSearchProduct",
             ],
             "principal": ["admin"],
             "effect": "allow",
         },
         {
             "action": [
-                "create_marketer",
-                "edit_marketer_detail",
-                "get_link",
-                "get_marketer",
-                "delete_marketer_account",
-            ],
-            "principal": ["group:marketer"],
-            "effect": "allow",
-        },
-        {
-            "action": [
+                "get_users",
                 "get_staff",
-                "get_staffs",
                 "get_coupons",
-                "get_stores" "edit_staff_detail",
+                "create_shipment",
+                "get_stores",
+                "edit_staff_detail",
                 "delete_staff_account",
                 "CartViewSet",
                 "get_marketers",
+                "store_products",
                 "delete_marketer_account",
+                "get_refunds",
+                "get_refund",
+                "IsOwnerSearchProduct",
+                "refund_response",
             ],
             "principal": ["staff"],
             "effect": "allow",
         },
         {
             "action": [
-                "publish",
-                "create_schedule",
                 "delete_file",
                 "create_specifications",
                 "specifications",
                 "store_products",
-                "schedule_visiblity",
+                "schedule_product_visibility",
                 "get_stores",
+                "IsOwnerSearchProduct",
+                "create_product",
                 "delete_store",
                 "edit_store_info",
                 "create_schedule",
+                "schedules",
             ],
-            "principal": ["group:seller"],
+            "principal": ["authenticated"],
             "effect": "allow",
+            "condition": "is_store_owner:owner",
+        },
+        {
+            "action": [
+                "create_marketer",
+                "edit_marketer_detail",
+                "get_product_link",
+                "get_marketer",
+                "delete_marketer_account",
+            ],
+            "principal": ["authenticated"],
+            "effect": "allow",
+            "condition": "is_marketer:owner",
         },
     ]
+
+    def is_marketer(self, request, view, action, field) -> bool:
+        marketers = view.Marketer()
+        return getattr(marketers, field)
+
+    def is_store_owner(self, request, view, action, field) -> bool:
+        stores = view.Marketer()
+        return getattr(stores, field)
