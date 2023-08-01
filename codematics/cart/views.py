@@ -9,7 +9,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
-from rest_framework.mixins import CreateModelMixin
+from rest_framework.mixins import CreateModelMixin, RetrieveModelMixin, DestroyModelMixin
 from rest_framework.viewsets import ModelViewSet, GenericViewSet
 
 
@@ -26,10 +26,10 @@ def get_cart(request, userId, ordered):
     if request.method == methods["get"]:
         serializer = JoinCartSerializer(user)
 
-    return Response(serializer.data, status=201)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-class CartViewSet(CreateModelMixin, GenericViewSet):
+class CartViewSet(CreateModelMixin, RetrieveModelMixin, DestroyModelMixin, GenericViewSet):
     queryset = Cart.objects.all()
     permission_classes = (EcommerceAccessPolicy,)
     serializer_class = CartSerializer
@@ -60,7 +60,7 @@ def cart_by_user(request, user):
 
     if request.method == methods["get"]:
         serializer = CartSerializer(cart, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
     elif request.method == methods["put"]:
         data = JSONParser().parse(request)
@@ -92,7 +92,7 @@ def cart_item_by_id(request, pk):
         serializer = CartSerializer(cart_item, data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data)
+            return Response(serializer.data,status=status.HTTP_202_ACCEPTED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     elif request.method == methods["delete"]:
@@ -127,7 +127,7 @@ def cart_items_by_cart_id(request, cartId):
 
     if request.method == methods["get"]:
         serializer = JoinCartSerializer(cart_item, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data,status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"]])

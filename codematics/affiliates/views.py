@@ -4,7 +4,9 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
 from rest_framework import status
-from affiliates.models import Marketer
+
+
+from affiliates.models import Marketer, Url
 from affiliates.serializers import MarketerSerializer
 
 from core.permissions import EcommerceAccessPolicy
@@ -75,14 +77,15 @@ def get_marketer(request, userId):
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
 def get_product_link(request):
-    
     if request.method == methods["get"]:
         data = JSONParser().parse(request)
         serializer = MarketerSerializer(data=data)
         if serializer.is_valid():
             serializer.save()
-            return Response(serializer.data.get("abs_url"), status=status.HTTP_201_CREATED)
+            url = Url.objects.get(
+                user=serializer.validated_data["user"],
+                marketer=serializer.validated_data["marketer"],
+                product=serializer.validated_data["product"],
+            )
+            return Response(url.data["abs_url"], status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    
-    

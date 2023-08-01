@@ -19,7 +19,7 @@ def create_user():
     payload = {
         "first_name": "samaad",
         "last_name": "ade",
-        "email": "adesamad12341@gmail.com",
+        "email": "fake@gmail.com",
         "phone1": "+2349021162144",
         "gender": "male",
         "password": "jejwjheh",

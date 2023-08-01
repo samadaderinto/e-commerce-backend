@@ -16,7 +16,7 @@ class MarketerSerializer(serializers.ModelSerializer):
 
 
 class UrlSerializer(serializers.ModelSerializer):
-    url = ""
+ 
     class Meta:
         model = Url
         fields = [
@@ -24,7 +24,6 @@ class UrlSerializer(serializers.ModelSerializer):
             "marketer",
             "product",
             "identifier",
-            "abs_url",
             "active",
             "created",
             "updated",

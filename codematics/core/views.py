@@ -1,13 +1,15 @@
-from django_filters import rest_framework
+
 from django.conf import settings
 from django.utils.encoding import smart_str
-from rest_framework.generics import ListAPIView
 from django.contrib.sites.shortcuts import get_current_site
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.urls import reverse
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.paginator import Paginator
 
+
+from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.generics import ListAPIView
 from rest_framework import status, generics
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
@@ -231,69 +233,43 @@ def create_recent(request, productId, userId):
 @permission_classes((EcommerceAccessPolicy,))
 def get_recents(request, userId):
     try:
-        orders = Recent.objects.filter(user=userId).order_by("created").reverse()
+        recent = Recent.objects.filter(user=userId).order_by("created").reverse()
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
         page_number = request.GET.get("offset", 1)
         per_page = request.GET.get("limit", 15)
-        paginator = Paginator(orders, per_page=per_page)
+        paginator = Paginator(recent, per_page=per_page)
         items = paginator.get_page(number=page_number)
         serializer = RecentsSerializer(items, many=True)
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
-def orders(request, userId):
-    try:
-        orders = Order.objects.filter(user=userId).order_by("created").reverse()
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
+class Orders(ListAPIView):
+    permission_classes = (EcommerceAccessPolicy,)
 
-    if request.method == methods["get"]:
-        serializer = OrdersSerializer(orders, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    serializer_class = OrdersSerializer
 
+    search_field = (
+        "id",
+        "status",
+        "orderId",
+        "ordered_date",
+    )
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
-def orders_by_status(request, userId, status):
-    try:
-        recent = (
-            Recent.objects.filter(user=userId)
-            .filter(status=status)
-            .order_by("created")
-            .prefetch_related("productId")
-            .order_by("created")
-            .reverse()
-        )
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
+    filter_backends = [SearchFilter,OrderingFilter]
+    ordering_fields = ["ordered_date"]
 
-    if request.method == methods["get"]:
-        serializer = RecentsSerializer(recent, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    paginate_by = 20
 
+    def get_queryset(self):
+        return Order.objects.all(user=self.request.data["userId"])
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
-def orders_by_status_and_id(request, userId, status, id):
-    try:
-        recent = (
-            Recent.objects.filter(user=userId)
-            .filter(status=status)
-            .get(pk=id)
-            .prefetch_related("productId")
-        )
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["get"]:
-        serializer = RecentsSerializer(recent, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    def get_serializer_context(self):
+        return {"request": self.request}
+    
 
 
 @api_view([methods["post"]])
@@ -303,6 +279,9 @@ def create_address(request):
         data = JSONParser().parse(request)
         serializer = AddressSerializer(data=data)
         if serializer.is_valid():
+            # line of code will not work as expected
+            # i am trying to create address by setting default address to false and set new address with
+            # is_default as Tru to new default and also make sure if it is the first created address, it will become default 
             if serializer.validated_data.get("is_default", False) == True:
                 try:
                     default_address = Address.objects.get(

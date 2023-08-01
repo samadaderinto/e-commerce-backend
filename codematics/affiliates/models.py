@@ -1,5 +1,5 @@
 from django.db import models
-from core.utilities import generate_marketer_code
+from django.urls import reverse
 
 from core.models import User
 from product.models import Product
@@ -18,11 +18,19 @@ class Marketer(models.Model):
 class Url(models.Model):
     marketer = models.ForeignKey(Marketer, on_delete=models.CASCADE) 
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    # identifier can be any text inputted by the marketer on url generation
     identifier = models.CharField(max_length=120)
     abs_url = models.URLField()
     active = models.BooleanField(default=True)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
+    
+    def set_refferal_link(self):
+        domain = "my_domain-name"
+        identifier = reverse(self.identifier)
+        marketer = self.marketer.marketer_id
+        product = self.product.pk
+        self.abs_url = f"https://www.{domain}.com/{marketer}/{product}/{identifier}/"
     
     
             

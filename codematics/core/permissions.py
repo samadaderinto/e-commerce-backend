@@ -7,22 +7,22 @@ class EcommerceAccessPolicy(AccessPolicy):
             "action": [
                 "create_user",
                 "Reset_password",
-                "usps_estimate_delivery",
-                "productcard_by_id",
-                "product_by_id",
-                "product_image_list",
-                "product_images_by_product_id",
-                "product_image_by_id",
-                "search_product",
+              
+                "ResetPassword",
+                "PasswordTokenCheckAPI",
+                "SetNewPassword",
+                
                 "get_store",
                 "create_marketer",
                 "store_products",
-                "get_reviews_by_product_id",
+                "get_product_reviews",
                 "get_specifications",
-                "PasswordTokenCheckAPI",
-                "ResetPassword",
-                "SetNewPassword",
-                "delete_address",
+                 "view_product",
+                "product_images_by_product_id",
+                "product_image_by_id",
+                "product_image_list",
+                "SearchProduct",
+                "get_specifications",
             ],
             "principal": "*",
             "effect": "allow",
@@ -64,9 +64,7 @@ class EcommerceAccessPolicy(AccessPolicy):
                 
                 
                 
-                "orders",
-                "orders_status",
-                "orders_by_status_and_id",
+                "Orders",
                 
                 
                 
@@ -97,18 +95,10 @@ class EcommerceAccessPolicy(AccessPolicy):
                 
                 
                 "UserLogout",
-                "ResetPassword",
-                "PasswordTokenCheckAPI",
-                "SetNewPassword",
                 
                 
                 
-                "view_product",
-                "product_images_by_product_id",
-                "product_image_by_id",
-                "product_image_list",
-                "SearchProduct",
-                "get_product_reviews",
+               
             ],
             "principal": "authenticated",
             "effect": "allow",
@@ -134,6 +124,7 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "get_refund",
                 "refund_response",
                 "IsOwnerSearchProduct",
+                "GetOrders",
             ],
             "principal": ["admin"],
             "effect": "allow",
@@ -155,6 +146,7 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "get_refund",
                 "IsOwnerSearchProduct",
                 "refund_response",
+                "GetOrders",
             ],
             "principal": ["staff"],
             "effect": "allow",
@@ -163,10 +155,11 @@ class EcommerceAccessPolicy(AccessPolicy):
             "action": [
                 "delete_file",
                 "create_specifications",
-                "specifications",
+                "delete_specifications",
                 "store_products",
                 "schedule_product_visibility",
-                "get_stores",
+                "schedules",
+                "get_store",
                 "IsOwnerSearchProduct",
                 "create_product",
                 "delete_store",

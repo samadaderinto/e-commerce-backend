@@ -65,8 +65,8 @@ USPS_SERVICE_CHOICE = (
 )
 
 DELIVERY_METHOD_CHOICE = (
-    ("pckup", "pick up"),
-    ("hmdlvry", "home delivery"),
+    ("pickup", "pick up"),
+    ("homdelivery", "home delivery"),
 )
 
 
@@ -107,7 +107,3 @@ def auth_token(user):
 def calculate_order_amount():
     pass
 
-
-def generate_marketer_code():
-    code = str(uuid.uuid4()).replace("-", "")[:12]
-    return code
