@@ -1,4 +1,3 @@
-
 from django.conf import settings
 from django.shortcuts import redirect
 from django.utils.encoding import smart_str
@@ -17,7 +16,8 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
 from rest_framework.generics import GenericAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView
-from affiliates.models import Redirect
+from affiliates.models import Redirect, Url
+from affiliates.serializers import RedirectSerializer
 
 
 from core.permissions import EcommerceAccessPolicy
@@ -261,7 +261,7 @@ class Orders(ListAPIView):
         "ordered_date",
     )
 
-    filter_backends = [SearchFilter,OrderingFilter]
+    filter_backends = [SearchFilter, OrderingFilter]
     ordering_fields = ["ordered_date"]
 
     paginate_by = 20
@@ -271,7 +271,6 @@ class Orders(ListAPIView):
 
     def get_serializer_context(self):
         return {"request": self.request}
-    
 
 
 @api_view([methods["post"]])
@@ -283,7 +282,7 @@ def create_address(request):
         if serializer.is_valid():
             # line of code will not work as expected
             # i am trying to create address by setting default address to false and set new address with
-            # is_default as Tru to new default and also make sure if it is the first created address, it will become default 
+            # is_default as Tru to new default and also make sure if it is the first created address, it will become default
             if serializer.validated_data.get("is_default", False) == True:
                 try:
                     default_address = Address.objects.get(
@@ -307,7 +306,7 @@ def edit_address(request, userId):
     data = JSONParser().parse(request)
 
     try:
-        user = Address.objects.filter(user=userId,id=data["id"])
+        user = Address.objects.filter(user=userId, id=data["id"])
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -317,9 +316,8 @@ def edit_address(request, userId):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    
-    
-    
+
+
 @api_view([methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
 def delete_address(request, userId, AddressId):
@@ -455,15 +453,24 @@ class UserLogout(GenericAPIView):
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
-def redirect_url(request, refferal_url):
-    try:
-        url = Redirect.objects.get(refferal_url=refferal_url)
-        url.click_rate += 1
-        url.save()
+def redirect_url(request, marketerId, productId, identifier):
+    data = {"marketer": marketerId, "product": productId, "identifier": identifier}
+    serializer = RedirectSerializer(data=data)
 
+    if serializer.is_valid():
+        try:
+            url = Url.objects.get(
+                marketer=marketerId, product=productId, identifier=identifier
+            )
+        except:
+            return Response(
+                "Sorry link is broken or unable to get product :(",
+                status=status.HTTP_403_FORBIDDEN,
+            )
+      
+        serializer.save()
         return redirect(
-            url.product_url, permanent=True, status=status.HTTP_308_PERMANENT_REDIRECT
+            url.product_url,
+            permanent=True,
+            status=status.HTTP_308_PERMANENT_REDIRECT,
         )
-
-    except:
-        return Response("Sorry link is broken or unable to get product :(", status=status.HTTP_403_FORBIDDEN)

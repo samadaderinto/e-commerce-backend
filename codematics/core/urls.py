@@ -27,8 +27,8 @@ from core.views import (
 from rest_framework_simplejwt.views import TokenRefreshView
 
 urlpatterns = [
-    
-    path('/<str:refferal_url>', redirect_url, name='redirect_on_affiliate_link_click'),
+
+    path('/<str:marketerId>/<int:product>/<str:identifier>/ ', redirect_url, name='redirect_on_affiliate_link_click'),
     
     
     
