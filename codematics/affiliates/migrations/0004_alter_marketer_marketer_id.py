@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("affiliates", "0002_initial"),
+        ("affiliates", "0003_alter_marketer_marketer_id"),
     ]
 
     operations = [
@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
             model_name="marketer",
             name="marketer_id",
             field=models.CharField(
-                default="fYMtRApjxQ9MWTc", editable=False, max_length=70, unique=True
+                default="BRzgES_6WjekKIY", editable=False, max_length=70, unique=True
             ),
         ),
     ]

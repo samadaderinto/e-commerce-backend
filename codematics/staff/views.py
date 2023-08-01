@@ -15,12 +15,10 @@ from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
 
 
-from codematics.payment.models import Order
-from codematics.payment.serializers import OrdersSerializer
 
 
-from payment.models import Coupon
-from payment.serializers import CouponSerializer
+from payment.models import Coupon, Order
+from payment.serializers import CouponSerializer,OrdersSerializer
 
 
 from core.serializers import UserSerializer, VerifyUserSerializer, RefundsSerializer
@@ -216,7 +214,7 @@ def get_users(request):
 def create_shipment(request, test: bool):
     
     usps = USPSApi(settings.USPS_USERNAME, test=test)
-    # will use actua addresses later for both
+    # will use actual addresses later for both
     to_address = uspsAddress(
         name="Tobin Brown",
         address_1="1234 Test Ave.",
