@@ -43,15 +43,25 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    
+    
+    
+    
     "core.apps.CoreConfig",
     "product.apps.ProductConfig",
     "store.apps.StoreConfig",
     "staff.apps.StaffConfig",
     "payment.apps.PaymentConfig",
     "affiliates.apps.AffiliatesConfig",
+    "cart.apps.CartConfig",
+    
+    
+    
+    
     "django_filters",
     "corsheaders",
     "rest_framework",
+    "dotenv",
     "phonenumber_field",
     "django_crontab",
     "rest_framework_simplejwt",
@@ -61,8 +71,9 @@ INSTALLED_APPS = [
     "stripe",
     "psycopg2",
     "rest_access_policy",
+    'rest_framework_word_filter',
     
-    'django_use_email_as_username.apps.DjangoUseEmailAsUsernameConfig'
+   
 ]
 
 MIDDLEWARE = [
@@ -212,8 +223,6 @@ CORS_ORIGIN_WHITELIST = [
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
-        # "rest_framework.permissions.DjangoModelPermissions",
-        # "rest_framework.permissions.DjangoModelPermissions",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",

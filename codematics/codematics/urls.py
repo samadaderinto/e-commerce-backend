@@ -23,10 +23,11 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('core.urls')),
     path('store/', include('store.urls')),
-    path('', include('product.urls')),
+    path('products/', include('product.urls')),
     path('staffs/', include('staff.urls')),
-    path('secure-checkout/', include('payment.urls')),
-        path('secure-checkout/', include('affiliates.urls'))
+    path('checkout/', include('payment.urls')),
+    path('affiliate/', include('affiliates.urls')),
+    path('cart/', include('cart.urls'))
     
 
 ]
