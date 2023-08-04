@@ -1,16 +1,17 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
-from phonenumber_field.modelfields import PhoneNumberField
-
 from django.contrib.auth.hashers import make_password
 
+from phonenumber_field.modelfields import PhoneNumberField
 
 from product.models import Product
 from core.utilities import USPS_SERVICE_CHOICE, GENDER_STATUS, DELIVERY_METHOD_CHOICE
 from store.models import StoreAddress
 
 from datetime import datetime
+
+from notifications.base.models import AbstractNotification
 
 
 # Create your models here.
@@ -188,3 +189,12 @@ class Refund(models.Model):
     reason = models.TextField()
     accepted = models.BooleanField(default=False)
     created = models.DateTimeField(auto_now_add=True)
+
+
+
+
+class Notification(AbstractNotification):
+
+    class Meta(AbstractNotification.Meta):
+        abstract = False
+

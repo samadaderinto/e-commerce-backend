@@ -1,3 +1,4 @@
+import datetime
 from django.conf import settings
 from django.shortcuts import redirect
 from django.utils.encoding import smart_str
@@ -6,7 +7,8 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.urls import reverse
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.paginator import Paginator
-
+from django.db.models.signals import post_save
+import pytz
 
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.generics import ListAPIView
@@ -24,7 +26,11 @@ from core.permissions import EcommerceAccessPolicy
 from core.utilities import auth_token, methods, send_mail
 
 from payment.models import Order
-from core.models import Recent, Review, User, Wishlist, Address
+from core.models import Recent, Review, User, Wishlist, Address,Notification
+
+from notifications.signals import notify
+
+
 
 
 from core.serializers import (
@@ -376,13 +382,13 @@ class ResetPassword(GenericAPIView):
             absurl = f"http://{current_site}{relativeLink}"
 
             email_body = f"Hi {user.username} Use link below to verify your email \n"
-
+            # will put correct data later
             data = {
                 "email body": email_body,
                 "to email": user.email,
                 "email subject": "Verify your email",
             }
-            # will put actual data later
+            
             send_mail("onboarding-user", user.email, data=data)
 
         return Response(
@@ -474,3 +480,11 @@ def redirect_url(request, marketerId, productId, identifier):
             permanent=True,
             status=status.HTTP_308_PERMANENT_REDIRECT,
         )
+        
+def create_orders_nofication(sender, instance, created, **kwargs):
+    notify.send(instance, verb='was saved')
+    #notify.send(actor, recipient, verb, action_object, target, level, description, public, timestamp, **kwargs)
+
+post_save.connect(create_orders_nofication, sender=Order)  
+
+      

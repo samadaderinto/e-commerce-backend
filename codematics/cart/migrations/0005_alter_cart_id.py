@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("cart", "0002_initial"),
+        ("cart", "0004_alter_cart_id"),
     ]
 
     operations = [
@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
             model_name="cart",
             name="id",
             field=models.CharField(
-                default="ofPNnEaHIbo-wUJ",
+                default="t7_LxWL3K7WglzP",
                 editable=False,
                 max_length=15,
                 primary_key=True,

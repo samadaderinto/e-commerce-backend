@@ -23,7 +23,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-8+hci%w(-_$!(btr%h72o@8zn%3po=v@q!$h5ea--nn+k3ybqv"
+SECRET_KEY = str(os.environ.get("SECRET_KEY"))
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -72,6 +72,7 @@ INSTALLED_APPS = [
     "psycopg2",
     "rest_access_policy",
     'rest_framework_word_filter',
+    'notifications',
     
    
 ]
@@ -179,6 +180,9 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 
 USE_TZ = True
+
+# to change default timezone to that of user
+# USE_L10N = True
 
 
 # Static files (CSS, JavaScript, Images)
@@ -320,3 +324,12 @@ SECURE_PROXY_SSL_HEADER = True
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+
+
+
+NOTIFICATIONS_NOTIFICATION_MODEL = 'core.Notification'
+DJANGO_NOTIFICATIONS_CONFIG = { 
+                            'USE_JSONFIELD': True,
+                            'SOFT_DELETE': True,}
+
+

@@ -18,6 +18,8 @@ from django.conf import settings
 from django.contrib import admin
 from django.urls import path, include
 from django.conf.urls.static import static
+import notifications.urls
+
 
 urlpatterns = [
     path('', include('core.urls')),
@@ -27,8 +29,8 @@ urlpatterns = [
     path('staffs/', include('staff.urls')),
     path('checkout/', include('payment.urls')),
     path('affiliate/', include('affiliates.urls')),
-    path('cart/', include('cart.urls'))
-    
+    path('cart/', include('cart.urls')),
+    path('inbox/notifications/', include(notifications.urls)),
 
 ]
 

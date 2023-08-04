@@ -147,6 +147,8 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "IsOwnerSearchProduct",
                 "refund_response",
                 "GetOrders",
+                "track_order",
+                "get_notification",
             ],
             "principal": ["staff"],
             "effect": "allow",

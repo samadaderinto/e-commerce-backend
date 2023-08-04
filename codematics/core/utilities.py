@@ -1,10 +1,10 @@
-import uuid
+
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.mail import get_connection, EmailMultiAlternatives, EmailMessage
 from django.conf import settings
 from django.template.loader import get_template
 from rest_framework_simplejwt.tokens import RefreshToken
-from nanoid import generate
+
 
 
 class TokenGenerator(PasswordResetTokenGenerator):
@@ -15,41 +15,42 @@ class TokenGenerator(PasswordResetTokenGenerator):
 generate_token = TokenGenerator()
 
 PAYMENT_STATUS_CHOICE = (
-    ("pnd", "pending"),
-    ("sfl", "successful"),
-    ("fld", "failed"),
+    ("pending", "pending"),
+    ("successful", "successful"),
+    ("failed", "failed"),
 )
 
 CATEGORIES_CHOICE = (
-    ("FSHN", "fishing"),
-    ("SPRT", "sports"),
-    ("ELCT", "electronics"),
-    ("PHNS", "phones"),
-    ("GMES", "games"),
-    ("TBLT", "tablets"),
-    ("OUWR", "outwear"),
-    ("PETS", "pets"),
-    ("TOYS", "toys"),
-    ("CMPT", "computing"),
-    ("LNGR", "lingerie"),
-    ("BOOK", "books"),
+    ("fishing", "fishing"),
+    ("sports", "sports"),
+    ("electronics", "electronics"),
+    ("phones", "phones"),
+    ("games", "games"),
+    ("tablets", "tablets"),
+    ("outwear", "outwear"),
+    ("pets", "pets"),
+    ("toys", "toys"),
+    ("computing", "computing"),
+    ("lingerie","lingerie"),
+    ("books","books"),
+    ("beverages","beverages")
 )
 
 ORDER_STATUS_CHOICE = (
-    ("CND", "cancelled"),
-    ("RFD", "refunded"),
-    ("DLV", "delivered"),
-    ("SHP", "shipped"),
-    ("PKU", "picked up"),
-    ("PND", "pending"),
-    ("CFD", "confirmed"),
+    ("cancelled", "cancelled"),
+    ("refunded", "refunded"),
+    ("delivered", "delivered"),
+    ("shipped", "shipped"),
+    ("picked up", "picked up"),
+    ("pending", "pending"),
+    ("confirmed", "confirmed"),
 )
 
 LABEL_CHOICE = (
-    ("NEW", "new"),
+    ("new", "new"),
     ("", "none"),
-    ("BTS", "bestseller"),
-    ("SDT", "sold out"),
+    ("bestseller", "bestseller"),
+    ("sold out", "sold out"),
 )
 
 
@@ -65,8 +66,8 @@ USPS_SERVICE_CHOICE = (
 )
 
 DELIVERY_METHOD_CHOICE = (
-    ("pickup", "pick up"),
-    ("homdelivery", "home delivery"),
+    ("pick up", "pick up"),
+    ("home delivery", "home delivery"),
 )
 
 
@@ -104,6 +105,20 @@ def auth_token(user):
     }
 
 
-def calculate_order_amount():
-    pass
+def calculate_order_amount(cart_items):
+    total = 0
+    for cart_item in cart_items:
+        total += cart_item 
+    return total    
 
+# from django.utils import formats
+
+# localized_date = formats.date_format(date_obj, 'SHORT_DATE_FORMAT')
+# localized_time = formats.time_format(time_obj, 'SHORT_TIME_FORMAT')
+
+# def get_aware_current_date_time(timezone):
+#     dt_now_naive = datetime.datetime.now()  
+#     localized_tz = pytz.timezone(timezone) e.g 'Asia/Colombo'
+#     dt_now_aware = localized_tz.localize(dt_now_naive)  
+
+#     return dt_now_aware

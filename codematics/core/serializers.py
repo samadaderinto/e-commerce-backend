@@ -32,7 +32,7 @@ class UserSerializer(serializers.ModelSerializer):
     # def __init__(self, *args, **kwargs):
     #     super().__init__(*args, **kwargs)
 
-    #     self.fields['password'].write_only = True]
+    #     self.fields['password'].write_only = True
 
     class Meta:
         model = User
@@ -117,7 +117,6 @@ class SetNewPasswordSerializer(serializers.Serializer):
 
 
 class VerifyUserSerializer(serializers.Serializer):
-    email = serializers.EmailField(max_length=150, min_length=3)
 
     class Meta:
         fields = ["email"]
@@ -235,3 +234,25 @@ class CustomTokenObtainPairSerializer(EmailTokenObtainSerializer):
         data["access"] = str(refresh.access_token)
 
         return data
+    
+    
+
+
+
+
+class GenericNotificationRelatedField(serializers.RelatedField):
+
+    # def to_representation(self, value):
+    #     if isinstance(value, Foo):
+    #         serializer = FooSerializer(value)
+    #     if isinstance(value, Bar):
+    #         serializer = BarSerializer(value)
+
+        # return serializer.data
+        pass
+
+
+class NotificationSerializer(serializers.Serializer):
+    # recipient = PublicUserSerializer(User, read_only=True)
+    unread = serializers.BooleanField(read_only=True)
+    target = GenericNotificationRelatedField(read_only=True)    

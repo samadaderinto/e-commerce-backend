@@ -32,7 +32,7 @@ def edit_marketer_detail(request, userId):
     try:
         marketer = Marketer.objects.get(pk=userId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["patch"]:
         serializer = MarketerSerializer(marketer, data=data)
@@ -49,7 +49,7 @@ def delete_marketer_account(request, userId):
         marketer = Marketer.objects.get(pk=userId)
 
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["delete"]:
         marketer.delete()
@@ -62,7 +62,7 @@ def get_marketer(request, userId):
     try:
         marketer = Marketer.objects.get(pk=userId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
         serializer = MarketerSerializer(marketer)
