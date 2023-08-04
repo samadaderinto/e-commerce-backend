@@ -1,12 +1,17 @@
 from django.conf import settings
 
 
+from cart.models import Cart, CartItem
+from cart.seralizers import CartSerializer
+from core.serializers import AddressSerializer
+
+
 from payment.models import Coupon, Order, Payment
 from product.models import Product
 from core.models import Address
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import methods, calculate_order_amount
-from payment.serializers import OrdersSerializer
+from payment.serializers import OrdersSerializer,CheckOutSerializer
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -28,37 +33,28 @@ stripe.api_key = settings.STRIPE_SECRET
 def create_checkout_session(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
-        orders = Order.objects.filter(user=request.user, status="")
-        order_items = orders[0].Order.all()
-        order_total = orders[0].get_totals()
-        context = {"form": form, "order_items": order_items, "order_total": order_total}
-        # Getting the saved saved_address
-        # cartId, orderId, coupon_used, tax, status, delivery, total, subtotal, ordered_date, payment_type
+        serializer = CheckOutSerializer(data=data)
 
-        saved_address = Address.objects.filter(user=request.user)
-        if saved_address.exists():
-            savedAddress = saved_address
-            context = {
-                "form": form,
-                "order_items": order_items,
-                "order_total": order_total,
-                "savedAddress": savedAddress,
-            }
-        if request.method == methods["post"]:
-            saved_address = Address.objects.filter(user=request.user)
-            if saved_address.exists():
-                savedAddress = saved_address.first()
-                form = OrdersSerializer(request.POST, instance=savedAddress)
-                if form.is_valid():
-                    billingaddress = form.save(commit=False)
-                    billingaddress.user = request.user
-                    billingaddress.save()
+    if serializer.is_valid():
+        id = serializer.validated_data["id"]
+        userId = serializer.validated_data["userId"]
+        cart = Cart.objects.get(id=id, userId=userId, ordered=False)
+        cart_items = CartItem.objects.filter(cartId=cart.id)
+        address = serializer.validated_data.get(
+            ["address"], Address.objects.get(user=userId, is_default=True)
+        )
+
+        address_serializer = AddressSerializer(address)
+
+        if address_serializer.is_valid():
+            if address.id is not Address.objects.get(user=userId, is_default=True).id:
+                address_serializer.save()
             else:
-                form = OrdersSerializer(request.POST)
-                if form.is_valid():
-                    billingaddress = form.save(commit=False)
-                    billingaddress.user = request.user
-                    billingaddress.save()
+               Response({"cart_items": cart_items,"total": calculate_order_amount(cart_items)},status=status.HTTP_200_OK)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    else:
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["post"]])
@@ -127,11 +123,6 @@ def redeem_coupon(request):
             coupon.used()
             return Response(
                 {"discount": coupon.discount, "message": "discount successfully used"},
-                status=status.HTTP_200_OK
+                status=status.HTTP_200_OK,
             )
     return Response("invalid coupon", status=status.HTTP_401_UNAUTHORIZED)
-
-
-
-
-

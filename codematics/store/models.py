@@ -12,8 +12,9 @@ class Store(models.Model):
     user = models.ForeignKey('core.User', on_delete=models.CASCADE)
     username = models.CharField(max_length=17,unique=True,default=generate(size=15))
     name = models.CharField(max_length=40)
-    phone1 = PhoneNumberField(region="US")
-    phone2 = PhoneNumberField(region="US")
+    contact_email = models.EmailField(null=False,blank=False)
+    tel1 = PhoneNumberField(region="US")
+    tel2 = PhoneNumberField(region="US")
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)   
 

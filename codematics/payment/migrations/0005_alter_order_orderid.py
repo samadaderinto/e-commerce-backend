@@ -5,7 +5,7 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("payment", "0001_initial"),
+        ("payment", "0004_alter_order_orderid"),
     ]
 
     operations = [
@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
             model_name="order",
             name="orderId",
             field=models.CharField(
-                default="3LzRKippOUxtW", editable=False, max_length=15, unique=True
+                default="IyX5lusmE4y3e", editable=False, max_length=15, unique=True
             ),
         ),
     ]

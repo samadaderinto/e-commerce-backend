@@ -8,8 +8,8 @@ urlpatterns = [
 
     path('refunds/', redeem_coupon),
     path('refunds/<int:orderId>/', redeem_coupon),
-    path('refund/<int:orderId>/<str:email>/request/', redeem_coupon),
-    path('refund/<int:orderId>/<str:email>/request/response/', redeem_coupon),
+    path('refund/request/', redeem_coupon),
+    path('refund/request/response/', redeem_coupon),
 
 
 
@@ -19,8 +19,8 @@ urlpatterns = [
     path('payment/stripe/capture/order/',
          capture_checkout_session, name='create_cardless_order'),
 
-    path('payment/paypal/create/order/',
-         create_checkout_session, name='create_cardless_order'),
-    path('payment/paypal/capture/order/',
-         capture_checkout_session, name='capture_cardless_order')
+#     path('payment/paypal/create/order/',
+#          create_checkout_session, name='create_cardless_order'),
+#     path('payment/paypal/capture/order/',
+#          capture_checkout_session, name='capture_cardless_order')
 ]

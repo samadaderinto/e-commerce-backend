@@ -5,15 +5,15 @@ from django.db import migrations, models
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("payment", "0001_initial"),
+        ("store", "0004_alter_store_username"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name="order",
-            name="orderId",
+            model_name="store",
+            name="username",
             field=models.CharField(
-                default="3LzRKippOUxtW", editable=False, max_length=15, unique=True
+                default="k28IiadLlBvS7KK", max_length=17, unique=True
             ),
         ),
     ]

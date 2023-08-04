@@ -13,13 +13,41 @@ class OrdersSerializer(serializers.ModelSerializer):
 
         fields = [
             "id",
+            "cartId",
             "orderId",
+            "coupon_used",
+            "tax",
+            "status",
+            "delivery",
+            "total",
             "subtotal",
             "status",
             "delivery_info",
             "ordered_date",
+            "ordered",
+            "payment_type"
         ]
-
+       
+class CheckOutSerializer(serializers.Serializer):
+    
+   # serializer fields will be here
+    
+    fields = [
+            "id",
+            "cartId",
+            "orderId",
+            "coupon_used",
+            "tax",
+            "status",
+            "delivery",
+            "total",
+            "subtotal",
+            "status",
+            "delivery_info",
+            "ordered_date",
+            "ordered",
+            "payment_type"
+        ]
 
 class CouponSerializer(serializers.ModelSerializer):
     class Meta:

@@ -29,7 +29,7 @@ class Product(models.Model):
     available = models.IntegerField(
         null=False, blank=False, validators=[MinValueValidator(0)]
     )
-    category = models.CharField(choices=CATEGORIES_CHOICE, max_length=4)
+    category = models.CharField(choices=CATEGORIES_CHOICE, max_length=15)
     label = models.CharField(choices=LABEL_CHOICE, max_length=50, default="NEW")
     visibility = models.BooleanField(default=True)
     image = models.ImageField(upload_to="images", default="", null=True, blank=True)
@@ -64,11 +64,16 @@ class ProductImg(models.Model):
 
 class Specification(models.Model):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    weight = models.DecimalField(decimal_places=2, max_digits=4)
+    serial = models.CharField(max_length=25, unique=True)
+    # attribute odel is set to other information based on product of different categories can be written
+    attribute = models.CharField(max_length=250)
     height = models.DecimalField(max_digits=4, decimal_places=2)
     width = models.DecimalField(max_digits=4, decimal_places=2)
     breadth = models.DecimalField(max_digits=4, decimal_places=2)
+    
+    weight = models.DecimalField(decimal_places=2, max_digits=4)
+    color = models.CharField(max_length=25)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
-
+    
 

@@ -15,10 +15,8 @@ from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
 
 
-
-
 from payment.models import Coupon, Order
-from payment.serializers import CouponSerializer,OrdersSerializer
+from payment.serializers import CouponSerializer, OrdersSerializer
 
 
 from core.serializers import UserSerializer, VerifyUserSerializer, RefundsSerializer
@@ -32,8 +30,9 @@ from usps import USPSApi, Address as uspsAddress
 from usps import SERVICE_PRIORITY, LABEL_ZPL
 
 
-
 # Create your views here.
+
+usps = USPSApi(settings.USPS_USERNAME, test=True)
 
 
 @api_view([methods["post"]])
@@ -102,7 +101,9 @@ def delete_staff_account(request):
         data = JSONParser().parse(request)
         serializer = UserSerializer(data=data)
         if serializer.is_valid():
-            send_mail("account-delete-confirmation", serializer.validated_data["email"], None)
+            send_mail(
+                "account-delete-confirmation", serializer.validated_data["email"], None
+            )
             # on button click in email, account automatically deletes
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -211,9 +212,7 @@ def get_users(request):
 
 @api_view([methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
-def create_shipment(request, test: bool):
-    
-    usps = USPSApi(settings.USPS_USERNAME, test=test)
+def create_shipment(request):
     # will use actual addresses later for both
     to_address = uspsAddress(
         name="Tobin Brown",
@@ -239,6 +238,8 @@ def create_shipment(request, test: bool):
         label = usps.create_label(
             to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
         )
+        data = {}
+        send_mail("order-summary", "fake@email.com", data=data)
         return Response(
             {"success": "shipment created"}, label.result, status=status.HTTP_200_OK
         )
@@ -247,6 +248,29 @@ def create_shipment(request, test: bool):
         label.result,
         status=status.HTTP_400_BAD_REQUEST,
     )
+
+
+@api_view([methods["post"]])
+@permission_classes((EcommerceAccessPolicy,))
+def send_track_order_mail(request):
+    # tracking number provided by usps in place of the zero's
+    track = usps.track("00000000000000000000")
+
+    if track.result:
+        data = {}
+        send_mail("order-summary", "fake@email.com", data=data)
+        return Response(
+            {"success": "shipment created"}, track.result, status=status.HTTP_200_OK
+        )
+    return Response(
+        {"error": "wrong shipment information"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_notifications(request):
+    Refund.objects.last()
+    Order.objects.last()
 
 
 @api_view([methods["get"]])
@@ -261,9 +285,10 @@ def get_refunds(request):
         serializer = RefundsSerializer(refunds, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_refund(request,refundId):
+def get_refund(request, refundId):
     try:
         refunds = Refund.objects.get(id=refundId)
     except:
@@ -272,8 +297,8 @@ def get_refund(request,refundId):
     if request.method == methods["get"]:
         serializer = RefundsSerializer(refunds)
         return Response(serializer.data, status=status.HTTP_200_OK)
-    
-    
+
+
 @api_view([methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
 def refund_response(request):
@@ -304,8 +329,8 @@ def get_marketers(request):
     if request.method == methods["get"]:
         serializer = MarketerSerializer(marketer, many=True)
         return Response(serializer.data, safe=False)
-    
-    
+
+
 class GetOrders(ListAPIView):
     permission_classes = (EcommerceAccessPolicy,)
 
@@ -318,7 +343,7 @@ class GetOrders(ListAPIView):
         "ordered_date",
     )
 
-    filter_backends = [SearchFilter,OrderingFilter]
+    filter_backends = [SearchFilter, OrderingFilter]
     ordering_fields = ["ordered_date"]
 
     paginate_by = 15
@@ -327,4 +352,19 @@ class GetOrders(ListAPIView):
         return Order.objects.all()
 
     def get_serializer_context(self):
-        return {"request": self.request}    
+        return {"request": self.request}
+
+
+# from notifications.signals import notify
+
+# notify.send(user, recipient=user, verb='you reached level 10')
+# notify.send(actor, recipient, verb, action_object, target, level, description, public, timestamp, **kwargs)
+# actor: An object of any type. (Required) Note: Use sender instead of actor if you intend to use keyword arguments
+# recipient: A Group or a User QuerySet or a list of User. (Required)
+# verb: An string. (Required)
+# action_object: An object of any type. (Optional)
+# target: An object of any type. (Optional)
+# level: One of Notification.LEVELS ('success', 'info', 'warning', 'error') (default=info). (Optional)
+# description: An string. (Optional)
+# public: An boolean (default=True). (Optional)
+# timestamp: An tzinfo (default=timezone.now()). (Optional)

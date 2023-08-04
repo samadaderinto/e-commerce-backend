@@ -5,7 +5,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from nanoid import generate
 
 
-from cart.models import Cart
+from cart.models import Cart, CartItem
 from core.utilities import ORDER_STATUS_CHOICE, PAYMENT_STATUS_CHOICE
 from core.models import DeliveryInfo, User
 
@@ -48,25 +48,19 @@ class Order(models.Model):
     cartId = models.ForeignKey(Cart, on_delete=models.CASCADE)
     orderId = models.CharField(
         max_length=15,
-        default=generate(size=10),
+        default=generate(size=13),
         unique=True,
         editable=False,
     )
     coupon_used = models.CharField(max_length=50)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=3)
+    status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=15)
     delivery = models.ForeignKey(DeliveryInfo, on_delete=models.CASCADE)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     ordered_date = models.DateTimeField(auto_now=True)
     ordered = models.BooleanField(False)
     payment_type = models.CharField(max_length=30, default="card")
 
-    def save_orderId(self, *args, **kwargs):
-        if not self.orderId:
-            value = self.cartId.pk
-            self.orderId = value
-        super().save(*args, **kwargs)
-
-    def get_totals(self, *args, **kwargs):
-        self.subtotal = round(self.total + self.tax)
+    @property
+    def subtotal(self):
+        self.subtotal = round((self.total + self.tax),2)
