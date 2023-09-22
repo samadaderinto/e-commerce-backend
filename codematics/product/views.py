@@ -71,15 +71,16 @@ def product_image_by_id(request, id):
 
 @api_view([methods["get"], methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
-def view_product(request, id):
+def view_product(request, productId):
     try:
-        product = Product.objects.prefetch_related("productId").get(pk=id)
+        product = Product.objects.prefetch_related("product").get(id=productId)
     except:
-        return Response(status.HTTP_404_NOT_FOUND)
-
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    
     if request.method == methods["get"]:
         serializer = ProductSerializer(product)
-        if request.data["user"]:
+        # related_products = Product.objects.filter(category=product.category,visibility=True).exclude(id=id)[:5]
+        if request.user.is_authenticated:
             usps = USPSApi(settings.USPS_USERNAME)
             to_address = uspsAddress(
                 name="Tobin Brown",
@@ -100,13 +101,12 @@ def view_product(request, id):
             validate_from_address = usps.validate_address(from_address)
             weight = 10 # in ounce
             if validate_to_address.result and validate_from_address.result:
-                # this is to get estimate if user orders product in certain range of time
+                # this is to get estimate delivery date if user orders product in certain range of time
                 label = usps.create_label(
                     to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
                 )
 
-                return Response(serializer.data, label.result, status=status.HTTP_200_OK)
-            return Response(serializer.data, status=status.HTTP_400_BAD_REQUEST)
+                return Response(serializer.data, {"label": label.result}, status=status.HTTP_200_OK)
         return Response(serializer.data,status=status.HTTP_200_OK)
     
     
@@ -115,7 +115,7 @@ def view_product(request, id):
         return Response(status=status.HTTP_202_ACCEPTED)
 
 
-@api_view([methods["get"], methods["put"]])
+@api_view([methods["get"], methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
 def product_image_list(request):
     
@@ -139,19 +139,19 @@ class SearchProduct(ListAPIView):
     serializer_class = ProductCardSerializer
 
     search_field = (
-        "id",
         "title",
-        "available",
+        "description",
+        "category",
         "discount",
-        "price",
-        "store",
         "average_rating",
+        "tags",
+        "store",
+        "price",
     )
 
     filter_backends = [SearchFilter,OrderingFilter]
-    ordering_fields = ["price"]
-
-    paginate_by = 15
+    ordering_fields = ["price","average_rating","discount"]
+ 
 
     def get_queryset(self):
         return Product.objects.filter(visibility=True)
@@ -177,3 +177,5 @@ def get_product_reviews(request, productId):
         items = paginator.get_page(number=page_number)
         serializer = ReviewsSerializer(items, many=True)
         return Response(serializer.data,status=status.HTTP_200_OK)    
+
+

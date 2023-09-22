@@ -1,7 +1,7 @@
 # The first instruction is what image we want to base our container on
 # We Use an official Python runtime as a parent image
 FROM python:3.9.7-slim
-
+FROM jenkins/jenkins:lts
 # The enviroment variable ensures that the python output is set straight
 # to the terminal with out buffering it first
 ENV PYTHONUNBUFFERED 1
@@ -35,3 +35,25 @@ RUN chmod +x entrypoint.sh && chmod +x migrate.sh
 RUN sh /app/migrate.sh
 
 CMD [ "/app/entrypoint.sh" ]
+
+
+USER root
+
+RUN apt-get update && \
+    apt-get -y install \
+    apt-transport-https \
+    ca-certificates \
+    gnupg2 \
+    software-properties-common
+RUN curl -fsSL https://download.docker.com/linux/$(. /etc/os-release; echo "$ID")/gpg | apt-key add -
+
+RUN add-apt-repository \
+   "deb [arch=amd64] https://download.docker.com/linux/$(. /etc/os-release; echo "$ID") \
+   $(lsb_release -cs) \
+   stable"  
+
+RUN apt-get update
+
+RUN apt-get -y install docker-ce
+
+USER jenkins

@@ -17,7 +17,7 @@ from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
+SETTINGS_PATH = os.path.dirname(os.path.dirname(__file__))
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/4.1/howto/deployment/checklist/
@@ -29,7 +29,7 @@ SECRET_KEY = str(os.environ.get("SECRET_KEY"))
 DEBUG = True
 
 ENV_ALLOWED_HOST = str(os.environ.get("ENV_ALLOWED_HOST"))
-ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]"]
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 # if ENV_ALLOWED_HOST:
 #     ALLOWED_HOSTS = [ ENV_ALLOWED_HOST ]
 
@@ -43,10 +43,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    
-    
-    
-    
+    "event_notification.apps.EventNotificationConfig",
     "core.apps.CoreConfig",
     "product.apps.ProductConfig",
     "store.apps.StoreConfig",
@@ -56,25 +53,20 @@ INSTALLED_APPS = [
     "cart.apps.CartConfig",
     
     
-    
-    
     "django_filters",
     "corsheaders",
     "rest_framework",
-    "dotenv",
+    'django_user_agents',
     "phonenumber_field",
-    "django_crontab",
+  
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
-    "push_notifications",
     "taggit",
     "stripe",
-    "psycopg2",
-    "rest_access_policy",
-    'rest_framework_word_filter',
-    'notifications',
+    "rest_framework_word_filter",
+    "notifications",
+    "dotenv",
     
-   
 ]
 
 MIDDLEWARE = [
@@ -86,6 +78,7 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "corsheaders.middleware.CorsMiddleware",
+    'django_user_agents.middleware.UserAgentMiddleware',
 ]
 
 ROOT_URLCONF = "codematics.urls"
@@ -94,7 +87,7 @@ ROOT_URLCONF = "codematics.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [os.path.join(SETTINGS_PATH, 'templates')],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -106,6 +99,7 @@ TEMPLATES = [
         },
     },
 ]
+
 
 WSGI_APPLICATION = "codematics.wsgi.application"
 
@@ -120,7 +114,7 @@ DATABASE_PATH = os.path.join(BASE_DIR, "db.sqlite3")
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+        "NAME": DATABASE_PATH,
     }
 }
 
@@ -133,7 +127,7 @@ DB_IS_AVAIL = all([DB_USERNAME, DB_PASSWORD, DB_DATABASE, DB_HOST, DB_PORT])
 DB_IGNORE_SSL = os.environ.get("DB_ IGNORE_SSL") == "true"
 
 
-# # if postgres in online use as default
+
 # if DB_IS_AVAIL:
 #     DATABASES = {
 #         "default": {
@@ -202,7 +196,7 @@ MEDIA_URL = "/media/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "core.User"
-
+AUTH_PROFILE_MODULE = 'core.User'
 
 CORS_ALLOW_METHODS = [
     "DELETE",
@@ -235,7 +229,7 @@ REST_FRAMEWORK = {
         "django_filters.rest_framework.DjangoFilterBackend",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
-    "PAGE_SIZE": 10,
+    "PAGE_SIZE": 15,
 }
 
 SIMPLE_JWT = {
@@ -291,27 +285,16 @@ PASSWORD_HASHERS = [
 STRIPE_SECRET = str(os.environ.get("STRIPE_SECRET"))
 PUBLISHER_KEY = str(os.environ.get("PUBLISHER_KEY"))
 
-# CRONJOBS = [
-#     ('*/1 * * * *', 'core.utilities.deactivate_coupon')
-#     ('*/1 * * * *', 'core.utilities.auto_set_product_visibility'),
-#     ('*/1 * * * *', 'core.utilities.deactivate_coupon'),
-#     ('*/1 * * * *', 'app.utilities.deactivate_coupon'),
-#     ('*/1 * * * *', 'app.utilities.ramadan_mail'),
-#     ('*/1 * * * *', 'app.utilities.easter_mail'),
-#     ('*/1 * * * *', 'app.utilities.easter_mail')
 
-# ]
-
-PUSH_NOTIFICATIONS_SETTINGS = {
-    "FCM_API_KEY": str(os.environ.get("FCM_API_KEY")),
-    "GCM_API_KEY": str(os.environ.get("GCM_API_KEY")),
-    "APNS_CERTIFICATE": "/path/to/your/certificate.pem",
-}
+CRON_CLASSES = [
+    "core.cron.set_product_visibility",
+    "core.cron.deactivate_coupon"
+]
 
 
 PAYPAL_RECEIVER_EMAIL = str(
     os.environ.get("PAYPAL_RECEIVER_EMAIL")
-)  # email used to create account
+)  
 
 PAYPAL_TEST = True
 
@@ -319,17 +302,20 @@ USPS_USERNAME = str(os.environ.get("USPS_USERNAME"))
 
 TAGGIT_CASE_INSENSITIVE = True
 
-
-SECURE_PROXY_SSL_HEADER = True
-SECURE_SSL_REDIRECT = True
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
+SECURE_SSL_REDIRECT = False
 
 
 
-NOTIFICATIONS_NOTIFICATION_MODEL = 'core.Notification'
-DJANGO_NOTIFICATIONS_CONFIG = { 
-                            'USE_JSONFIELD': True,
-                            'SOFT_DELETE': True,}
+NOTIFICATIONS_NOTIFICATION_MODEL = "event_notification.Notification"
+DJANGO_NOTIFICATIONS_CONFIG = {
+    "USE_JSONFIELD": True,
+    "SOFT_DELETE": True,
+}
 
+
+USER_AGENTS_CACHE = 'default'
+AIRSHIP_KEY = str(os.environ.get("AIRSHIP_KEY"))
+MASTER_SECRET = str(os.environ.get("MASTER_SECRET"))
 

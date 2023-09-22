@@ -30,7 +30,7 @@ def edit_marketer_detail(request, userId):
     data = JSONParser().parse(request)
 
     try:
-        marketer = Marketer.objects.get(pk=userId)
+        marketer = Marketer.objects.get(id=userId)
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -46,7 +46,7 @@ def edit_marketer_detail(request, userId):
 @permission_classes((EcommerceAccessPolicy,))
 def delete_marketer_account(request, userId):
     try:
-        marketer = Marketer.objects.get(pk=userId)
+        marketer = Marketer.objects.get(id=userId)
 
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
@@ -60,7 +60,7 @@ def delete_marketer_account(request, userId):
 @permission_classes((EcommerceAccessPolicy,))
 def get_marketer(request, userId):
     try:
-        marketer = Marketer.objects.get(pk=userId)
+        marketer = Marketer.objects.get(id=userId)
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -85,5 +85,4 @@ def get_product_link(request):
             )
             return Response(url.data["abs_url"], status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
 

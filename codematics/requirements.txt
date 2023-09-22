@@ -9,11 +9,8 @@ markdown
 django-filter
 stripe
 psycopg2-binary
-django-crontab
 djangorestframework-simplejwt
 PyJWT==2.1.0
-django-imap-backend
-django-push-notifications[WP,APNS]
 django-paypal
 django-taggit
 nanoid
@@ -23,3 +20,10 @@ drf-access-policy
 djangorestframework-word-filter
 usps-api
 django-redis
+django-notifications-hq
+django-model-utils
+urbanairship
+ua-parser 
+user-agents
+django-user-agents
+django_cron

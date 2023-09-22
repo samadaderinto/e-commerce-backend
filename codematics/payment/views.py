@@ -1,17 +1,18 @@
+from decimal import Decimal
 from django.conf import settings
 
 
 from cart.models import Cart, CartItem
-from cart.seralizers import CartSerializer
+from event_notification.views import created_order_nofication
 from core.serializers import AddressSerializer
 
 
 from payment.models import Coupon, Order, Payment
 from product.models import Product
-from core.models import Address
+from core.models import Address,  User
 from core.permissions import EcommerceAccessPolicy
-from core.utilities import methods, calculate_order_amount
-from payment.serializers import OrdersSerializer,CheckOutSerializer
+from core.utilities import methods
+from payment.serializers import OrdersSerializer, CheckOutSerializer
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -35,94 +36,93 @@ def create_checkout_session(request):
         data = JSONParser().parse(request)
         serializer = CheckOutSerializer(data=data)
 
-    if serializer.is_valid():
-        id = serializer.validated_data["id"]
-        userId = serializer.validated_data["userId"]
-        cart = Cart.objects.get(id=id, userId=userId, ordered=False)
-        cart_items = CartItem.objects.filter(cartId=cart.id)
-        address = serializer.validated_data.get(
-            ["address"], Address.objects.get(user=userId, is_default=True)
-        )
+        if serializer.is_valid():
+            userId = serializer.validated_data["userId"]
+            cart = Cart.objects.get(id=id, userId=userId, ordered=False)
+      
 
-        address_serializer = AddressSerializer(address)
+            for item in cart.items:
+                product = Product.objects.get(pk=item.productId)
+                # Validate product inventory
+                if product.available <= 0:
+                    return Response(
+                        data={"message": "One of your products is sold out"},
+                        status=status.HTTP_409_CONFLICT,
+                    )
 
-        if address_serializer.is_valid():
-            if address.id is not Address.objects.get(user=userId, is_default=True).id:
-                address_serializer.save()
-            else:
-               Response({"cart_items": cart_items,"total": calculate_order_amount(cart_items)},status=status.HTTP_200_OK)
+            Response(
+                {"cart_items": cart.items, "total": cart.grand_total},
+                status=status.HTTP_200_OK,
+            )
         else:
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-    else:
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
 def capture_checkout_session(request):
     if request.method == methods["post"]:
-        try:
-            user = request.POST.get("user")
-            cart = request.POST.get("cart")
-            code = request.POST.get("code")
+        data = JSONParser().parse(request)
+        serializer = OrdersSerializer(data=data)
+        if serializer.is_valid():
+            userId = serializer.validated_data["userId"]
+            user = User.objects.get(id=userId)
+            cart = Cart.objects.get(id=id, userId=userId, ordered=False)
+            default_address = Address.objects.get(user=userId, is_default=True)
+            address = serializer.validated_data.get("address", default_address)
+            address_serializer = AddressSerializer(address)
+            code = ""
+            global coupon_discount
+            coupon_discount = 0
+            if code != "":
+                
+                try:
+                    coupon = Coupon.objects.get(code=code)
+                    if coupon.can_use():
+                        coupon_discount = coupon.discount
+                    else:
+                        return Response("invalid coupon", status=status.HTTP_401_UNAUTHORIZED)
+                except:
+                    return Response("invalid coupon", status=status.HTTP_404_NOT_FOUND)
 
-            coupon = Coupon.objects.get(code=code)
-
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-        discount = 0
-
-        if coupon.can_use():
-            discount = coupon.discount
-            coupon.used()
-
-            # subtotal = []
-            for item in cart:
-                id = item.get("id")
-                quantity = item.get("quantity")
-                product = Product.objects.get(pk=id)
-
-                # Validate product inventory
-                if product.available <= 0:
-                    return Response(
-                        data={"message": "One of your products is sold out"}, status=409
+            if address_serializer.is_valid():
+                usps_delivery_fee = 10
+                tax = 0
+                sub_total = round(
+                    (cart.grand_total * (100 - coupon_discount) / 100)  + tax + usps_delivery_fee, 2
+                )
+                
+                def make_payment():
+                    intent = stripe.PaymentIntent.create(
+                        amount=sub_total,
+                        currency="usd",
+                        automatic_payment_methods={
+                            "enabled": True,
+                        },
+                        receipt_email="test@example.com",
                     )
+                    
+                    if intent:
+                        coupon.used()
+                        cart.ordered = True
+                        cart.save()
+                        address_serializer.save()
+                        serializer.save()
+                        return intent
+                    return None
+                    
 
-            #     subtotal.append(p.price * quantity)
+                if address.id is not default_address.id:
+                   
+                    make_payment()
+                    created_order_nofication(user,"order sucessfully created")
+                else:
+                    make_payment()
+                    created_order_nofication(user,"order sucessfully created")
 
-            # # total calculations
-            # tax = round(sum(subtotal) * Decimal(tax_list[0]), 2)
-            # total = round(Decimal(sum(subtotal) + tax), 2)
-            # stripe_total = int(total*100)
-
-            intent = stripe.PaymentIntent.create(
-                amount=calculate_order_amount(cart["items"]),
-                currency="usd",
-                automatic_payment_methods={
-                    "enabled": True,
-                },
-                receipt_email="test@example.com",
-            )
-
-            return ""
+            else:
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
-def redeem_coupon(request):
-    data = JSONParser().parse(request)
-
-    try:
-        coupon = Coupon.objects.get(code=data.get("code", ""))
-
-    except:
-        return Response("coupon does not exist", status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["post"]:
-        if coupon.can_use():
-            coupon.used()
-            return Response(
-                {"discount": coupon.discount, "message": "discount successfully used"},
-                status=status.HTTP_200_OK,
-            )
-    return Response("invalid coupon", status=status.HTTP_401_UNAUTHORIZED)

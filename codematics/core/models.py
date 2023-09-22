@@ -1,15 +1,13 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
-from django.contrib.auth.hashers import make_password
+
 
 from phonenumber_field.modelfields import PhoneNumberField
-
 from product.models import Product
+
 from core.utilities import USPS_SERVICE_CHOICE, GENDER_STATUS, DELIVERY_METHOD_CHOICE
 from store.models import StoreAddress
-
-from datetime import datetime
 
 from notifications.base.models import AbstractNotification
 
@@ -59,6 +57,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", False)
         extra_fields.setdefault("is_active", True)
+        extra_fields.setdefault("has_perm", False)
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("staffuser must have is_staff=True.")
@@ -66,7 +65,6 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser):
-    # username is set to none because it is not needed and this is the only hack to remove it
     username = None
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
@@ -99,14 +97,14 @@ class Address(models.Model):
         blank=False,
     )
     city = models.CharField(max_length=100)
-    is_default = models.BooleanField(default=False)
+    is_default = models.BooleanField(default=True)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 
 
 class Review(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    productId = models.ForeignKey(Product, on_delete=models.CASCADE)
+    productId = models.ForeignKey('product.Product', on_delete=models.CASCADE)
     label = models.CharField(max_length=40)
     comment = models.TextField(max_length=60)
     rating = models.IntegerField(
@@ -154,10 +152,10 @@ class DeliveryInfo(models.Model):
 
     def get_delivery_info(self):
         full_delivery_address = "%s, %s %s, %s" % (
-            Address.address,
-            Address.state,
-            Address.country,
-            Address.zip,
+            self.delivery_address.address,
+            self.delivery_address.state,
+            self.delivery_address.country,
+            self.delivery_address.zip,
         )
         return (
             self.user,
@@ -172,29 +170,32 @@ class DeliveryInfo(models.Model):
 class Wishlist(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     liked = models.BooleanField(default=True)
-    productId = models.ForeignKey(Product, on_delete=models.CASCADE)
+    productId = models.ForeignKey('product.Product', on_delete=models.CASCADE)
     created = models.DateTimeField(auto_now_add=True)
 
 
 class Recent(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-    productId = models.ForeignKey(Product, on_delete=models.CASCADE)
+    productId = models.ForeignKey('product.Product', on_delete=models.CASCADE)
     viewed = models.BooleanField(default=True)
     created = models.DateTimeField(auto_now_add=True)
 
 
 class Refund(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, blank=True, null=True)
+    userId = models.ForeignKey(User, on_delete=models.CASCADE)
     order = models.ForeignKey("payment.Order", on_delete=models.CASCADE)
     reason = models.TextField()
     accepted = models.BooleanField(default=False)
     created = models.DateTimeField(auto_now_add=True)
+    
+    
+class Device(models.Model):
+    user =  models.ForeignKey(User, on_delete=models.CASCADE)
+    device_ip = models.GenericIPAddressField()
+    verified = models.BooleanField(default=False)
+    type = models.CharField(max_length=50)
+    version = models.CharField(max_length=50)
+    last_login = models.DateTimeField(auto_now_add=True)
 
 
-
-
-class Notification(AbstractNotification):
-
-    class Meta(AbstractNotification.Meta):
-        abstract = False
 

@@ -13,13 +13,17 @@ from rest_framework.generics import ListAPIView
 
 from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
+from event_notification.views import refund_requested_nofication 
+from store.serializers import StoreAddressSerializer
 
+from staff.serilalizers import CommentSerializer
 
+from staff.models import Comment
 from payment.models import Coupon, Order
 from payment.serializers import CouponSerializer, OrdersSerializer
 
-
-from core.serializers import UserSerializer, VerifyUserSerializer, RefundsSerializer
+from rest_framework.generics import RetrieveUpdateDestroyAPIView, ListCreateAPIView
+from core.serializers import UserSerializer, VerifyUserSerializer, RefundsSerializer, StoreSerializer, StaffSerializer, AdminSerializer
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import auth_token, methods, send_mail
 from core.models import User, Refund
@@ -40,13 +44,40 @@ usps = USPSApi(settings.USPS_USERNAME, test=True)
 def create_staff(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
+        
         if User.objects.filter(email=data["email"]).exists():
             return Response(
                 {"error": "Email already registered"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         else:
-            serializer = UserSerializer(data=data)
+            serializer = StaffSerializer(data=data)
+
+        if serializer.is_valid():
+            user = serializer.save()
+            
+            token = auth_token(user)
+
+            return Response(
+                serializer.data,
+                headers={"Authorization": token},
+                status=status.HTTP_201_CREATED,
+            )
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view([methods["post"]])
+@permission_classes((EcommerceAccessPolicy,))
+def create_admin(request):
+    if request.method == methods["post"]:
+        data = JSONParser().parse(request)
+        if User.objects.filter(email=data["email"]).exists():
+            return Response(
+                {"error": "Email already registered"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        else:
+            serializer = AdminSerializer(data=data)
 
         if serializer.is_valid():
             user = serializer.save()
@@ -71,9 +102,12 @@ def give_staff_permission(request):
 
     try:
         user = User.objects.get(email=email, is_staff=True)
-        user.groups.add(Group.objects.get(name="staff"))
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    user.has_perm = True
+    user.save()
+    return Response({"success": "Permission granted for this staff member"}, status=status.HTTP_200_OK)
 
 
 @api_view([methods["post"]])
@@ -82,9 +116,10 @@ def edit_staff_detail(request, userId):
     data = JSONParser().parse(request)
 
     try:
-        user = User.objects.get(pk=userId, email=data.get("email"), is_staff=True)
+        user = User.objects.get(
+            pk=userId, email=data.get("email"), is_staff=True)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["post"]:
         serializer = UserSerializer(user, data=data)
@@ -94,17 +129,16 @@ def edit_staff_detail(request, userId):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+
+
 @api_view([methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
-def delete_staff_account(request):
+def delete_staff_account_by_admin(request):
     if request.method == methods["delete"]:
         data = JSONParser().parse(request)
         serializer = UserSerializer(data=data)
         if serializer.is_valid():
-            send_mail(
-                "account-delete-confirmation", serializer.validated_data["email"], None
-            )
-            # on button click in email, account automatically deletes
+            serializer.delete()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -113,37 +147,40 @@ def delete_staff_account(request):
 @permission_classes((EcommerceAccessPolicy,))
 def revoke_staff_permission(request):
     data = JSONParser().parse(request)
-    serializer = UserSerializer(data=data)
-    if serializer.is_valid():
-        email = serializer.validated_data["email"]
-
+        
     try:
-        user = User.objects.get(email=email, is_superuser=True)
-        user.groups.remove(Group.objects.get(name="staff"))
-        send_mail()
+        staff = User.objects.get(email=data.get("email"),is_staff=True)
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    staff.has_perm = False
+    staff.save()
+    return Response({"success": "Permission revoked for this staff member"}, status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"], methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
 def get_staffs(request):
     if request.method == methods["get"]:
-        staffs = User.objects.all().order_by("created").reverse()
-        serializer = UserSerializer(staffs, many=True)
+        staffs = User.objects.filter(is_staff=True).order_by("created").reverse()
+        serializer = StaffSerializer(staffs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 @permission_classes((EcommerceAccessPolicy,))
 @api_view([methods["get"]])
-def get_staff(request, userId):
-    staff = User.objects.get(pk=userId, is_staff=True)
+def get_staff(request, staffId):
+    
+    try:
+        staff = User.objects.get(id=staffId, is_staff=True)
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
     if request.method == methods["get"]:
-        serializer = User(staff)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        serializer = UserSerializer(staff)
+        
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @api_view([methods["get"]])
@@ -152,7 +189,7 @@ def get_coupons(request):
     try:
         coupons = Coupon.objects.all()
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
         serializer = CouponSerializer(coupons, many=True)
@@ -165,7 +202,7 @@ def delete_coupon(request, codeId):
     try:
         coupons = Coupon.objects.get(pk=codeId)
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["delete"]:
         coupons.delete()
@@ -175,6 +212,7 @@ def delete_coupon(request, codeId):
 @api_view([methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
 def create_coupon(request):
+    
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
         serializer = CouponSerializer(data=data)
@@ -184,13 +222,12 @@ def create_coupon(request):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
-# will properly write this later
 @api_view([methods["put"]])
 @permission_classes((EcommerceAccessPolicy,))
-def edit_coupon(request, code):
+def edit_coupon(request, couponId):
     if request.method == methods["put"]:
-        queryset = Coupon.objects.filter(code=code)
-        serializer = CouponSerializer(queryset)
+        coupon = Coupon.objects.get(code=couponId)
+        serializer = CouponSerializer(coupon )
         if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -268,13 +305,6 @@ def send_track_order_mail(request):
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_notifications(request):
-    Refund.objects.last()
-    Order.objects.last()
-
-
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
 def get_refunds(request):
     try:
         refunds = Refund.objects.all().order_by("created").reverse()
@@ -301,21 +331,17 @@ def get_refund(request, refundId):
 
 @api_view([methods["post"]])
 @permission_classes((EcommerceAccessPolicy,))
-def refund_response(request):
-    data = JSONParser().parse(request)
-    serializer = RefundsSerializer(data=data)
-    if serializer.is_valid():
-        serializer.save()
-        user = User.objects.get(id=serializer.validated_data["user"])
-        email = user.email
+def refund_response(request,orderId, userId):
+    if request.method == methods["post"]:
+        user = User.objects.get(id=userId)
+     
         data = {
             "firstname": user.first_name,
-            "order": serializer.validated_data["order"],
-            "products": [],
+            "orderId": orderId,
+            "message": "",
         }
-        send_mail("refund-request-acknowledged", email, data=data)
-        return Response(status=status.HTTP_202_ACCEPTED)
-    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        send_mail("refund-response", user.email, data=data)
+        return Response(status=status.HTTP_200_OK)
 
 
 @api_view([methods["get"]])
@@ -324,29 +350,74 @@ def get_marketers(request):
     try:
         marketer = Marketer.objects.all().order_by("created").reverse()
     except:
-        return Response(status=404)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["get"]:
         serializer = MarketerSerializer(marketer, many=True)
-        return Response(serializer.data, safe=False)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
+
+@permission_classes((EcommerceAccessPolicy,))
+@api_view([methods["get"]])
+def get_marketer(request, marketerId):
+    try:
+       marketer = Marketer.objects.get(id=marketerId)
+    except:   
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == methods["get"]:
+        
+        serializer = MarketerSerializer(marketer)
+       
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@permission_classes((EcommerceAccessPolicy,))
+@api_view([methods["get"]])
+def suspend_marketer(request, marketerId):
+    try:
+       marketer = Marketer.objects.get(id=marketerId)
+    except:   
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == methods["get"]:
+        
+        serializer = MarketerSerializer(marketer)
+       
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+@api_view([methods["delete"]])
+@permission_classes((EcommerceAccessPolicy,))
+def delete_marketer_account_by_staff(request,marketerId):
+    try:
+       marketer = Marketer.objects.get(id=marketerId)
+    except:   
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == methods["delete"]:
+
+        marketer.delete()
+        return Response(status=status.HTTP_202_ACCEPTED)
+           
 
 class GetOrders(ListAPIView):
     permission_classes = (EcommerceAccessPolicy,)
 
     serializer_class = OrdersSerializer
+           
 
     search_field = (
         "id",
         "status",
         "orderId",
+        "ordered",
+        "payment_type",
         "ordered_date",
     )
 
     filter_backends = [SearchFilter, OrderingFilter]
-    ordering_fields = ["ordered_date"]
+    ordering_fields = ["orderId","ordered_date"]
 
-    paginate_by = 15
 
     def get_queryset(self):
         return Order.objects.all()
@@ -355,16 +426,55 @@ class GetOrders(ListAPIView):
         return {"request": self.request}
 
 
-# from notifications.signals import notify
+class CommentList(ListCreateAPIView):
+    queryset = Comment.objects.all()
+    serializer_class = CommentSerializer
+    permission_classes = (EcommerceAccessPolicy,)
 
-# notify.send(user, recipient=user, verb='you reached level 10')
-# notify.send(actor, recipient, verb, action_object, target, level, description, public, timestamp, **kwargs)
-# actor: An object of any type. (Required) Note: Use sender instead of actor if you intend to use keyword arguments
-# recipient: A Group or a User QuerySet or a list of User. (Required)
-# verb: An string. (Required)
-# action_object: An object of any type. (Optional)
-# target: An object of any type. (Optional)
-# level: One of Notification.LEVELS ('success', 'info', 'warning', 'error') (default=info). (Optional)
-# description: An string. (Optional)
-# public: An boolean (default=True). (Optional)
-# timestamp: An tzinfo (default=timezone.now()). (Optional)
+    def perform_create(self, serializer):
+        serializer.save(owner=self.request.user)
+
+
+class CommentDetail(RetrieveUpdateDestroyAPIView):
+    queryset = Comment.objects.all()
+    serializer_class = CommentSerializer
+    permission_classes = (EcommerceAccessPolicy,)
+
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_stores(request):
+    try:
+        store = Store.objects.all().order_by("user").reverse()
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    if request.method == methods["get"]:
+        serializer = StoreSerializer(store, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_store_by_staff(request, storeId):
+    try:
+        store = Store.objects.filter(id=storeId)
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    if request.method == methods["get"]:
+        serializer_context = {"request": request}
+        serializer = StoreSerializer(store, context=serializer_context, many=True)
+        return Response(serializer.data,status=status.HTTP_200_OK)
+    
+    
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_store_addresses_by_staff(request, storeId):
+    try:
+        store = StoreAddress.objects.filter(store=storeId)
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+    
+    if request.method == methods["get"]:
+     
+        serializer = StoreAddressSerializer(store, many=True)
+        return Response(serializer.data,status=status.HTTP_200_OK)    

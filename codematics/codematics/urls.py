@@ -24,7 +24,7 @@ import notifications.urls
 urlpatterns = [
     path('', include('core.urls')),
     path('admin/', admin.site.urls),
-    path('store/', include('store.urls')),
+    path('stores/', include('store.urls')),
     path('products/', include('product.urls')),
     path('staffs/', include('staff.urls')),
     path('checkout/', include('payment.urls')),

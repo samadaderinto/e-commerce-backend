@@ -7,7 +7,8 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.urls import reverse
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.paginator import Paginator
-from django.db.models.signals import post_save
+from django.conf import settings
+
 import pytz
 
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -21,17 +22,18 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from affiliates.models import Redirect, Url
 from affiliates.serializers import RedirectSerializer
 
+from event_notification.views import refund_requested_nofication
+from core.serializers import DeviceSerializer
+from product.serializers import ProductImgSerializer
+from product.models import ProductImg
+
 
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import auth_token, methods, send_mail
 
 from payment.models import Order
-from core.models import Recent, Review, User, Wishlist, Address,Notification
-
-from notifications.signals import notify
-
-
-
+from core.models import Recent, Review, User, Wishlist, Address
+from django_user_agents.utils import get_user_agent
 
 from core.serializers import (
     AddressSerializer,
@@ -49,6 +51,9 @@ from core.serializers import (
     RefreshToken,
 )
 from payment.serializers import OrdersSerializer
+
+import urbanairship as ua
+airship = ua.Airship(f'{settings.AIRSHIP_KEY}', f'{settings.MASTER_SECRET}', retries=6)
 
 
 @api_view([methods["post"]])
@@ -88,8 +93,8 @@ def edit_user_detail(request, userId):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["put"]:
-        serializer = UserSerializer(user, data=data)
-        if serializer.is_valid():
+        serializer = UserSerializer(user, partial=True, data=data)
+        if serializer.is_valid(raise_exception=True):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -150,7 +155,8 @@ def create_wishlist(request, userId, productId):
 @api_view([methods["get"]])
 def get_wishlist(request, userId):
     try:
-        wishlist = Wishlist.objects.filter(user=userId).order_by("created").reverse()
+        wishlist = Wishlist.objects.filter(
+            user=userId,liked=True).order_by("created").reverse()
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -160,7 +166,8 @@ def get_wishlist(request, userId):
         paginator = Paginator(wishlist, per_page=per_page)
         items = paginator.get_page(number=page_number)
 
-        serializer = WishlistSerializer(items, many=True, context={"request": request})
+        serializer = WishlistSerializer(
+            items, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -168,7 +175,8 @@ def get_wishlist(request, userId):
 @api_view([methods["get"]])
 def get_reviews(request, userId):
     try:
-        reviews = Review.objects.filter(user=userId).order_by("created").reverse()
+        reviews = Review.objects.filter(
+            user=userId).order_by("created").reverse()
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -185,7 +193,7 @@ def get_reviews(request, userId):
 @api_view([methods["post"]])
 def create_review(request):
     if request.method == methods["post"]:
-        # will add checker so only user who bought product can create review
+
         data = JSONParser().parse(request)
         user = data.get("user")
         productId = data.get("productId")
@@ -196,7 +204,7 @@ def create_review(request):
                 review = Review.objects.get(user=user, productId=productId)
             except:
                 # create review
-                serializer.save()
+             
                 review = Review.objects.get(user=user, productId=productId)
                 # update product rating
                 review.set_avg_rating()
@@ -218,7 +226,7 @@ def delete_review(request, userId, productId):
     try:
         review = Review.objects.get(user=userId, productId=productId)
     except:
-        return Response(status.HTTP_404_NOT_FOUND)
+        return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["delete"]:
         review.delete()
@@ -241,7 +249,8 @@ def create_recent(request, productId, userId):
 @permission_classes((EcommerceAccessPolicy,))
 def get_recents(request, userId):
     try:
-        recent = Recent.objects.filter(user=userId).order_by("created").reverse()
+        recent = Recent.objects.filter(
+            user=userId).order_by("created").reverse()
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -286,10 +295,7 @@ def create_address(request):
         data = JSONParser().parse(request)
         serializer = AddressSerializer(data=data)
         if serializer.is_valid():
-            # line of code will not work as expected
-            # i am trying to create address by setting default address to false and set new address with
-            # is_default as Tru to new default and also make sure if it is the first created address, it will become default
-            if serializer.validated_data.get("is_default", False) == True:
+            if serializer.validated_data.get("is_default"):
                 try:
                     default_address = Address.objects.get(
                         user=serializer.validated_data["user"], is_default=True
@@ -297,6 +303,7 @@ def create_address(request):
                     default_address.is_default = False
                     default_address.save()
                     serializer.save()
+                    return Response(status=status.HTTP_202_ACCEPTED)
                 except:
                     serializer.save()
                     return Response(status=status.HTTP_202_ACCEPTED)
@@ -312,15 +319,18 @@ def edit_address(request, userId):
     data = JSONParser().parse(request)
 
     try:
-        user = Address.objects.filter(user=userId, id=data["id"])
+        address = Address.objects.get(user=userId, id=data["id"])
+        addresses = Address.objects.get(user=userId, is_default=True)
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["put"]:
-        serializer = AddressSerializer(user, data=data)
+        serializer = AddressSerializer(address, data=data,partial=True)
         if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
+            if serializer.validated_data["is_default"] and addresses.id == address.id:
+               serializer.save()
+               return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
+            return Response(serializer.data, status=status.HTTP_202_ACCEPTED) 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
@@ -354,6 +364,7 @@ def request_refund(request):
             "created": serializer.validated_data["created"],
         }
         send_mail("refund-request-acknowledged", email, data=data)
+        refund_requested_nofication()
         return Response(
             {
                 "message": "Refund accepted, this may take 3 to 7 business days before you get a response"
@@ -364,37 +375,37 @@ def request_refund(request):
 
 
 class ResetPassword(GenericAPIView):
-    serializer_class = VerifyUserSerializer
     permission_classes = (EcommerceAccessPolicy,)
 
     def post(self, request):
-        serializer = self.serializer_class(data=request.data)
-        email = request.data["email"]
+
+        email = self.request.data["email"]
 
         if User.objects.filter(email=email).exists():
             user = User.objects.get(email=email)
-            uidb64 = urlsafe_base64_encode(user.id)
+            uidb64 = urlsafe_base64_encode(user.id.to_bytes())
             token = PasswordResetTokenGenerator().make_token(user)
             current_site = get_current_site(request).domain
             relativeLink = reverse(
-                "password-reset-confirm", kwargs={"uidb64": uidb64, "token": token}
+                "password_reset_confirmation", kwargs={"uidb64": uidb64, "token": token}
             )
-            absurl = f"http://{current_site}{relativeLink}"
+            abs_url = f"http://{current_site}{relativeLink}"
 
-            email_body = f"Hi {user.username} Use link below to verify your email \n"
-            # will put correct data later
             data = {
-                "email body": email_body,
-                "to email": user.email,
-                "email subject": "Verify your email",
+                "absolute_url": abs_url,
+                "email": email,
             }
-            
-            send_mail("onboarding-user", user.email, data=data)
 
+            send_mail("password-reset", email, data=data)
+
+            return Response(
+                {"success": "We have sent you a mail to reset your password"},
+                status=status.HTTP_200_OK,
+            )
         return Response(
-            {"success": "We have sent you a link to reset your password"},
-            status=status.HTTP_200_OK,
-        )
+                {"error": "Email is not registered"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )    
 
 
 class PasswordTokenCheckAPI(GenericAPIView):
@@ -442,8 +453,28 @@ class SetNewPassword(generics.GenericAPIView):
         )
 
 
-class EmailTokenObtainPairView(TokenObtainPairView):
+class EmailTokenObtainPairView(TokenObtainPairView, generics.GenericAPIView):
     serializer_class = CustomTokenObtainPairSerializer
+    permission_classes = (EcommerceAccessPolicy,)
+   
+
+    def post(self, request, *args, **kwargs):
+         agent  = get_user_agent(self.request)
+         type = agent.os.family
+         version = agent.os.version_string
+         serializer = DeviceSerializer(data=request.data.pop("password","email"))
+         ip = self.request.META.get('HTTP_X_FORWARDED_FOR')
+         if ip:
+             ip = ip.split(',')[0]
+         else:
+             ip = self.request.META.get('REMOTE_ADDR')
+         serializer.validated_data["device_ip"] = ip
+         serializer.validated_data["type"] = type
+         serializer.validated_data["version"] = version
+         serializer.save()
+     
+              
+          
 
 
 class UserLogout(GenericAPIView):
@@ -459,32 +490,63 @@ class UserLogout(GenericAPIView):
             return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
+@permission_classes((EcommerceAccessPolicy,))
 def redirect_url(request, marketerId, productId, identifier):
-    data = {"marketer": marketerId, "product": productId, "identifier": identifier}
-    serializer = RedirectSerializer(data=data)
+    if request.method == methods["get"]:
+        data = {"marketer": marketerId,
+                "product": productId, "identifier": identifier}
+        serializer = RedirectSerializer(data=data)
 
-    if serializer.is_valid():
-        try:
-            url = Url.objects.get(
-                marketer=marketerId, product=productId, identifier=identifier
+        if serializer.is_valid():
+            try:
+                url = Url.objects.get(
+                    marketer=marketerId, product=productId, identifier=identifier
+                )
+            except:
+                return Response(
+                    "Sorry link is broken or unable to get product :(",
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            serializer.save()
+            return redirect(
+                url.product_url,
+                permanent=True,
+                status=status.HTTP_308_PERMANENT_REDIRECT,
             )
-        except:
-            return Response(
-                "Sorry link is broken or unable to get product :(",
-                status=status.HTTP_403_FORBIDDEN,
-            )
-      
-        serializer.save()
-        return redirect(
-            url.product_url,
-            permanent=True,
-            status=status.HTTP_308_PERMANENT_REDIRECT,
-        )
-        
-def create_orders_nofication(sender, instance, created, **kwargs):
-    notify.send(instance, verb='was saved')
-    #notify.send(actor, recipient, verb, action_object, target, level, description, public, timestamp, **kwargs)
 
-post_save.connect(create_orders_nofication, sender=Order)  
 
-      
+@permission_classes((EcommerceAccessPolicy,))
+@api_view([methods["get"]])
+def product_image(request, productId, imageId):
+    try:
+        product = ProductImg.objects.get(id=imageId, productId=productId)
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == methods["get"]:
+        serializer = ProductImgSerializer(product)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+@permission_classes((EcommerceAccessPolicy,))
+@api_view([methods["get"]])
+def product_images(request, productId):
+    try:
+        product = ProductImg.objects.filter(productId=productId)
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == methods["get"]:
+        serializer = ProductImgSerializer(product)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+
+# push = airship.create_push()
+# push.audience = ua.ios_channel('074e84a2-9ed9-4eee-9ca4-cc597bfdbef3')
+# push.notification = ua.notification(ios=ua.ios(alert='Hello from Python', badge=1))
+# push.device_types = ua.device_types('ios',"wns")
+# push.send()
+

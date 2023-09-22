@@ -14,13 +14,13 @@ from rest_framework import status
 
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenObtainSerializer
-from rest_framework.response import Response
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
 
 
+
 from store.models import Store
-from core.models import Address, Recent, Review, User, Wishlist, Refund
+from core.models import Address, Recent, Review, User, Wishlist, Refund, Device
 
 
 from core.utilities import generate_token, send_mail
@@ -58,14 +58,136 @@ class UserSerializer(serializers.ModelSerializer):
             user.save()
 
             return user
+        
+        def create_admin(self, validated_data):
+            user = User.objects.create_superuser(**validated_data)
+            user.set_password(self.password)
+            user.save()
+
+            return user
+        
+        def create_staff(self, validated_data):
+            user = User.objects.create_staffuser(**validated_data)
+            user.set_password(self.password)
+            user.save()
+
+            return user
+        
+        def update(self, instance, validated_data):
+
+            password = validated_data.pop('password', None)
+
+            for (key, value) in validated_data.items():
+                setattr(instance, key, value)
+
+            if password is not None:
+                instance.set_password(password)
+
+            instance.save()
+
+            return instance
 
 
+
+class StaffSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "phone1",
+            "phone2",
+            "gender",
+            "is_staff",
+            "has_perm",
+            "password",
+            "created",
+            "updated",
+        ]
+        extra_kwargs = {
+            "password": {"write_only": True},
+        }
+
+        
+        
+        def create(self, validated_data):
+            user = User.objects.create_staffuser(**validated_data)
+            user.set_password(self.password)
+            user.save()
+
+            return user
+        
+        def update(self, instance, validated_data):
+
+            password = validated_data.pop('password', None)
+
+            for (key, value) in validated_data.items():
+                setattr(instance, key, value)
+
+            if password is not None:
+                instance.set_password(password)
+
+            instance.save()
+
+            return instance
+
+
+class AdminSerializer(serializers.ModelSerializer):
+      class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "phone1",
+            "phone2",
+            "gender",
+            "is_staff",
+            "is_superuser",
+            "password",
+            "created",
+            "updated",
+        ]
+        extra_kwargs = {
+            "password": {"write_only": True},
+        }
+
+        
+        
+        def create(self, validated_data):
+            user = User.objects.create_superuser(**validated_data)
+            user.set_password(self.password)
+            user.save()
+
+            return user
+        
+        def update(self, instance, validated_data):
+
+            password = validated_data.pop('password', None)
+
+            for (key, value) in validated_data.items():
+                setattr(instance, key, value)
+
+            if password is not None:
+                instance.set_password(password)
+
+            instance.save()
+
+            return instance
+
+
+
+       
 class RefundsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Refund
         fields = [
             "id",
-            "user",
+            "userId",
             "order",
             "reason",
             'created',
@@ -141,7 +263,7 @@ class VerifyUserSerializer(serializers.Serializer):
 class UserMailSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["email"]
+        fields = ["first_name"]
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -149,11 +271,6 @@ class StoreSerializer(serializers.ModelSerializer):
         model = Store
         fields = ["id", "user", "username", "name", "created"]
 
-
-class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Store
-        fields = ["url", "name"]
 
 
 class WishlistSerializer(serializers.ModelSerializer):
@@ -185,12 +302,12 @@ class RecentsPostSerializer(serializers.ModelSerializer):
 
 
 class ReviewsSerializer(serializers.ModelSerializer):
-    email = UserMailSerializer(source="user", read_only=True)
+    name = UserMailSerializer(source="user", read_only=True)
 
     class Meta:
         model = Review
         fields = [
-            "email",
+            "name",
             "productId",
             "label",
             "comment",
@@ -235,24 +352,22 @@ class CustomTokenObtainPairSerializer(EmailTokenObtainSerializer):
 
         return data
     
+class DeviceSerializer(serializers.ModelSerializer):
+    
+        class Meta:
+            model = Device
+            fields = [
+                "user",
+                "device_ip"
+                "type",
+                "version",
+                "verified",
+                "last_login",
+            ]
+        
     
 
 
 
 
-class GenericNotificationRelatedField(serializers.RelatedField):
-
-    # def to_representation(self, value):
-    #     if isinstance(value, Foo):
-    #         serializer = FooSerializer(value)
-    #     if isinstance(value, Bar):
-    #         serializer = BarSerializer(value)
-
-        # return serializer.data
-        pass
-
-
-class NotificationSerializer(serializers.Serializer):
-    # recipient = PublicUserSerializer(User, read_only=True)
-    unread = serializers.BooleanField(read_only=True)
-    target = GenericNotificationRelatedField(read_only=True)    
+  

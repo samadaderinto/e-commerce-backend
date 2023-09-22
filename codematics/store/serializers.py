@@ -1,9 +1,7 @@
 
-from store.models import Schedule, Store, StoreImg
+from store.models import Schedule, Store, StoreImg, StoreAddress
 
 from rest_framework import serializers
-
-
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -14,7 +12,7 @@ class StoreSerializer(serializers.ModelSerializer):
                   "username",
                   "name",
                   "created",
-                  "updated"]
+                  "updated",]
 
 
 class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
@@ -24,15 +22,30 @@ class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
                   "name"]
 
 
-
 class StoreImgSerializer(serializers.ModelSerializer):
     class Meta:
         model = StoreImg
-        field = ["id", "title", "storeId", "url"]
+        field = ["id", "title", "storeId", "url",]
 
 
 class ScheduleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Schedule
-        fields = ['__all__']
+        fields = ["id", "store", "productId", "make_visible_at",]
+
+
+class StoreAddressSerializer(serializers.ModelSerializer):
+
+    class Meta:
+        model = StoreAddress
+        fields = ["id",
+                  "store",
+                  "address",
+                  "zip",
+                  "country",
+                  "state",
+                  "city",
+                  "is_default",
+                  "created",
+                  "updated",]

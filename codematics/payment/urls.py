@@ -1,15 +1,10 @@
 from django.urls import path
 
-from payment.views import capture_checkout_session, create_checkout_session, redeem_coupon
+from payment.views import capture_checkout_session, create_checkout_session
 
 urlpatterns = [
-    path("coupons/reedeem/", redeem_coupon, name="products"),
 
 
-    path('refunds/', redeem_coupon),
-    path('refunds/<int:orderId>/', redeem_coupon),
-    path('refund/request/', redeem_coupon),
-    path('refund/request/response/', redeem_coupon),
 
 
 

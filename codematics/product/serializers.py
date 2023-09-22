@@ -5,7 +5,7 @@ from product.models import ProductImg, Product, Specification
 
 from taggit.serializers import TagListSerializerField, TaggitSerializer
 
-from nanoid import generate
+
 
 from store.models import Store
 
@@ -16,29 +16,29 @@ class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
         fields = ["url", "name"]
 
 
-class RelatedProductSerializer(serializers.Serializer):
-    url = serializers
-
-
 class ProductImgSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductImg
-        fields = ["id", "productId", "image"]
+        fields = ["id", "productId", "image",]
+
+
+class SpecificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Specification
+
+        fields = ["product", "serial", "attributes", "height",
+                  "width", "breadth", "weight", "color", "created", "updated",]
 
 
 class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     tags = TagListSerializerField()
     images = ProductImgSerializer(many=True, read_only=True)
+    
     uploaded_images = serializers.ListField(
-        child=serializers.ImageField(
-            max_length=10000, allow_empty_file=False, use_url=False
-        ),
-        # crucial code may change later
-        # unable to upload image succesfully
-        read_only=True,
+        child=serializers.ImageField(allow_empty_file=False, use_url=False),
+        write_only=True
     )
-
-    # related_products = RelatedProductSerializer(many=True, read_only=True)
+    # specifications = SpecificationSerializer(source="product")
 
     class Meta:
         model = Product
@@ -50,18 +50,17 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "discount",
             "description",
             "price",
+            "sale_price",
             "visibility",
             "tags",
             "images",
             "uploaded_images",
-            "usps_delivery_date",
-            "usps_service"
-            # "related_products"
+            "label",
+            # "specifications"
         ]
 
         def create(self, validated_data):
             uploaded_images = validated_data.pop("uploaded_images")
-
             product = Product.objects.create(**validated_data)
             for image in uploaded_images:
                 ProductImg.objects.create(product=product, image=image)
@@ -69,7 +68,6 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
 
 
 class ProductCardSerializer(serializers.ModelSerializer):
-    # image = ProductImgSerializer(source="productId",)
 
     class Meta:
         model = Product
@@ -79,14 +77,9 @@ class ProductCardSerializer(serializers.ModelSerializer):
             "title",
             "available",
             "discount",
-            # "image",
+            "images",
+            "label",
             "price",
+            "sale_price",
             "average_rating",
         ]
-
-
-
-class SpecificationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Specification
-        fields = ["__all__"]

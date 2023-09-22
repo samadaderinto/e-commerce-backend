@@ -26,12 +26,12 @@ class Url(models.Model):
     updated = models.DateTimeField(auto_now=True)
     
     def set_refferal_link(self):
-        domain = "my_domain-name"
-        identifier = reverse(self.identifier)
+        domain = "http://localhost:8000/"
+        identifier = self.identifier
         marketer = self.marketer.marketer_id
         product = self.product.pk
         self.abs_url = f"https://www.{domain}.com/{marketer}/{product}/{identifier}/"
-    
+        return self.abs_url
     
 class Redirect(models.Model):   
     urlId = models.ForeignKey(Url, on_delete=models.CASCADE)
