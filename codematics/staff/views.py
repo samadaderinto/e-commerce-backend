@@ -22,10 +22,13 @@ from staff.models import Comment
 from payment.models import Coupon, Order
 from payment.serializers import CouponSerializer, OrdersSerializer
 
+
+from django.contrib.sites.shortcuts import get_current_site
+
 from rest_framework.generics import RetrieveUpdateDestroyAPIView, ListCreateAPIView
-from core.serializers import UserSerializer, VerifyUserSerializer, RefundsSerializer, StoreSerializer, StaffSerializer, AdminSerializer
+from core.serializers import UserSerializer, RefundsSerializer, StoreSerializer, StaffSerializer, AdminSerializer
 from core.permissions import EcommerceAccessPolicy
-from core.utilities import auth_token, methods, send_mail
+from core.utilities import auth_token, methods, send_mail, TokenGenerator
 from core.models import User, Refund
 from product.models import Specification
 from store.models import StoreAddress, Store
@@ -33,6 +36,17 @@ from store.models import StoreAddress, Store
 from usps import USPSApi, Address as uspsAddress
 from usps import SERVICE_PRIORITY, LABEL_ZPL
 
+
+from django.utils.http import urlsafe_base64_encode
+from django.urls import reverse
+from django.utils.encoding import (
+    smart_str,
+    force_str,
+    smart_bytes,
+    force_bytes,
+
+    DjangoUnicodeDecodeError
+)
 
 # Create your views here.
 
@@ -44,26 +58,31 @@ usps = USPSApi(settings.USPS_USERNAME, test=True)
 def create_staff(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
-        
         if User.objects.filter(email=data["email"]).exists():
             return Response(
                 {"error": "Email already registered"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+                status=status.HTTP_400_BAD_REQUEST)
         else:
-            serializer = StaffSerializer(data=data)
+            user = User.objects.create_staffuser(**data)
+            serializer = StaffSerializer(user)
 
-        if serializer.is_valid():
-            user = serializer.save()
-            
+            uidb64 = urlsafe_base64_encode(force_bytes(user.id))
+            token = TokenGenerator().make_token(user)
+            current_site = get_current_site(request).domain
+            relativeLink = reverse(
+                "activate", kwargs={"uidb64": uidb64, "token": token}
+            )
+            absolute_url = f"http://{current_site}{relativeLink}"
+
             token = auth_token(user)
+            send_mail("onboarding-user", user.email,
+                      data={"firstname": user.first_name, "absolute_url": absolute_url})
 
             return Response(
                 serializer.data,
                 headers={"Authorization": token},
                 status=status.HTTP_201_CREATED,
             )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["post"]])
@@ -74,22 +93,28 @@ def create_admin(request):
         if User.objects.filter(email=data["email"]).exists():
             return Response(
                 {"error": "Email already registered"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+                status=status.HTTP_400_BAD_REQUEST)
         else:
-            serializer = AdminSerializer(data=data)
+            user = User.objects.create_superuser(**data)
+            serializer = AdminSerializer(user)
 
-        if serializer.is_valid():
-            user = serializer.save()
-            VerifyUserSerializer(data)
+            uidb64 = urlsafe_base64_encode(force_bytes(user.id))
+            token = TokenGenerator().make_token(user)
+            current_site = get_current_site(request).domain
+            relativeLink = reverse(
+                "activate", kwargs={"uidb64": uidb64, "token": token}
+            )
+            absolute_url = f"http://{current_site}{relativeLink}"
+
             token = auth_token(user)
+            send_mail("onboarding-user", user.email,
+                      data={"firstname": user.first_name, "absolute_url": absolute_url})
 
             return Response(
                 serializer.data,
                 headers={"Authorization": token},
                 status=status.HTTP_201_CREATED,
             )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["post"]])
@@ -105,7 +130,7 @@ def give_staff_permission(request):
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
     
-    user.has_perm = True
+    # user.has_perm = True
     user.save()
     return Response({"success": "Permission granted for this staff member"}, status=status.HTTP_200_OK)
 

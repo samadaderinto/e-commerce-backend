@@ -19,7 +19,7 @@ class StoreInfoForProductCardSerializer(serializers.ModelSerializer):
 class ProductImgSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductImg
-        fields = ["id", "productId", "image",]
+        fields = ["id", "product", "image",]
 
 
 class SpecificationSerializer(serializers.ModelSerializer):
@@ -35,10 +35,10 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     images = ProductImgSerializer(many=True, read_only=True)
     
     uploaded_images = serializers.ListField(
-        child=serializers.ImageField(allow_empty_file=False, use_url=False),
+        child=serializers.ImageField(max_length=1000000000,allow_empty_file=False, use_url=False),
         write_only=True
     )
-    # specifications = SpecificationSerializer(source="product")
+    # specifications = SpecificationSerializer(read_only=True)
 
     class Meta:
         model = Product

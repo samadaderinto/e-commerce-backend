@@ -34,7 +34,7 @@ urlpatterns = [
     path("<int:storeId>/schedules/<int:productId>/delete/", delete_schedule, name="delete_schedule"),
 
     path("<int:storeId>/products/<int:productId>/get/", get_store_product, name="get_store_product"),
-    path("products/create/", ProductCreateView.as_view(), name="create_product"),
+    path("products/create/", ProductCreateView.as_view({'post': 'post'}), name="create_product"),
     path("<int:storeId>/products/<int:productId>/edit/", edit_product, name="edit_product"),
     path("<int:storeId>/products/<int:productId>/delete/", delete_product, name="delete_product"),
     path("products/search", IsOwnerSearchProduct.as_view(), name="get_store_products"),

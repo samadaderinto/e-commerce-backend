@@ -9,6 +9,8 @@ from rest_framework.filters import SearchFilter, OrderingFilter, BaseFilterBacke
 from rest_framework_word_filter import FullWordSearchFilter
 
 from rest_framework.generics import CreateAPIView
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.permissions import IsAuthenticated
 
 
 
@@ -92,10 +94,6 @@ def get_stores(request, userId):
 
 
 
-
-
-
-
 @api_view([methods["get"], methods["delete"]])
 @permission_classes((EcommerceAccessPolicy,))
 def schedules(request, storeId,productId):
@@ -140,12 +138,14 @@ def get_specifications(request, productId):
 
 
 
-class ProductCreateView(CreateAPIView):
-    parser_class = [MultiPartParser, FormParser]
+class ProductCreateView(ModelViewSet):
+  
+    queryset = Product.objects.all()
     serializer_class = ProductSerializer
-    permission_classes = (EcommerceAccessPolicy,)
-    def get_serializer_context(self):
-        return {"request": self.request}
+    permission_classes = (IsAuthenticated,)
+    
+    def post(self, request, *args, **kwargs):
+        return self.create(request, *args, **kwargs)
 
 
 @permission_classes((EcommerceAccessPolicy,))

@@ -29,6 +29,8 @@ class Product(models.Model):
     available = models.IntegerField(
         null=False, blank=False, validators=[MinValueValidator(0)]
     )
+    image = models.ImageField(
+        upload_to="images", default="", null=True, blank=True)
     category = models.CharField(choices=CATEGORIES_CHOICE, max_length=15)
     label = models.CharField(choices=LABEL_CHOICE,
                              max_length=50, default="NEW")
@@ -57,7 +59,7 @@ class Product(models.Model):
 
 
 class ProductImg(models.Model):
-    productId = models.ForeignKey(
+    product = models.ForeignKey(
         Product, on_delete=models.CASCADE, related_name="images"
     )
     image = models.ImageField(

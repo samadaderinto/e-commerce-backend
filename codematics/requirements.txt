@@ -27,3 +27,4 @@ ua-parser
 user-agents
 django-user-agents
 django_cron
+six
