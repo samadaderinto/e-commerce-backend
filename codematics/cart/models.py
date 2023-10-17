@@ -23,7 +23,7 @@ class Cart(models.Model):
 
 
 class CartItem(models.Model):
-    cart_id = models.OneToOneField(Cart,on_delete=models.CASCADE,primary_key=True)
+    cart_id = models.ForeignKey(Cart,on_delete=models.CASCADE)
     productId = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity = models.PositiveSmallIntegerField(
         validators=[MinValueValidator(1)], default=0

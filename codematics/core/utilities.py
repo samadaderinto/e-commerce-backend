@@ -6,19 +6,17 @@ from django.template.loader import get_template
 from django.db.models.signals import post_save
 from rest_framework_simplejwt.tokens import RefreshToken
 
-
-
-
-
-
+import urbanairship
+import six
 
 
 class TokenGenerator(PasswordResetTokenGenerator):
     def _make_hash_value(self, user, timestamp):
-        return str(user.pk) + str(timestamp) + str(user.is_active)
+
+       return (six.text_type(user.pk)+six.text_type(timestamp)+ six.text_type(user.is_verified))
 
 
-generate_token = TokenGenerator()
+
 
 PAYMENT_STATUS_CHOICE = (
     ("pending", "pending"),
@@ -43,12 +41,12 @@ CATEGORIES_CHOICE = (
 )
 
 ORDER_STATUS_CHOICE = (
+    ("pending", "pending"),
     ("cancelled", "cancelled"),
     ("refunded", "refunded"),
     ("delivered", "delivered"),
     ("shipped", "shipped"),
     ("picked up", "picked up"),
-    ("pending", "pending"),
     ("confirmed", "confirmed"),
 )
 
@@ -111,8 +109,6 @@ def auth_token(user):
     }
 
 
-
-
 # from django.utils import formats
 
 # localized_date = formats.date_format(date_obj, 'SHORT_DATE_FORMAT')
@@ -126,7 +122,8 @@ def auth_token(user):
 #     return dt_now_aware
 
 
-
-
-
-
+ua = urbanairship
+airship = ua.Airship(f'{settings.AIRSHIP_KEY}',
+                     f'{settings.MASTER_SECRET}', retries=5)
+       
+    

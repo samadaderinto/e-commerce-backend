@@ -27,9 +27,16 @@ from core.serializers import DeviceSerializer
 from product.serializers import ProductImgSerializer
 from product.models import ProductImg
 
+from django.utils.encoding import (
+    smart_str,
+    force_str,
+    smart_bytes,
+    force_bytes,
 
+    DjangoUnicodeDecodeError
+)
 from core.permissions import EcommerceAccessPolicy
-from core.utilities import auth_token, methods, send_mail
+from core.utilities import auth_token, methods, send_mail, TokenGenerator
 
 from payment.models import Order
 from core.models import Recent, Review, User, Wishlist, Address
@@ -42,7 +49,6 @@ from core.serializers import (
     RecentsPostSerializer,
     RecentsSerializer,
     RefundsSerializer,
-    VerifyUserSerializer,
     ReviewsPostSerializer,
     ReviewsSerializer,
     SetNewPasswordSerializer,
@@ -51,9 +57,6 @@ from core.serializers import (
     RefreshToken,
 )
 from payment.serializers import OrdersSerializer
-
-import urbanairship as ua
-airship = ua.Airship(f'{settings.AIRSHIP_KEY}', f'{settings.MASTER_SECRET}', retries=6)
 
 
 @api_view([methods["post"]])
@@ -64,22 +67,28 @@ def create_user(request):
         if User.objects.filter(email=data["email"]).exists():
             return Response(
                 {"error": "Email already registered"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+                status=status.HTTP_400_BAD_REQUEST)
         else:
-            serializer = UserSerializer(data=data)
+            user = User.objects.create_user(**data)
+            serializer = UserSerializer(user)
 
-        if serializer.is_valid():
-            user = serializer.save()
-            VerifyUserSerializer(data)
+            uidb64 = urlsafe_base64_encode(force_bytes(user.id))
+            token = TokenGenerator().make_token(user)
+            current_site = get_current_site(request).domain
+            relativeLink = reverse(
+                "activate", kwargs={"uidb64": uidb64, "token": token}
+            )
+            absolute_url = f"http://{current_site}{relativeLink}"
+
             token = auth_token(user)
+            # send_mail("onboarding-user", user.email,
+            #           data={"firstname": user.first_name, "absolute_url": absolute_url})
 
             return Response(
                 serializer.data,
                 headers={"Authorization": token},
                 status=status.HTTP_201_CREATED,
             )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view([methods["put"]])
@@ -156,7 +165,7 @@ def create_wishlist(request, userId, productId):
 def get_wishlist(request, userId):
     try:
         wishlist = Wishlist.objects.filter(
-            user=userId,liked=True).order_by("created").reverse()
+            user=userId, liked=True).order_by("created").reverse()
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
 
@@ -204,7 +213,7 @@ def create_review(request):
                 review = Review.objects.get(user=user, productId=productId)
             except:
                 # create review
-             
+
                 review = Review.objects.get(user=user, productId=productId)
                 # update product rating
                 review.set_avg_rating()
@@ -325,13 +334,27 @@ def edit_address(request, userId):
         return Response(status=status.HTTP_404_NOT_FOUND)
 
     if request.method == methods["put"]:
-        serializer = AddressSerializer(address, data=data,partial=True)
+        serializer = AddressSerializer(address, data=data, partial=True)
         if serializer.is_valid():
             if serializer.validated_data["is_default"] and addresses.id == address.id:
-               serializer.save()
-               return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
-            return Response(serializer.data, status=status.HTTP_202_ACCEPTED) 
+                serializer.save()
+                return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
+            return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view([methods["get"]])
+@permission_classes((EcommerceAccessPolicy,))
+def get_address(request,userId):
+
+    try:
+        address = Address.objects.get(user=userId)
+    except:
+        return Response(status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == methods["get"]:
+        serializer = AddressSerializer(address)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 @api_view([methods["delete"]])
@@ -403,9 +426,40 @@ class ResetPassword(GenericAPIView):
                 status=status.HTTP_200_OK,
             )
         return Response(
-                {"error": "Email is not registered"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )    
+            {"error": "Email is not registered"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+
+class ActivateEmailTokenCheckAPI(GenericAPIView):
+    permission_classes = (EcommerceAccessPolicy,)
+
+    def get(self, request, uidb64, token):
+        try:
+            id = urlsafe_base64_encode(user.id.to_bytes())
+            user = User.objects.get(id=id)
+
+            if not TokenGenerator().check_token(user, token):
+                return Response(
+                    {"error": "Token is not valid, please request a new one"},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            user.is_verified = True
+            user.save()
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Email verified, you can now login",
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        except:
+            Response(
+                {"error": "Token is not valid, please request a new one"},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
 
 class PasswordTokenCheckAPI(GenericAPIView):
@@ -456,25 +510,22 @@ class SetNewPassword(generics.GenericAPIView):
 class EmailTokenObtainPairView(TokenObtainPairView, generics.GenericAPIView):
     serializer_class = CustomTokenObtainPairSerializer
     permission_classes = (EcommerceAccessPolicy,)
-   
 
-    def post(self, request, *args, **kwargs):
-         agent  = get_user_agent(self.request)
-         type = agent.os.family
-         version = agent.os.version_string
-         serializer = DeviceSerializer(data=request.data.pop("password","email"))
-         ip = self.request.META.get('HTTP_X_FORWARDED_FOR')
-         if ip:
-             ip = ip.split(',')[0]
-         else:
-             ip = self.request.META.get('REMOTE_ADDR')
-         serializer.validated_data["device_ip"] = ip
-         serializer.validated_data["type"] = type
-         serializer.validated_data["version"] = version
-         serializer.save()
-     
-              
-          
+    # def post(self, request, *args, **kwargs):
+    #     agent = get_user_agent(self.request)
+    #     type = agent.os.family
+    #     version = agent.os.version_string
+    #     serializer = DeviceSerializer(
+    #         data=request.data.pop("password", "email"))
+    #     ip = self.request.META.get('HTTP_X_FORWARDED_FOR')
+    #     if ip:
+    #         ip = ip.split(',')[0]
+    #     else:
+    #         ip = self.request.META.get('REMOTE_ADDR')
+    #     serializer.validated_data["device_ip"] = ip
+    #     serializer.validated_data["type"] = type
+    #     serializer.validated_data["version"] = version
+    #     serializer.save()
 
 
 class UserLogout(GenericAPIView):
@@ -540,13 +591,3 @@ def product_images(request, productId):
     if request.method == methods["get"]:
         serializer = ProductImgSerializer(product)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-
-
-# push = airship.create_push()
-# push.audience = ua.ios_channel('074e84a2-9ed9-4eee-9ca4-cc597bfdbef3')
-# push.notification = ua.notification(ios=ua.ios(alert='Hello from Python', badge=1))
-# push.device_types = ua.device_types('ios',"wns")
-# push.send()
-

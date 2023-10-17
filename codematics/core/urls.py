@@ -19,12 +19,14 @@ from core.views import (
     get_wishlist,
     create_recent,
     get_recents,
+    ActivateEmailTokenCheckAPI,
     create_wishlist,
     create_review,
     create_address,
     redirect_url,
     product_images,
     product_image,
+    get_address
 
 )
 
@@ -36,6 +38,7 @@ urlpatterns = [
     path('<str:marketerId>/<int:product>/<str:identifier>/ ', redirect_url, name='redirect_on_affiliate_link_click'),
     
     path('auth/user/signup/', create_user, name="user_signup"),
+    path('auth/activate_mail/<uidb64>/<token>/', ActivateEmailTokenCheckAPI.as_view(), name='activate'),
     path('auth/user/login/', EmailTokenObtainPairView.as_view(),
          name='token_obtain_pair'),
     
@@ -51,6 +54,7 @@ urlpatterns = [
       # tested
      path('users/address/add/',create_address,name="create_address"),
      path('users/<int:userId>/address/<int:AddressId>/delete/',delete_address,name="delete_address"),
+     path("users/<int:userId>/address/get/",get_address,name="get_address"),
      path('users/<int:userId>/recents/add/<int:productId>/',create_recent,name='add_recent'),
      path('users/<int:userId>/recents/get',get_recents,name="get_recent"),
      path('users/reviews/create/',create_review,name='create_review'),

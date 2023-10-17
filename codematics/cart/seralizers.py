@@ -34,13 +34,13 @@ class CartItemSerializer(serializers.ModelSerializer):
 
 
 class AddToCartSerializer(serializers.ModelSerializer):
-    def validate(self, value):
-        if not Product.objects.filter(pk=value).exists():
+    def validate(self,value):
+        if not Product.objects.filter(pk=value.get("productId").pk).exists():
             return serializers.ValidationError("There is no product with given id")
         return value
 
     def save(self, **kwargs):
-        cart_id = self.context["cart_id"]
+        cart_id = self.validated_data.get("cart_id")
         product_id = self.validated_data["productId"]
         quantity = self.validated_data["quantity"]
 
@@ -59,22 +59,22 @@ class AddToCartSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CartItem
-        fields = ["id", "productId", "quantity"]
+        fields = ["cart_id", "productId", "quantity"]
 
 
 class CartSerializer(serializers.ModelSerializer):
     cart_id = serializers.CharField(default=generate(size=15), read_only=True)
-    items = CartItemSerializer(source="id",many=True,read_only=True)
-    grand_total = serializers.SerializerMethodField(method_name="main_total")
+    # # items = CartItemSerializer(source="id",many=True,read_only=True)
+    # grand_total = serializers.SerializerMethodField(method_name="main_total")
     
     class Meta:
         model = Cart
-        fields = ["cart_id", "userId", "items","grand_total","created"]
+        fields = ["cart_id", "userId", "created"]
         
-    def main_total(self, cart: Cart):
-        items = cart.objects.all()
-        total = sum([item.quantity * item.product.price for item in items])
-        return total 
+    # def main_total(self, cart: Cart):
+    #     items = cart.objects.all()
+    #     total = sum([item.quantity * item.product.price for item in items])
+    #     return total 
 
 
 

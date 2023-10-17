@@ -57,7 +57,6 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", False)
         extra_fields.setdefault("is_active", True)
-        extra_fields.setdefault("has_perm", False)
 
         if extra_fields.get("is_staff") is not True:
             raise ValueError("staffuser must have is_staff=True.")
@@ -70,6 +69,7 @@ class User(AbstractUser):
     last_name = models.CharField(max_length=30)
     gender = models.CharField(choices=GENDER_STATUS, max_length=7)
     email = models.EmailField(unique=True)
+    is_verified = models.BooleanField(default=False)
     phone1 = PhoneNumberField(region="US")
     password = models.CharField(max_length=90)
     phone2 = PhoneNumberField(region="US", null=True, blank=True)

@@ -55,7 +55,7 @@ class Order(models.Model):
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=15)
     delivery = models.ForeignKey('core.DeliveryInfo', on_delete=models.CASCADE)
-    ordered = models.BooleanField(False)
+    ordered = models.BooleanField(default=False)
     payment_type = models.CharField(max_length=30, default="card")
     ordered_date = models.DateTimeField(auto_now=True)
     

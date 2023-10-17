@@ -51,14 +51,14 @@ INSTALLED_APPS = [
     "payment.apps.PaymentConfig",
     "affiliates.apps.AffiliatesConfig",
     "cart.apps.CartConfig",
-    
-    
+
+
     "django_filters",
     "corsheaders",
     "rest_framework",
     'django_user_agents',
     "phonenumber_field",
-  
+
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     "taggit",
@@ -66,10 +66,11 @@ INSTALLED_APPS = [
     "rest_framework_word_filter",
     "notifications",
     "dotenv",
-    
+
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -77,7 +78,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
+
     'django_user_agents.middleware.UserAgentMiddleware',
 ]
 
@@ -125,7 +126,6 @@ DB_HOST = os.environ.get("POSTGRES_HOST")
 DB_PORT = os.environ.get("POSTGRES_PORT")
 DB_IS_AVAIL = all([DB_USERNAME, DB_PASSWORD, DB_DATABASE, DB_HOST, DB_PORT])
 DB_IGNORE_SSL = os.environ.get("DB_ IGNORE_SSL") == "true"
-
 
 
 # if DB_IS_AVAIL:
@@ -209,14 +209,15 @@ CORS_ALLOW_METHODS = [
 
 
 CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3001",
+    "http://127.0.0.1:3001",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+
 ]
 
-CORS_ORIGIN_WHITELIST = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
+
+
 
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
@@ -267,8 +268,8 @@ SIMPLE_JWT = {
 }
 
 
-# EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 EMAIL_USE_TSL = True
 EMAIL_HOST = str(os.environ.get("EMAIL_HOST"))
 EMAIL_HOST_USER = str(os.environ.get("EMAIL_HOST_USER"))
@@ -276,6 +277,7 @@ EMAIL_HOST_PASSWORD = str(os.environ.get("EMAIL_HOST_PASSWORD"))
 EMAIL_PORT = os.environ.get("EMAIL_HOST_PORT")
 APPLICATION_EMAIL = str(os.environ.get("APPLICATION_EMAIL"))
 DEFAULT_FROM_EMAIL = str(os.environ.get("DEFAULT_FROM_EMAIL"))
+
 
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.PBKDF2PasswordHasher",
@@ -294,7 +296,7 @@ CRON_CLASSES = [
 
 PAYPAL_RECEIVER_EMAIL = str(
     os.environ.get("PAYPAL_RECEIVER_EMAIL")
-)  
+)
 
 PAYPAL_TEST = True
 
@@ -307,7 +309,6 @@ CSRF_COOKIE_SECURE = False
 SECURE_SSL_REDIRECT = False
 
 
-
 NOTIFICATIONS_NOTIFICATION_MODEL = "event_notification.Notification"
 DJANGO_NOTIFICATIONS_CONFIG = {
     "USE_JSONFIELD": True,
@@ -318,4 +319,3 @@ DJANGO_NOTIFICATIONS_CONFIG = {
 USER_AGENTS_CACHE = 'default'
 AIRSHIP_KEY = str(os.environ.get("AIRSHIP_KEY"))
 MASTER_SECRET = str(os.environ.get("MASTER_SECRET"))
-

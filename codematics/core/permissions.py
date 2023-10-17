@@ -101,6 +101,7 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "create_schedule",
                 "schedules",
                 "delete_product",
+                "ProductCreateView"
 
             ],
             "principal": ["authenticated"],
@@ -132,6 +133,7 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "get_recents",
                 "create_recent",
                 "create_address",
+                "get_address",
                 "delete_address",
                 "edit_address",
                 "Orders",
@@ -146,6 +148,7 @@ class EcommerceAccessPolicy(AccessPolicy):
                 "capture_checkout_session",
                 "create_checkout_session",
                 "UserLogout",
+                "ActivateEmailTokenCheckAPI"
             ],
             "principal": "authenticated",
             "effect": "allow",
