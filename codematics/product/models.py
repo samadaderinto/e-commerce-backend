@@ -29,9 +29,8 @@ class Product(models.Model):
     available = models.IntegerField(
         null=False, blank=False, validators=[MinValueValidator(0)]
     )
-    image = models.ImageField(
-        upload_to="images", default="", null=True, blank=True)
-    category = models.CharField(choices=CATEGORIES_CHOICE, max_length=15)
+  
+    category = models.CharField(choices=CATEGORIES_CHOICE, default="fishing", max_length=15)
     label = models.CharField(choices=LABEL_CHOICE,
                              max_length=50, default="NEW")
     visibility = models.BooleanField(default=True)
@@ -43,6 +42,8 @@ class Product(models.Model):
         validators=[MinValueValidator(0), MaxValueValidator(5)],
     )
     tags = TaggableManager()
+    sales = models.IntegerField(
+        validators=[MinValueValidator(0)], default=0)
     sponsored = models.BooleanField(default=False)
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)

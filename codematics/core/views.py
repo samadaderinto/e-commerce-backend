@@ -7,7 +7,7 @@ from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from django.urls import reverse
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.core.paginator import Paginator
-from django.conf import settings
+
 
 import pytz
 
@@ -21,7 +21,9 @@ from rest_framework.generics import GenericAPIView
 from rest_framework_simplejwt.views import TokenObtainPairView
 from affiliates.models import Redirect, Url
 from affiliates.serializers import RedirectSerializer
-
+from product.serializers import ProductSerializer
+from product.models import Product
+from rest_framework.permissions import AllowAny
 from event_notification.views import refund_requested_nofication
 from core.serializers import DeviceSerializer
 from product.serializers import ProductImgSerializer
@@ -57,6 +59,28 @@ from core.serializers import (
     RefreshToken,
 )
 from payment.serializers import OrdersSerializer
+
+
+@permission_classes((EcommerceAccessPolicy,))
+@api_view(['GET'])
+def landing_page_products(request):
+    if request.method == methods["get"]:
+        newest_products = Product.objects.order_by('created')[:10]
+        highest_rated_products = Product.objects.order_by('average_rating')[
+            :10]
+        best_selling_products = Product.objects.order_by('sales')[:10]
+
+        serialized_newest = ProductSerializer(newest_products, many=True)
+        serialized_highest_rated = ProductSerializer(
+            highest_rated_products, many=True)
+        serialized_best_selling = ProductSerializer(
+            best_selling_products, many=True)
+
+        return Response({
+            'newest_products': serialized_newest.data,
+            'highest_rated_products': serialized_highest_rated.data,
+            'best_selling_products': serialized_best_selling.data
+        }, status=status.HTTP_200_OK)
 
 
 @api_view([methods["post"]])
@@ -103,7 +127,7 @@ def edit_user_detail(request, userId):
 
     if request.method == methods["put"]:
         serializer = UserSerializer(user, partial=True, data=data)
-        if serializer.is_valid(raise_exception=True):
+        if serializer.is_valid():
             serializer.save()
             return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -345,7 +369,7 @@ def edit_address(request, userId):
 
 @api_view([methods["get"]])
 @permission_classes((EcommerceAccessPolicy,))
-def get_address(request,userId):
+def get_address(request, userId):
 
     try:
         address = Address.objects.get(user=userId)

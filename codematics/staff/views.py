@@ -107,8 +107,8 @@ def create_admin(request):
             absolute_url = f"http://{current_site}{relativeLink}"
 
             token = auth_token(user)
-            send_mail("onboarding-user", user.email,
-                      data={"firstname": user.first_name, "absolute_url": absolute_url})
+            # send_mail("onboarding-user", user.email,
+            #           data={"firstname": user.first_name, "absolute_url": absolute_url})
 
             return Response(
                 serializer.data,

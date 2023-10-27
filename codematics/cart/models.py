@@ -8,23 +8,15 @@ from product.models import Product
 
 # Create your models here.
 
-
+  
+    
 class Cart(models.Model):
-    cart_id = models.CharField(
-        max_length=15,
-        default=generate(size=15),
-        primary_key=True,
-        editable=False,
-        unique=True,
-    )
     userId = models.ForeignKey(User, on_delete=models.CASCADE)
-    created = models.DateTimeField(auto_now_add=True)
+    
     ordered = models.BooleanField(default=False)
-
+    created = models.DateTimeField(auto_now_add=True)
 
 class CartItem(models.Model):
-    cart_id = models.ForeignKey(Cart,on_delete=models.CASCADE)
-    productId = models.ForeignKey(Product, on_delete=models.CASCADE)
-    quantity = models.PositiveSmallIntegerField(
-        validators=[MinValueValidator(1)], default=0
-    )
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    quantity = models.IntegerField(validators=[MinValueValidator(1)], default=1)    

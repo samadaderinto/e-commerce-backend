@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     "rest_framework",
     'django_user_agents',
     "phonenumber_field",
+    "push_notifications",
 
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
@@ -317,5 +318,11 @@ DJANGO_NOTIFICATIONS_CONFIG = {
 
 
 USER_AGENTS_CACHE = 'default'
-AIRSHIP_KEY = str(os.environ.get("AIRSHIP_KEY"))
-MASTER_SECRET = str(os.environ.get("MASTER_SECRET"))
+# AIRSHIP_KEY = str(os.environ.get("AIRSHIP_KEY"))
+# MASTER_SECRET = str(os.environ.get("MASTER_SECRET"))
+
+PUSH_NOTIFICATIONS_SETTINGS = {
+        "FCM_API_KEY": "AIzaSyBJhbH2SC2aXZ7IC8qx8olM7hdtbLBmwTw",
+        "GCM_API_KEY": "[your api key]",
+        "APNS_CERTIFICATE": "/path/to/your/certificate.pem",
+}

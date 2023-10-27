@@ -28,3 +28,4 @@ user-agents
 django-user-agents
 django_cron
 six
+django-push-notifications[WP,APNS]

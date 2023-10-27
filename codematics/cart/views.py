@@ -1,72 +1,45 @@
+from core.models import User
 from product.models import Product
-from core.utilities import methods
-from cart.models import Cart, CartItem
-from cart.seralizers import (
-    AddToCartSerializer,
-    CartItemSerializer,
-    CartSerializer
-)
-from core.permissions import EcommerceAccessPolicy
 
-from rest_framework.permissions import IsAuthenticated
+from cart.models import Cart, CartItem
+from cart.seralizers import CartSerializer
+
+from core.permissions import EcommerceAccessPolicy
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.parsers import JSONParser
 
 from rest_framework.viewsets import ModelViewSet
-
+from rest_framework.permissions import AllowAny
 
 # Create your views here.
-@api_view([methods["get"]])
-@permission_classes((IsAuthenticated,))
-def CartViewSet(request, userId):
-    if request.method == methods["get"]:
-        try:
-            cart = Cart.objects.get(userId=userId, ordered=False)
-        except:
-            data = {"userId": userId}
-            serializer = CartSerializer(data=data)
-            if serializer.is_valid():
-                serializer.save()
-                return Response(serializer.data, status=status.HTTP_200_OK)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+class CartViewSet(ModelViewSet):
+
+    serializer_class = CartSerializer
+    permission_classes = (AllowAny,)
+
+    def get_or_create_cart(self, request):
+
+        user = User.objects.get(id=request.data["userId"])
+        cart, created = Cart.objects.get_or_create(
+            userId=user, ordered=False)
         serializer = CartSerializer(cart)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    def add_to_cart(self, request):
+        cart = Cart.objects.get(userId=request.data["userId"], ordered=False)
+        product = Product.objects.get(pk=request.data["product_id"])
+        cart_item, created = CartItem.objects.get_or_create(
+            cart=cart, product=product)
+        if not created:
+            cart_item.quantity += 1
+            cart_item.save()
+        serializer = CartSerializer(cart)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-@api_view([methods["get"], methods["post"], methods["delete"]])
-@permission_classes((EcommerceAccessPolicy,))
-def CartItemViewSet(request):
-    data = JSONParser().parse(request)
-    context ={"cart_id": data.get(
-                    "cart_id")}
-
-    if request.method == methods["get"]:
-        try:
-            cart_items = (
-                CartItem.objects.filter(cart_id=context.get("cart_Id")).order_by("created").reverse()
-            )
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        serializer = CartItemSerializer(cart_items, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    if request.method == methods["post"]:
-        
-        serializer = AddToCartSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    if request.method == methods["delete"]:
-        try:
-            cart_item = CartItem.objects.get(cart_id=context.get("cart_Id"))
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
+    def delete_cart_item(self, request):
+        cart_item = CartItem.objects.get(
+            cart=request.data["cart_id"], product=request.data["product_id"])
         cart_item.delete()
         return Response(status=status.HTTP_202_ACCEPTED)

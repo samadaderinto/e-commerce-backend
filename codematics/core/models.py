@@ -123,50 +123,6 @@ class Review(models.Model):
         return Review.objects.filter(productId=self.productId.id).count()
 
 
-class DeliveryEstimates(models.Model):
-    usps_service = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=20)
-    usps_delivery_date = models.IntegerField(default=0, blank=False, null=False)
-    destination_zip = models.ForeignKey(Address, on_delete=models.CASCADE)
-    origin_zip = models.ForeignKey(StoreAddress, on_delete=models.CASCADE)
-    pick_up = models.IntegerField(default=25, blank=False, null=False)
-    standard_delivery = models.DecimalField(
-        max_digits=15, decimal_places=2, default=0, blank=False, null=False
-    )
-    express_delivery = models.DecimalField(
-        max_digits=15, decimal_places=2, default=0, blank=False, null=False
-    )
-
-
-class DeliveryInfo(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    method = models.CharField(choices=DELIVERY_METHOD_CHOICE, max_length=15)
-    delivery_address = models.ForeignKey(Address, on_delete=models.CASCADE)
-    discount = models.IntegerField(
-        default=0,
-        blank=False,
-        null=False,
-        validators=[MinValueValidator(0), MaxValueValidator(100)],
-    )
-    estimate = models.IntegerField(default=0, blank=False, null=False)
-    delivery_type = models.CharField(max_length=50)
-
-    def get_delivery_info(self):
-        full_delivery_address = "%s, %s %s, %s" % (
-            self.delivery_address.address,
-            self.delivery_address.state,
-            self.delivery_address.country,
-            self.delivery_address.zip,
-        )
-        return (
-            self.user,
-            full_delivery_address,
-            self.method,
-            self.delivery_type,
-            self.discount,
-            self.estimate,
-        )
-
-
 class Wishlist(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     liked = models.BooleanField(default=True)

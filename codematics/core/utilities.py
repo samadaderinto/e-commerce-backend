@@ -13,9 +13,7 @@ import six
 class TokenGenerator(PasswordResetTokenGenerator):
     def _make_hash_value(self, user, timestamp):
 
-       return (six.text_type(user.pk)+six.text_type(timestamp)+ six.text_type(user.is_verified))
-
-
+        return (six.text_type(user.pk)+six.text_type(timestamp) + six.text_type(user.is_verified))
 
 
 PAYMENT_STATUS_CHOICE = (
@@ -64,8 +62,8 @@ GENDER_STATUS = (
 )
 
 USPS_SERVICE_CHOICE = (
-    ("express", "none"),
     ("priority", "new"),
+    ("express", "none"),
     ("firstclass", "bestseller"),
 )
 
@@ -109,6 +107,8 @@ def auth_token(user):
     }
 
 
+
+
 # from django.utils import formats
 
 # localized_date = formats.date_format(date_obj, 'SHORT_DATE_FORMAT')
@@ -122,8 +122,6 @@ def auth_token(user):
 #     return dt_now_aware
 
 
-ua = urbanairship
-airship = ua.Airship(f'{settings.AIRSHIP_KEY}',
-                     f'{settings.MASTER_SECRET}', retries=5)
-       
-    
+# ua = urbanairship
+# airship = ua.Airship(f'{settings.AIRSHIP_KEY}',
+#                      f'{settings.MASTER_SECRET}', retries=5)

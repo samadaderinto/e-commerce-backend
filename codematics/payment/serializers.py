@@ -1,12 +1,11 @@
 from rest_framework import serializers
 
 
-from core.models import DeliveryInfo
-from payment.models import Order, Coupon
+from payment.models import Order, Coupon, DeliveryInfo
 
 
 class OrdersSerializer(serializers.ModelSerializer):
-    # delivery_info = DeliveryInfo()
+    delivery = DeliveryInfo()
 
     class Meta:
         model = Order
@@ -18,11 +17,10 @@ class OrdersSerializer(serializers.ModelSerializer):
             "coupon_used",
             "tax",
             "status",
-   
             "total",
             "subtotal",
             "status",
-      
+            "delivery",
             "ordered_date",
             "ordered",
             "payment_type"

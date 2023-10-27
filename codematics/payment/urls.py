@@ -9,9 +9,9 @@ urlpatterns = [
 
 
 
-    path('payment/stripe/create/order/',
+    path('create/',
          create_checkout_session, name='create_cardless_order'),
-    path('payment/stripe/capture/order/',
+    path('complete/',
          capture_checkout_session, name='create_cardless_order'),
 
 #     path('payment/paypal/create/order/',
