@@ -61,7 +61,7 @@ urlpatterns = [
          product_image, name="products"),
     path("users/stores/create/", create_store, name="create_store"),
     path("users/<int:userId>/stores/get/", get_stores, name="get_store"),
-    
+
     path('users/address/add/', create_address, name="create_address"),
     path('users/<int:userId>/address/<int:AddressId>/delete/',
          delete_address, name="delete_address"),
@@ -83,7 +83,7 @@ urlpatterns = [
     path("users/<int:userId>/", get_user, name="edit_user_info"),
     path('users/refunds/request/', request_refund, name="request_refund"),
     path('auth/password_reset/', ResetPassword.as_view(), name='password_reset'),
-    
+
 
 
 ]

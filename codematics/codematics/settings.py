@@ -30,8 +30,8 @@ DEBUG = True
 
 ENV_ALLOWED_HOST = str(os.environ.get("ENV_ALLOWED_HOST"))
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
-# if ENV_ALLOWED_HOST:
-#     ALLOWED_HOSTS = [ ENV_ALLOWED_HOST ]
+if ENV_ALLOWED_HOST:
+    ALLOWED_HOSTS = [ ENV_ALLOWED_HOST ]
 
 
 # Application definition
@@ -79,7 +79,6 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
-
     'django_user_agents.middleware.UserAgentMiddleware',
 ]
 
@@ -197,7 +196,7 @@ MEDIA_URL = "/media/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "core.User"
-AUTH_PROFILE_MODULE = 'core.User'
+
 
 CORS_ALLOW_METHODS = [
     "DELETE",
@@ -218,8 +217,6 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 
-
-
 REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -235,8 +232,8 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(days=7),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=1),
+    "ACCESS_TOKEN_LIFETIME": timedelta(days=3),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": False,
     "UPDATE_LAST_LOGIN": True,
@@ -322,7 +319,7 @@ USER_AGENTS_CACHE = 'default'
 # MASTER_SECRET = str(os.environ.get("MASTER_SECRET"))
 
 PUSH_NOTIFICATIONS_SETTINGS = {
-        "FCM_API_KEY": "AIzaSyBJhbH2SC2aXZ7IC8qx8olM7hdtbLBmwTw",
-        "GCM_API_KEY": "[your api key]",
-        "APNS_CERTIFICATE": "/path/to/your/certificate.pem",
+    "FCM_API_KEY": str(os.environ.get("FCM_KEY")),
+    "GCM_API_KEY": "[your api key]",
+    "APNS_CERTIFICATE": "/path/to/your/certificate.pem",
 }

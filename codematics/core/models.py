@@ -77,7 +77,8 @@ class User(AbstractUser):
     updated = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["first_name", "last_name", "gender", "phone1", "password"]
+    REQUIRED_FIELDS = ["first_name", "last_name",
+                       "gender", "phone1", "password"]
 
     objects = UserManager()
 
@@ -113,10 +114,10 @@ class Review(models.Model):
     created = models.DateTimeField(auto_now_add=True)
     updated = models.DateTimeField(auto_now=True)
 
-
     def set_avg_rating(self):
         product = Product.objects.get(id=self.productId.id)
-        product.average_rating = Review.objects.filter(productId=self.productId).aggregate(models.Avg("rating"))["rating__avg"]
+        product.average_rating = Review.objects.filter(
+            productId=self.productId).aggregate(models.Avg("rating"))["rating__avg"]
         product.save()
 
     def num_of_reviews(self):
@@ -143,15 +144,12 @@ class Refund(models.Model):
     reason = models.TextField()
     accepted = models.BooleanField(default=False)
     created = models.DateTimeField(auto_now_add=True)
-    
-    
+
+
 class Device(models.Model):
-    user =  models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     device_ip = models.GenericIPAddressField()
     verified = models.BooleanField(default=False)
     type = models.CharField(max_length=50)
     version = models.CharField(max_length=50)
     last_login = models.DateTimeField(auto_now_add=True)
-
-
-

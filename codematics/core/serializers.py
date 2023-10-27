@@ -6,7 +6,7 @@ from django.utils.encoding import (
     force_str,
     smart_bytes,
     force_bytes,
- 
+
     DjangoUnicodeDecodeError
 )
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
@@ -54,20 +54,6 @@ class UserSerializer(serializers.ModelSerializer):
         def create(self, validated_data):
             user = User.objects.create_user(**validated_data)
             user.make_password(self.password)
-            user.save()
-
-            return user
-
-        def create_admin(self, validated_data):
-            user = User.objects.create_superuser(**validated_data)
-            user.set_password(self.password)
-            user.save()
-
-            return user
-
-        def create_staff(self, validated_data):
-            user = User.objects.create_staffuser(**validated_data)
-            user.set_password(self.password)
             user.save()
 
             return user
@@ -230,11 +216,6 @@ class SetNewPasswordSerializer(serializers.Serializer):
             )
         return super().validate(attrs)
 
-
-def VerifyUserSerializer():
-    a = "http://{{domain}}(% url 'activate' uidb64=uid token=token %}"
-
-    
 
 
 class UserMailSerializer(serializers.ModelSerializer):

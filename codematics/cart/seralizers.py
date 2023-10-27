@@ -3,14 +3,13 @@ from cart.models import Cart, CartItem
 from product.serializers import ProductCardSerializer
 
 
-
 class CartItemSerializer(serializers.ModelSerializer):
     product = ProductCardSerializer()
-    price = serializers.SerializerMethodField(method_name="main_total")
+    total = serializers.SerializerMethodField(method_name="main_total")
 
     class Meta:
         model = CartItem
-        fields = ('id', 'product', 'quantity', "price")
+        fields = ('id', 'product', 'quantity', "total")
 
     def main_total(self, cartItem):
 

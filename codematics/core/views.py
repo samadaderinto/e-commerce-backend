@@ -1,5 +1,3 @@
-import datetime
-from django.conf import settings
 from django.shortcuts import redirect
 from django.utils.encoding import smart_str
 from django.contrib.sites.shortcuts import get_current_site
@@ -29,14 +27,8 @@ from core.serializers import DeviceSerializer
 from product.serializers import ProductImgSerializer
 from product.models import ProductImg
 
-from django.utils.encoding import (
-    smart_str,
-    force_str,
-    smart_bytes,
-    force_bytes,
+from django.utils.encoding import smart_str, force_bytes
 
-    DjangoUnicodeDecodeError
-)
 from core.permissions import EcommerceAccessPolicy
 from core.utilities import auth_token, methods, send_mail, TokenGenerator
 

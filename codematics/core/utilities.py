@@ -5,8 +5,8 @@ from django.conf import settings
 from django.template.loader import get_template
 from django.db.models.signals import post_save
 from rest_framework_simplejwt.tokens import RefreshToken
+import stripe
 
-import urbanairship
 import six
 
 
@@ -107,7 +107,28 @@ def auth_token(user):
     }
 
 
-
+def make_payment(items, total, coupon_discount):
+    stripe.checkout.Session.create(
+        payment_method_types=['card', "cashapp", 'acss_debit', "paypal"],
+        line_items=[
+            {
+                'price_data': {
+                    'currency': 'usd',
+                    'product_data': {
+                        'name': item.product.title,
+                    },
+                    'unit_amount': int(item.product.sales_price),
+                },
+                'quantity': item.quantity,
+            } for item in items
+        ],
+        amount_subtotal=total - coupon_discount,
+        amount_total=total,
+        livemode=False,
+        mode='payment',
+        success_url='http://localhost:3000/success/',
+        cancel_url='http://localhost:3000/cancel/',
+    )
 
 # from django.utils import formats
 

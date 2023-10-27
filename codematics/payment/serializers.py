@@ -11,10 +11,10 @@ class OrdersSerializer(serializers.ModelSerializer):
         model = Order
 
         fields = [
-       
+            "user",
             "cartId",
             "orderId",
-            "coupon_used",
+            "coupon_code",
             "tax",
             "status",
             "total",

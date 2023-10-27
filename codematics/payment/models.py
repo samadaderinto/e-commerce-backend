@@ -71,7 +71,7 @@ class DeliveryInfo(models.Model):
         )
 
 class Order(models.Model):
-
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     cartId = models.ForeignKey('cart.Cart', on_delete=models.CASCADE)
     orderId = models.CharField(
         max_length=15,
@@ -79,7 +79,7 @@ class Order(models.Model):
         unique=True,
         editable=False,
     )
-    coupon_used = models.CharField(max_length=50)
+    coupon_code = models.CharField(max_length=50)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=15)
     delivery = models.ForeignKey(DeliveryInfo, on_delete=models.CASCADE)
