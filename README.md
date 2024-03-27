@@ -15,7 +15,7 @@ Clone the project
 Go to the project directory
 
 ```bash
-  cd 
+  cd codematics
 ```
 
 Install dependencies
@@ -49,51 +49,102 @@ or
 ## Project Structure
 
 ```
-src
-├── assets
-│   ├── icons
-│   │   └── icons.js
-│   └── images
-│       ├── (image files)
-├── components
-│   ├── (component files)
-└── pages
-    ├── [businessName]
-    │   ├── cart
-    │   │   ├── index.tsx
-    │   │   └── layout.tsx
-    │   ├── categories
-    │   │   ├── all
-    │   │   │   └── index.tsx
-    │   │   ├── details
-    │   │   │   └── page.tsx
-    │   │   └── index.tsx
-    │   ├── checkout
-    │   │   └── page.tsx
-    │   ├── home
-    │   │   ├── index.tsx
-    │   │   └── layout.tsx
-    │   ├── layout.tsx
-    │   ├── page.tsx
-    │   └── wishlist
-    │       └── page.tsx
-    ├── _app.tsx
-    ├── _document.tsx
-    ├── _shared
-    │   ├── index.ts
-    │   └── utils
-    │       └── fonts.ts
-    ├── favicon.ico
-    ├── globals.css
-    ├── index.tsx
-    ├── layout.tsx
-    ├── render.tsx
-    ├── shoppesdark
-    │   ├── (theme-specific files)
-    ├── shoppeslight
-    │   ├── (theme-specific files)
-    └── shoppespurple
-        ├── (theme-specific files)
+codematics
+├── templates
+│   └── email-templates
+│      └── (html files)
+│
+└── media
+│    └── images
+│       └── (image files)
+│
+└── codematics
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── asgi.py
+│    ├── settings.py
+│    ├── urls.py 
+│    ├── wsgi.py
+│    └── __init__.py
+│
+└── affiliates
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py
+│    
+└──  cart
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py
+│
+└── core
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py
+│
+└──  payment
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py'
+│
+└──  product
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py
+│
+└──  staff
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py
+│
+└──  store
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py
+│
+└──  event_notification
+│    ├── (default files/ folders) e.g __pycache__, migrations.
+│    ├── admin.py
+│    ├── apps.py
+│    ├── serializers.py   
+│    ├── models.py
+│    ├── urls.py
+│    ├── views.py
+│    └── test.py
 ```
 1. assets:
 Contains icons and images used in the project.
