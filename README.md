@@ -29,6 +29,18 @@ or
   pip install -r requirements.txt
 ```
 
+Create and Update migrations
+
+```bash
+  python3 manage.py makemigrations; python3 manage.py migrate
+```
+
+or 
+
+```bash
+  python manage.py makemigrations; python manage.py migrate
+```
+
 Start the server
 
 ```bash
@@ -145,12 +157,24 @@ codematics
 │    ├── urls.py
 │    ├── views.py
 │    └── test.py
+│
+└── DockerFile
+└── .dockerignore
+└── deployment.md
+└── entrypoint.sh
+└── jenkinsfile
+└── manage.py
+└── pytest.ini
+└── requirements.txt
 ```
-1. assets:
-Contains icons and images used in the project.
 
-2. components:
-Contains reusable React components.
+
+1. migrations:
+   In Django, migrations are a way to manage changes to your models (database schema) over time. When you make changes to your models, such as adding a new field or changing an 
+   existing one, Django can automatically generate migration files that represent these changes.
+
+2. settings.py:
+   In Django, this is a crucial file that holds various configuration settings for your django web application like database settings, middlewares, etc.
 
 3. pages:
 Contains pages of the application organized by business name.
@@ -178,45 +202,6 @@ File for rendering the application theme.
 Different theme variations of the application.
 
 
-
-
-## Template Folder Structure
-
-The Template folder structure provided represents the standard organization utilized by various templates within the application. Each template, such as shoppeslight, shoppesdark, or shoppespurple, follows this structured approach for maintaining code consistency and modularity. Below is a brief description of how these folders are utilized within the templates:
-
-
-```
-template
-    │   ├── App.tsx
-    │   ├── components
-    │   ├── configs
-    │   ├── features
-    │   ├── hooks
-    │   ├── layouts
-    │   │   ├── footer
-    │   │   └── header
-    │   ├── libs
-    │   ├── pages
-    │   │   ├── cart
-    │   │   ├── categories
-    │   │   │   ├── all
-    │   │   │   ├── details
-    │   │   │   └── index.tsx
-    │   │   ├── checkout
-    │   │   ├── home
-    │   │   └── wishlist
-    │   ├── resourses
-    │   │   ├── images
-    │   │   │   └── index.tsx
-    │   │   ├── index.ts
-    │   │   └── svgs
-    │   │       └── index.jsx
-    │   ├── services
-    │   ├── stores
-    │   ├── tests
-    │   ├── types
-    │   └── utils
-```
 
 1. App.tsx
 This is likely the entry point for the shoppeslight application.
