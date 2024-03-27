@@ -53,11 +53,6 @@ or
   python manage.py runserver 
 ```
 
-
-## Documentation
-
-[Documentation](https://linktodocumentation)
-
 ## Project Structure
 
 ```
