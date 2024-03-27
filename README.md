@@ -163,7 +163,7 @@ codematics
 └── requirements.txt
 ```
 
-
+## Project Structure details
 1. migrations:
 In Django, migrations are a way to manage changes to your models (database schema) over time. When you make changes to your models, such as adding a new field or changing an 
 existing one, Django can automatically generate migration files that represent these changes.
