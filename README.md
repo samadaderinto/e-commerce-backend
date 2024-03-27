@@ -9,7 +9,7 @@
 Clone the project
 
 ```bash
-  git clone [https://link-to-project](https://github.com/samadaderinto/e-commerce-backend)
+  git clone https://github.com/samadaderinto/e-commerce-backend
 ```
 
 Go to the project directory
