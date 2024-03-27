@@ -2,7 +2,7 @@
 
 ## Tech Stack
 
-**Server:** Django, Django rest Framework, HTML
+**Server:** Django, Django rest Framework, HTML, Docker, Kubernetes, Jekins
 
 ## Run Locally
 
