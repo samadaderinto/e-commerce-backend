@@ -4,7 +4,46 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+<<<<<<< Updated upstream
 usps-api = "*"
+=======
+djangorestframework = "*"
+pyyaml = "*"
+django-cors-headers = "*"
+pillow = "*"
+pytest-django = "*"
+django-taggit = "*"
+djangorestframework-simplejwt = "*"
+markdown = "*"
+django = "*"
+gunicorn = "*"
+tox = "*"
+django-dotenv = "*"
+faker = "*"
+nanoid = "*"
+django-silk = "*"
+celery = "*"
+sentry-sdk = "*"
+django-prometheus = "*"
+pytest = "*"
+kink = "*"
+django-storages = "*"
+django-elasticsearch-dsl = "*"
+whitenoise = "*"
+drf-spectacular = "*"
+coverage = "*"
+drf-yasg = "*"
+django-redis = "*"
+django-filter = "*"
+django-user-agents = "*"
+django-push-notifications = "*"
+stripe = "*"
+djangorestframework-word-filter = "*"
+django-notifications-hq = "*"
+uvicorn = "*"
+django-phonenumber-field = {extras = ["phonenumbers"], version = "*"}
+drf-access-policy = "*"
+>>>>>>> Stashed changes
 
 [dev-packages]
 

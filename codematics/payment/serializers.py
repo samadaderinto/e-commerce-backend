@@ -5,7 +5,7 @@ from payment.models import Order, Coupon, DeliveryInfo
 
 
 class OrdersSerializer(serializers.ModelSerializer):
-    delivery = DeliveryInfo()
+    # delivery = DeliveryInfo()
 
     class Meta:
         model = Order

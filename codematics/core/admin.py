@@ -1,7 +1,7 @@
 from django.contrib import admin
 from core.models import Address, Recent, Review, User, Wishlist , Device, Refund
 
-# Register your models here.
+
 
 
 

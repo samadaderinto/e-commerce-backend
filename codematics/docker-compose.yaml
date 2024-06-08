@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+    proace:
+        build:
+            context: .
+            dockerfile: Dockerfile
+        command: bash run.sh
+        restart: always
+        user: root
+        volumes:
+            - .:/var/www/proace
+        ports:
+            - 8000:8000
+        env_file:
+            - ./.env
+        depends_on:
+            - redis
+
+    celery:
+        build: .
+        command: bash -c "python3 -m pipenv run celery -A backend worker -l info --concurrency=1 -B"
+        volumes:
+            - .:/var/www/proace
+        depends_on:
+            - redis
+            - proace
+
+    redis:
+        image: "redis:latest"
+        command: redis-server /usr/local/etc/redis/redis.conf
+        restart: always
+        ports:
+            - 6379:6379
+        volumes:
+            - ./redis.conf:/usr/local/etc/redis/redis.conf
+
+

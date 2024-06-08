@@ -12,7 +12,7 @@ def api_client():
 
 
 @pytest.mark.django_db
-def create_user():
+def test_create_user():
     payload = {
         "first_name": "samaad",
         "last_name": "ade",

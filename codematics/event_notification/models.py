@@ -1,7 +1,6 @@
-from django.db import models
 from notifications.base.models import AbstractNotification
 
-from core.models import User
+
 
 
 

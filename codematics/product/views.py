@@ -79,34 +79,34 @@ def view_product(request, productId):
     
     if request.method == methods["get"]:
         serializer = ProductSerializer(product)
-        # related_products = Product.objects.filter(category=product.category,visibility=True).exclude(id=id)[:5]
-        # if request.user.is_authenticated:
-            # usps = USPSApi(settings.USPS_USERNAME)
-            # to_address = uspsAddress(
-            #     name="Tobin Brown",
-            #     address_1="1234 Test Ave.",
-            #     city="Test",
-            #     state="NE",
-            #     zipcode="55555",
-            # )
+        related_products = Product.objects.filter(category=product.category,visibility=True).exclude(id=id)[:5]
+        if request.user.is_authenticated:
+            usps = USPSApi(settings.USPS_USERNAME)
+            to_address = uspsAddress(
+                name="Tobin Brown",
+                address_1="1234 Test Ave.",
+                city="Test",
+                state="NE",
+                zipcode="55555",
+            )
 
-            # from_address = uspsAddress(
-            #     name="Tobin Brown",
-            #     address_1="1234 Test Ave.",
-            #     city="Test",
-            #     state="NE",
-            #     zipcode="55555",
-            # )
-            # validate_to_address = usps.validate_address(to_address)
-            # validate_from_address = usps.validate_address(from_address)
-            # weight = 10 # in ounce
-            # if validate_to_address.result and validate_from_address.result:
-            #     # this is to get estimate delivery date if user orders product in certain range of time
-            #     label = usps.create_label(
-            #         to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
-            #     )
+            from_address = uspsAddress(
+                name="Tobin Brown",
+                address_1="1234 Test Ave.",
+                city="Test",
+                state="NE",
+                zipcode="55555",
+            )
+            validate_to_address = usps.validate_address(to_address)
+            validate_from_address = usps.validate_address(from_address)
+            weight = 10 # in ounce
+            if validate_to_address.result and validate_from_address.result:
+                # this is to get estimate delivery date if user orders product in certain range of time
+                label = usps.create_label(
+                    to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
+                )
 
-            # return Response(serializer.data, {"label": label.result}, status=status.HTTP_200_OK)
+            return Response(serializer.data, {"label": label.result}, status=status.HTTP_200_OK)
         return Response(serializer.data,status=status.HTTP_200_OK)
     
     
@@ -135,7 +135,6 @@ def product_image_list(request):
 
 class SearchProduct(ListAPIView):
     permission_classes = (EcommerceAccessPolicy,)
-
     serializer_class = ProductCardSerializer
 
     search_field = (

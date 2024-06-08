@@ -91,15 +91,6 @@ pipeline {
    }
   }
 
-  stage('Notify Telegram') {
-   steps() {
-    script {
-      telegram.sendTelegram("Build successful for ${getBuildName()}\n" +
-      "image $registry:${params.RELEASE_TAG} is pushed to DockerHub and ready to be deployed")
-    }
-   }
-  }
-
   stage('Garbage Collection') {
    steps {
     sh "docker rmi $registry:${params.RELEASE_TAG}"
