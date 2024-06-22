@@ -1,7 +1,9 @@
 from django.db import models
-
-
+from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
+from cart.models import Cart
+from store.models import StoreAddress
+
 from utils.mixins import DatesMixin
 from nanoid import generate
 
@@ -16,7 +18,7 @@ from core.utilities import (
 # Create your models here.
 class Payment(DatesMixin):
     stripe_charge_id = models.CharField(max_length=50)
-    user = models.ForeignKey('User', on_delete=models.CASCADE, blank=True, null=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, blank=True, null=True)
     amount = models.FloatField()
     status = models.CharField(choices=PAYMENT_STATUS_CHOICE, max_length=50, default='pending')
 
@@ -43,9 +45,9 @@ class Coupon(DatesMixin):
 
 
 class DeliveryInfo(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     method = models.CharField(choices=DELIVERY_METHOD_CHOICE, max_length=150)
-    address = models.ForeignKey('Address', on_delete=models.CASCADE)
+    address = models.ForeignKey('core.Address', on_delete=models.CASCADE)
     total = models.IntegerField(default=0, blank=False, null=False)
     delivery_type = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=150)
 
@@ -66,27 +68,36 @@ class DeliveryInfo(DatesMixin):
 
 
 class Order(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
-    cartId = models.ForeignKey('Cart', on_delete=models.CASCADE)
-    orderId = models.CharField(
-        max_length=15, default=generate(size=13), unique=True, editable=False
-    )
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    cartId = models.ForeignKey(Cart, on_delete=models.CASCADE)
+    orderId = models.CharField(max_length=15, default=generate(size=13), unique=True, editable=False)
     coupon_code = models.CharField(max_length=50)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=15)
-    delivery = models.ForeignKey('DeliveryInfo', on_delete=models.CASCADE)
+    delivery = models.ForeignKey(DeliveryInfo, on_delete=models.CASCADE)
     ordered = models.BooleanField(default=False)
     payment_type = models.CharField(max_length=30, default='card')
     ordered_date = models.DateTimeField(auto_now=True)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    
+    def save(self, *args, **kwargs):
+        if not self.orderId:
+            self.orderId = self._generate_unique()
+        super().save(*args, **kwargs)
+
+    def _generate_unique(self, size=15):
+        marketer_id = generate(size)
+        while Order.objects.filter(username=marketer_id).exists():
+            marketer_id = generate(size)
+        return marketer_id
 
 
 class DeliveryEstimates(DatesMixin):
     usps_service = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=20)
     usps_delivery_date = models.IntegerField(default=0, blank=False, null=False)
-    destination_zip = models.ForeignKey('Address', on_delete=models.CASCADE)
-    origin_zip = models.ForeignKey('StoreAddress', on_delete=models.CASCADE)
+    destination_zip = models.ForeignKey('core.Address', on_delete=models.CASCADE)
+    origin_zip = models.ForeignKey(StoreAddress, on_delete=models.CASCADE)
     pick_up = models.IntegerField(default=25, blank=False, null=False)
     standard_delivery = models.DecimalField(
         max_digits=15, decimal_places=2, default=0, blank=False, null=False

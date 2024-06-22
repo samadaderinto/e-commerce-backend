@@ -1,8 +1,8 @@
 from django.db import models
+from django.conf import settings
 
 from utils.mixins import DatesMixin
 from phonenumber_field.modelfields import PhoneNumberField
-
 from nanoid import generate
 
 
@@ -10,7 +10,7 @@ from nanoid import generate
 
 
 class Store(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     username = models.CharField(max_length=17, unique=True)
     name = models.CharField(max_length=40)
     
@@ -28,13 +28,13 @@ class Store(DatesMixin):
 
 
 class Schedule(DatesMixin):
-    store = models.ForeignKey('Store', on_delete=models.CASCADE)
-    productId = models.ForeignKey('Product', on_delete=models.CASCADE)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE)
+    product = models.ForeignKey('product.Product', on_delete=models.CASCADE)
     make_visible_at = models.DateTimeField()
 
 
 class StoreInfo(DatesMixin):
-    storeId = models.ForeignKey('Store', on_delete=models.CASCADE)
+    store = models.ForeignKey('Store', on_delete=models.CASCADE)
     bio = models.TextField()
     instagram = models.URLField()
     twitter = models.URLField()

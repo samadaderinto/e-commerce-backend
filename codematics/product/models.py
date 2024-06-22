@@ -1,9 +1,10 @@
 from django.db import models
-
+from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 
 # Create your models here.
+from store.models import Store
 from utils.mixins import DatesMixin
 from core.utilities import (
     CATEGORIES_CHOICE,
@@ -18,7 +19,7 @@ from taggit.managers import TaggableManager
 
 
 class Product(DatesMixin):
-    store = models.ForeignKey("Store", on_delete=models.CASCADE)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE)
     title = models.CharField(max_length=225, blank=False, null=False)
     description = models.TextField(null=False, blank=False)
     price = models.DecimalField(max_digits=15, decimal_places=2, blank=False, null=False)
@@ -44,12 +45,12 @@ class Product(DatesMixin):
 
 
 class ProductImg(DatesMixin):
-    product = models.ForeignKey('Product', on_delete=models.CASCADE, related_name="images")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="images")
     image = models.ImageField(upload_to="images", default="", null=True, blank=True)
 
 
 class Specification(DatesMixin):
-    product = models.OneToOneField('Product', on_delete=models.CASCADE)
+    product = models.OneToOneField(Product, on_delete=models.CASCADE)
     serial = models.CharField(max_length=25, unique=True)
     attributes = models.CharField(max_length=250)
     height = models.DecimalField(max_digits=4, decimal_places=2)

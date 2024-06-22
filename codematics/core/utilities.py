@@ -109,7 +109,7 @@ def auth_token(user):
 
 def make_payment(items, total, coupon_discount):
     stripe.checkout.Session.create(
-        payment_method_types=['card', "cashapp", 'acss_debit', "paypal"],
+        payment_method_types=['card', "cashapp", 'access_debit', "paypal"],
         line_items=[
             {
                 'price_data': {
@@ -130,17 +130,6 @@ def make_payment(items, total, coupon_discount):
         cancel_url='http://localhost:3000/cancel/',
     )
 
-# from django.utils import formats
-
-# localized_date = formats.date_format(date_obj, 'SHORT_DATE_FORMAT')
-# localized_time = formats.time_format(time_obj, 'SHORT_TIME_FORMAT')
-
-# def get_aware_current_date_time(timezone):
-#     dt_now_naive = datetime.datetime.now()
-#     localized_tz = pytz.timezone(timezone) e.g 'Asia/Colombo'
-#     dt_now_aware = localized_tz.localize(dt_now_naive)
-
-#     return dt_now_aware
 
 
 # ua = urbanairship

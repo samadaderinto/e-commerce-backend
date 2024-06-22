@@ -16,6 +16,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenObtainSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.response import Response
+from phonenumber_field.serializerfields import PhoneNumberField
 
 
 from store.models import Store
@@ -26,13 +28,7 @@ from core.utilities import TokenGenerator, send_mail
 from product.serializers import ProductSerializer, ProductCardSerializer
 
 
-class UserSerializer(serializers.ModelSerializer):
-    # note: alternative to extra_kwargs
-    # def __init__(self, *args, **kwargs):
-    #     super().__init__(*args, **kwargs)
-
-    #     self.fields['password'].write_only = True
-
+class UserAuthSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
@@ -60,19 +56,40 @@ class UserSerializer(serializers.ModelSerializer):
 
         def update(self, instance, validated_data):
 
-            password = validated_data.pop('password', None)
-
+            validated_data.pop('password', None)
+            
             for (key, value) in validated_data.items():
                 setattr(instance, key, value)
-
-            if password is not None:
-                instance.set_password(password)
 
             instance.save()
 
             return instance
 
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "phone1",
+            "phone2",
+            "gender",
+            "created",
+            "updated",
+        ]
+   
 
+        
+class LoginSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField()
+    
+class EmailSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    
+    
 class StaffSerializer(serializers.ModelSerializer):
 
     class Meta:
@@ -164,7 +181,7 @@ class RefundsSerializer(serializers.ModelSerializer):
         model = Refund
         fields = [
             "id",
-            "userId",
+            "email",
             "order",
             "reason",
             'created',
@@ -189,11 +206,9 @@ class AddressSerializer(serializers.ModelSerializer):
 
 
 class SetNewPasswordSerializer(serializers.Serializer):
-    password = serializers.CharField(
-        min_length=6, max_length=90, write_only=True)
+    password = serializers.CharField(min_length=6, max_length=90, write_only=True)
     token = serializers.CharField(min_length=6, max_length=90, write_only=True)
-    uidb64 = serializers.CharField(
-        min_length=6, max_length=90, write_only=True)
+    uidb64 = serializers.CharField(min_length=6, max_length=90, write_only=True)
 
     fields = ["password", "token", "uidb64"]
 
@@ -231,31 +246,31 @@ class StoreSerializer(serializers.ModelSerializer):
 
 
 class WishlistSerializer(serializers.ModelSerializer):
-    product = ProductCardSerializer(source="productId")
+    product = ProductCardSerializer(source="product")
 
     class Meta:
         model = Wishlist
-        fields = ["liked", "product"]
-
-
-class WishlistPostSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Wishlist
-        fields = ["user", "productId"]
-
-
-class RecentsSerializer(serializers.ModelSerializer):
-    product = ProductCardSerializer(source="productId")
-
-    class Meta:
-        model = Recent
         fields = ["product"]
 
 
-class RecentsPostSerializer(serializers.ModelSerializer):
+class CreateWishlistSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Wishlist
+        fields = ["user", "product"]
+
+
+class RecentsSerializer(serializers.ModelSerializer):
+    product_info = ProductCardSerializer(source="product")
+
     class Meta:
         model = Recent
-        fields = ["productId", "user"]
+        fields = ["product_info"]
+
+
+class CreateRecentsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Recent
+        fields = ["product", "user"]
 
 
 class ReviewsSerializer(serializers.ModelSerializer):
@@ -265,7 +280,7 @@ class ReviewsSerializer(serializers.ModelSerializer):
         model = Review
         fields = [
             "name",
-            "productId",
+            "product",
             "label",
             "comment",
             "rating",
@@ -276,18 +291,26 @@ class ReviewsSerializer(serializers.ModelSerializer):
     extra_kwargs = {"user_details": {"read_only": True}}
 
 
-class ReviewsPostSerializer(serializers.ModelSerializer):
+class CreateReviewsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Review
         fields = [
             "user",
-            "productId",
+            "product",
             "label",
             "comment",
             "rating",
             "created",
             "updated",
         ]
+        
+    
+    def create(self, validated_data):
+        
+        return Review.objects.create(**validated_data)
+       
+          
+            
 
 
 class EmailTokenObtainSerializer(TokenObtainSerializer):
@@ -297,11 +320,13 @@ class EmailTokenObtainSerializer(TokenObtainSerializer):
 class CustomTokenObtainPairSerializer(EmailTokenObtainSerializer):
     @classmethod
     def get_token(cls, user):
-        return RefreshToken.for_user(user)
+        if user.is_active:
+           return RefreshToken.for_user(user)
+        else:
+           return Response({"message": "Please verify your account first"})
 
     def validate(self, attrs):
         data = super().validate(attrs)
-
         refresh = self.get_token(self.user)
 
         data["refresh"] = str(refresh)

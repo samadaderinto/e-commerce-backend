@@ -1,13 +1,13 @@
 from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
+from django.conf import settings
 
-
+from payment.models import Order
 from utils.mixins import DatesMixin
 
 from phonenumber_field.modelfields import PhoneNumberField
 from product.models import Product
-
 from core.utilities import USPS_SERVICE_CHOICE, GENDER_STATUS, DELIVERY_METHOD_CHOICE
 
 
@@ -16,9 +16,7 @@ from notifications.base.models import AbstractNotification
 
 class UserManager(BaseUserManager):
     def create_user(self, email=None, password=None, **extra_fields):
-        """
-        Create and save a user with the given email and password.
-        """
+    
 
         if not email:
             raise ValueError('Email Address Is Needed')
@@ -34,9 +32,7 @@ class UserManager(BaseUserManager):
         return user
 
     def create_superuser(self, email=None, password=None, **extra_fields):
-        """
-        Create and save a SuperUser with the given email and password.
-        """
+     
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
@@ -48,11 +44,8 @@ class UserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
     def create_staffuser(self, email=None, password=None, **extra_fields):
-        """
-        Create and save a SuperUser with the given email and password.
-        """
+     
         extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', False)
         extra_fields.setdefault('is_active', True)
 
         if extra_fields.get('is_staff') is not True:
@@ -66,11 +59,10 @@ class User(AbstractUser):
     last_name = models.CharField(max_length=30)
     gender = models.CharField(choices=GENDER_STATUS, max_length=7)
     email = models.EmailField(unique=True, db_index=True)
-    is_verified = models.BooleanField(default=False)
     phone1 = PhoneNumberField()
-
-    password = models.CharField(max_length=90)
     phone2 = PhoneNumberField(null=True, blank=True)
+    password = models.CharField(max_length=90)
+    is_active = models.BooleanField(default=True)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name', 'gender', 'phone1', 'password']
@@ -79,7 +71,7 @@ class User(AbstractUser):
 
 
 class Address(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     address = models.TextField(null=False, blank=False)
     zip = models.CharField(null=False, blank=False, max_length=10)
     country = models.CharField(max_length=30, null=False, blank=False)
@@ -89,8 +81,8 @@ class Address(DatesMixin):
 
 
 class Review(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
-    productId = models.ForeignKey('Product', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
     label = models.CharField(max_length=40)
     comment = models.TextField(max_length=60)
     rating = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(5)])
@@ -105,26 +97,25 @@ class Review(DatesMixin):
 
 
 class Wishlist(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
-    productId = models.ForeignKey('Product', on_delete=models.CASCADE)
-    liked = models.BooleanField(default=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    
 
 
 class Recent(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
-    productId = models.ForeignKey('Product', on_delete=models.CASCADE)
-    viewed = models.BooleanField(default=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
 
 
 class Refund(DatesMixin):
-    userId = models.ForeignKey('User', on_delete=models.CASCADE)
-    order = models.ForeignKey('Order', on_delete=models.CASCADE)
+    email = models.EmailField(unique=True)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE)
     reason = models.TextField()
     accepted = models.BooleanField(default=False)
 
 
 class Device(DatesMixin):
-    user = models.ForeignKey('User', on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     device_ip = models.GenericIPAddressField()
     verified = models.BooleanField(default=False)
     type = models.CharField(max_length=50)

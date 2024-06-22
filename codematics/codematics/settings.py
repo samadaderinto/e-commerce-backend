@@ -59,7 +59,6 @@ INSTALLED_APPS = [
     'django_user_agents',
     "phonenumber_field",
     "push_notifications",
-
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     "taggit",
@@ -67,12 +66,15 @@ INSTALLED_APPS = [
     "rest_framework_word_filter",
     "notifications",
     "dotenv",
+    'silk',
+    'django_elasticsearch_dsl'
 
 ]
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    'silk.middleware.SilkyMiddleware',
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -322,4 +324,14 @@ PUSH_NOTIFICATIONS_SETTINGS = {
     "FCM_API_KEY": str(os.environ.get("FCM_KEY")),
     "GCM_API_KEY": "[your api key]",
     "APNS_CERTIFICATE": "/path/to/your/certificate.pem",
+}
+
+SILKY_PYTHON_PROFILER = True
+SILKY_PYTHON_PROFILER_BINARY = True
+
+
+ELASTICSEARCH_DSL={
+    'default': {
+        'hosts': 'localhost:9200'
+    },
 }
