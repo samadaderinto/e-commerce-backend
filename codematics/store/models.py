@@ -35,15 +35,15 @@ class Schedule(DatesMixin):
 
 class StoreInfo(DatesMixin):
     store = models.ForeignKey('Store', on_delete=models.CASCADE)
+    email = models.EmailField(null=True, blank=True)
     bio = models.TextField()
     instagram = models.URLField()
     twitter = models.URLField()
     facebook = models.URLField()
-    contact_email = models.EmailField(null=True, blank=True)
+    whatsapp = phone2 = PhoneNumberField(null=True, blank=True)
     phone1 = PhoneNumberField(null=True, blank=True)
-    phone2 = PhoneNumberField(null=True, blank=True)
-    phone1 = models.CharField(max_length=225)
-    whatsapp1 = models.CharField(max_length=225)
+    
+    
 
 
 class StoreAddress(DatesMixin):
@@ -61,11 +61,17 @@ class StoreImg(DatesMixin):
     url = models.ImageField(upload_to='images', default='', null=True, blank=True)
 
 
-class Withdrawal(DatesMixin):
+class Budget(DatesMixin):
+    
+    BUDGET_TYPE = (
+        ("C", "CREDIT"), 
+        ("D", "DEBIT")
+    )
+    
     store = models.ForeignKey('Store', on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=10000000000, decimal_places=2)
-    withdrawed_on = models.DateTimeField(auto_now_add=True)
-
+    type = models.CharField(choices=BUDGET_TYPE, max_length=10)
+   
 
 class Wallet(DatesMixin):
     store = models.ForeignKey('Store', on_delete=models.CASCADE)

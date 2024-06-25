@@ -1,6 +1,3 @@
-from django.urls import path
-
-
 
 # urlpatterns = [
      
@@ -26,3 +23,16 @@ from django.urls import path
 #     path("products/images/create/", store_add_product_image, name="store_add_product_image"),
 #     path("<int:storeId>/products/<int:productId>/images/<str:filename>/delete/", delete_file, name="file_delete"),
 # ]
+
+from rest_framework import routers
+from .views import StoreViewSet, VisibilityScheduleViewSet
+
+
+router = routers.DefaultRouter()
+
+router.register(r"", StoreViewSet, basename="store")
+router.register(r"", VisibilityScheduleViewSet, basename="visiblity")
+
+
+
+urlpatterns = router.urls
