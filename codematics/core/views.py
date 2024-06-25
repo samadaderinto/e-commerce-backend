@@ -1,4 +1,3 @@
-from django.shortcuts import redirect
 from django.utils.encoding import smart_str
 from django.contrib.sites.shortcuts import get_current_site
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
@@ -8,48 +7,37 @@ from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, get_list_or_404
 from django.utils.encoding import smart_str, force_bytes
 
+from utils.functions import TokenGenerator, auth_token, send_mail
+from rest_framework_simplejwt.tokens import RefreshToken
+
 
 from kink import di
-from django_user_agents.utils import get_user_agent
 from drf_spectacular.utils import extend_schema
 
 
-from .serializers import CreateRecentsSerializer, CreateReviewsSerializer, CreateWishlistSerializer, DeviceSerializer, EmailSerializer, LoginSerializer, UserAuthSerializer
-from .services import AuthService
-from .models import Recent, Review, User, Wishlist, Address
-from .permissions import EcommerceAccessPolicy
-from .utilities import auth_token, methods, send_mail, TokenGenerator
+from core.serializers import CreateRecentsSerializer, CreateReviewsSerializer, CreateWishlistSerializer, EmailSerializer, LoginSerializer, UserAuthSerializer
+from core.models import Recent, Review, User, Wishlist, Address
 
 
-from rest_framework.filters import SearchFilter, OrderingFilter
+
 from rest_framework import status
 from rest_framework.response import Response
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.parsers import JSONParser
 from rest_framework import viewsets
 from rest_framework_simplejwt.views import TokenRefreshView
 from rest_framework.decorators import action
 
-
-from affiliates.models import Redirect, Url
-from affiliates.serializers import RedirectSerializer
-from product.serializers import ProductSerializer
-from product.models import Product
-from product.serializers import ProductImgSerializer
-from product.models import ProductImg
 from payment.models import Order
 from payment.serializers import OrdersSerializer
-from event_notification.views import refund_requested_nofication
-from core.serializers import ( AddressSerializer, RecentsSerializer, RefundsSerializer, ReviewsSerializer, SetNewPasswordSerializer, UserSerializer, WishlistSerializer)
+from notification.views import refund_requested_nofication
+from core.serializers import AddressSerializer, RecentsSerializer, RefundsSerializer, ReviewsSerializer, SetNewPasswordSerializer, UserSerializer, WishlistSerializer
 
 
 
 
 
 class AuthViewSet(viewsets.GenericViewSet):
-    auth_service: AuthService = di[AuthService]
     auth_user: User = di[User]
-    
     
     def send_activation_mail(self, request, email):
         user = get_object_or_404(self.auth_user, email=email)
@@ -58,8 +46,8 @@ class AuthViewSet(viewsets.GenericViewSet):
         current_site = get_current_site(request).domain
         relativeLink = reverse('activate', kwargs={'uidb64': uuidb64, 'token': token})
         absolute_url = f"http://{current_site}{relativeLink}"
-
         send_mail("onboarding-user", user.email, data={"firstname": user.first_name, "absolute_url": absolute_url})
+        
         
     @extend_schema(responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['get'], url_path='activate')
@@ -86,10 +74,10 @@ class AuthViewSet(viewsets.GenericViewSet):
         
         if self.auth_user.objects.filter(email=email).exists():
             return Response({'message': 'Email already registered'},status=status.HTTP_400_BAD_REQUEST)
-        else:
-            self.auth_user.objects.create_user(**data)
-            self.send_activation_mail(request, email)
-            return Response({"message": "User successfully created, Verify your email account"}, status=status.HTTP_201_CREATED)
+        
+        self.auth_user.objects.create_user(**data)
+        self.send_activation_mail(request, email)
+        return Response({"message": "User successfully created, Verify your email account"}, status=status.HTTP_201_CREATED)
 
     @extend_schema(request=LoginSerializer, responses={status.HTTP_200_OK: UserSerializer})
     @action(detail=False, methods=['post'], url_path='login')
@@ -113,8 +101,7 @@ class AuthViewSet(viewsets.GenericViewSet):
     def logout(self, request):
         data = JSONParser().parse(request)
         try:
-            token = RefreshToken(data['refresh'])
-            token.blacklist()
+            RefreshToken(data['refresh']).blacklist()
             return Response(status=status.HTTP_205_RESET_CONTENT)
         except:
             return Response(status=status.HTTP_400_BAD_REQUEST)
@@ -416,128 +403,5 @@ class UserViewSet(viewsets.GenericViewSet):
         refund_requested_nofication()
         return Response({'message': 'Refund accepted, this may take 1 to 3 business days before you get a response'}, status=status.HTTP_201_CREATED)
 
-            
-        
-      
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-@permission_classes((EcommerceAccessPolicy,))
-@api_view(['GET'])
-def landing_page_products(request):
-    if request.method == methods['get']:
-        newest_products = Product.objects.order_by('created')[:10]
-        highest_rated_products = Product.objects.order_by('average_rating')[:10]
-        best_selling_products = Product.objects.order_by('sales')[:10]
-
-        serialized_newest = ProductSerializer(newest_products, many=True)
-        serialized_highest_rated = ProductSerializer(highest_rated_products, many=True)
-        serialized_best_selling = ProductSerializer(best_selling_products, many=True)
-
-        return Response(
-            {
-                'newest_products': serialized_newest.data,
-                'highest_rated_products': serialized_highest_rated.data,
-                'best_selling_products': serialized_best_selling.data
-            },
-            status=status.HTTP_200_OK
-        )
-
-# class Orders(ListAPIView):
-   
-
-#     search_field = ('id', 'status', 'orderId', 'ordered_date')
-
-#     filter_backends = [SearchFilter, OrderingFilter]
-#     ordering_fields = ['ordered_date']
-
-
-
-
-
-
-    
-
-    # this portion of code is to get user devices info, for better authentication
-    # def post(self, request, *args, **kwargs):
-    #     agent = get_user_agent(self.request)
-    #     type = agent.os.family
-    #     version = agent.os.version_string
-    #     serializer = DeviceSerializer(
-    #         data=request.data.pop("password", "email"))
-    #     ip = self.request.META.get('HTTP_X_FORWARDED_FOR')
-    #     if ip:
-    #         ip = ip.split(',')[0]
-    #     else:
-    #         ip = self.request.META.get('REMOTE_ADDR')
-    #     serializer.validated_data["device_ip"] = ip
-    #     serializer.validated_data["type"] = type
-    #     serializer.validated_data["version"] = version
-    #     serializer.save()
-
-
-@permission_classes((EcommerceAccessPolicy,))
-def redirect_url(request, marketerId, productId, identifier):
-    if request.method == methods['get']:
-        data = {'marketer': marketerId, 'product': productId, 'identifier': identifier}
-        serializer = RedirectSerializer(data=data)
-
-        serializer.is_valid(raise_exception=True)
-        try:
-                url = Url.objects.get(
-                    marketer=marketerId, product=productId, identifier=identifier
-                )
-        except:
-                return Response(
-                    'Sorry link is broken or unable to get product :(',
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-        serializer.save()
-        return redirect(
-                url.product_url,
-                permanent=True,
-                status=status.HTTP_308_PERMANENT_REDIRECT
-            )
-
-
-@permission_classes((EcommerceAccessPolicy,))
-@api_view([methods['get']])
-def product_image(request, productId, imageId):
-    try:
-        product = ProductImg.objects.get(id=imageId, productId=productId)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods['get']:
-        serializer = ProductImgSerializer(product)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-@permission_classes((EcommerceAccessPolicy,))
-@api_view([methods['get']])
-def product_images(request, productId):
-    try:
-        product = ProductImg.objects.filter(productId=productId)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods['get']:
-        serializer = ProductImgSerializer(product)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)

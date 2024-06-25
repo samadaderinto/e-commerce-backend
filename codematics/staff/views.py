@@ -1,11 +1,8 @@
-from django.shortcuts import render
-from django.contrib.auth.models import Group
-from django.conf import settings
 
+from django.conf import settings
 
 from rest_framework import status
 from rest_framework.parsers import JSONParser
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.generics import ListAPIView
@@ -13,7 +10,7 @@ from rest_framework.generics import ListAPIView
 
 from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
-from event_notification.views import refund_requested_nofication 
+from notification.views import refund_requested_nofication 
 from store.serializers import StoreAddressSerializer
 
 from staff.serilalizers import CommentSerializer
@@ -27,7 +24,6 @@ from django.contrib.sites.shortcuts import get_current_site
 
 from rest_framework.generics import RetrieveUpdateDestroyAPIView, ListCreateAPIView
 from core.serializers import UserSerializer, RefundsSerializer, StoreSerializer, StaffSerializer, AdminSerializer
-from core.permissions import EcommerceAccessPolicy
 from core.utilities import auth_token, methods, send_mail, TokenGenerator
 from core.models import User, Refund
 from product.models import Specification
@@ -53,8 +49,7 @@ from django.utils.encoding import (
 usps = USPSApi(settings.USPS_USERNAME, test=True)
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def create_staff(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
@@ -85,8 +80,7 @@ def create_staff(request):
             )
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def create_admin(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
@@ -117,13 +111,12 @@ def create_admin(request):
             )
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def give_staff_permission(request):
     data = JSONParser().parse(request)
     serializer = UserSerializer(data=data)
-    if serializer.is_valid():
-        email = serializer.validated_data["email"]
+    serializer.is_valid(raise_exception=True)
+    email = serializer.validated_data["email"]
 
     try:
         user = User.objects.get(email=email, is_staff=True)
@@ -135,8 +128,7 @@ def give_staff_permission(request):
     return Response({"success": "Permission granted for this staff member"}, status=status.HTTP_200_OK)
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def edit_staff_detail(request, userId):
     data = JSONParser().parse(request)
 
@@ -148,28 +140,25 @@ def edit_staff_detail(request, userId):
 
     if request.method == methods["post"]:
         serializer = UserSerializer(user, data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
 
 
 
 
-@api_view([methods["delete"]])
-@permission_classes((EcommerceAccessPolicy,))
 def delete_staff_account_by_admin(request):
     if request.method == methods["delete"]:
         data = JSONParser().parse(request)
         serializer = UserSerializer(data=data)
-        if serializer.is_valid():
-            serializer.delete()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+        serializer.delete()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def revoke_staff_permission(request):
     data = JSONParser().parse(request)
         
@@ -178,22 +167,20 @@ def revoke_staff_permission(request):
     except:
         return Response(status=status.HTTP_404_NOT_FOUND)
     
-    staff.has_perm = False
+    staff.is_active = False
     staff.save()
     return Response({"success": "Permission revoked for this staff member"}, status=status.HTTP_200_OK)
 
 
-@api_view([methods["get"], methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_staffs(request):
-    if request.method == methods["get"]:
-        staffs = User.objects.filter(is_staff=True).order_by("created").reverse()
-        serializer = StaffSerializer(staffs, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    staffs = User.objects.filter(is_staff=True).order_by("created").reverse()
+    serializer = StaffSerializer(staffs, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@permission_classes((EcommerceAccessPolicy,))
-@api_view([methods["get"]])
+
 def get_staff(request, staffId):
     
     try:
@@ -208,8 +195,7 @@ def get_staff(request, staffId):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_coupons(request):
     try:
         coupons = Coupon.objects.all()
@@ -221,8 +207,6 @@ def get_coupons(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view([methods["delete"]])
-@permission_classes((EcommerceAccessPolicy,))
 def delete_coupon(request, codeId):
     try:
         coupons = Coupon.objects.get(pk=codeId)
@@ -234,33 +218,28 @@ def delete_coupon(request, codeId):
     return Response(status=status.HTTP_202_ACCEPTED)
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def create_coupon(request):
     
     if request.method == methods["post"]:
         data = JSONParser().parse(request)
         serializer = CouponSerializer(data=data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        
 
-
-@api_view([methods["put"]])
-@permission_classes((EcommerceAccessPolicy,))
 def edit_coupon(request, couponId):
     if request.method == methods["put"]:
         coupon = Coupon.objects.get(code=couponId)
         serializer = CouponSerializer(coupon )
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+       
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_users(request):
     try:
         users = User.objects.all().order_by("created").reverse()
@@ -272,8 +251,7 @@ def get_users(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def create_shipment(request):
     # will use actual addresses later for both
     to_address = uspsAddress(
@@ -312,8 +290,7 @@ def create_shipment(request):
     )
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def send_track_order_mail(request):
     # tracking number provided by usps in place of the zero's
     track = usps.track("00000000000000000000")
@@ -328,8 +305,7 @@ def send_track_order_mail(request):
         {"error": "wrong shipment information"}, status=status.HTTP_400_BAD_REQUEST)
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_refunds(request):
     try:
         refunds = Refund.objects.all().order_by("created").reverse()
@@ -341,8 +317,7 @@ def get_refunds(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_refund(request, refundId):
     try:
         refunds = Refund.objects.get(id=refundId)
@@ -354,8 +329,7 @@ def get_refund(request, refundId):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view([methods["post"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def refund_response(request,orderId, userId):
     if request.method == methods["post"]:
         user = User.objects.get(id=userId)
@@ -369,8 +343,7 @@ def refund_response(request,orderId, userId):
         return Response(status=status.HTTP_200_OK)
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_marketers(request):
     try:
         marketer = Marketer.objects.all().order_by("created").reverse()
@@ -382,8 +355,7 @@ def get_marketers(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@permission_classes((EcommerceAccessPolicy,))
-@api_view([methods["get"]])
+
 def get_marketer(request, marketerId):
     try:
        marketer = Marketer.objects.get(id=marketerId)
@@ -397,8 +369,7 @@ def get_marketer(request, marketerId):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-@permission_classes((EcommerceAccessPolicy,))
-@api_view([methods["get"]])
+
 def suspend_marketer(request, marketerId):
     try:
        marketer = Marketer.objects.get(id=marketerId)
@@ -411,8 +382,6 @@ def suspend_marketer(request, marketerId):
        
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-@api_view([methods["delete"]])
-@permission_classes((EcommerceAccessPolicy,))
 def delete_marketer_account_by_staff(request,marketerId):
     try:
        marketer = Marketer.objects.get(id=marketerId)
@@ -426,7 +395,7 @@ def delete_marketer_account_by_staff(request,marketerId):
            
 
 class GetOrders(ListAPIView):
-    permission_classes = (EcommerceAccessPolicy,)
+   
 
     serializer_class = OrdersSerializer
            
@@ -454,7 +423,6 @@ class GetOrders(ListAPIView):
 class CommentList(ListCreateAPIView):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
-    permission_classes = (EcommerceAccessPolicy,)
 
     def perform_create(self, serializer):
         serializer.save(owner=self.request.user)
@@ -463,11 +431,9 @@ class CommentList(ListCreateAPIView):
 class CommentDetail(RetrieveUpdateDestroyAPIView):
     queryset = Comment.objects.all()
     serializer_class = CommentSerializer
-    permission_classes = (EcommerceAccessPolicy,)
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_stores(request):
     try:
         store = Store.objects.all().order_by("user").reverse()
@@ -478,8 +444,7 @@ def get_stores(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_store_by_staff(request, storeId):
     try:
         store = Store.objects.filter(id=storeId)
@@ -491,8 +456,7 @@ def get_store_by_staff(request, storeId):
         return Response(serializer.data,status=status.HTTP_200_OK)
     
     
-@api_view([methods["get"]])
-@permission_classes((EcommerceAccessPolicy,))
+
 def get_store_addresses_by_staff(request, storeId):
     try:
         store = StoreAddress.objects.filter(store=storeId)

@@ -54,17 +54,6 @@ class UserAuthSerializer(serializers.ModelSerializer):
 
             return user
 
-        def update(self, instance, validated_data):
-
-            validated_data.pop('password', None)
-            
-            for (key, value) in validated_data.items():
-                setattr(instance, key, value)
-
-            instance.save()
-
-            return instance
-
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -118,19 +107,6 @@ class StaffSerializer(serializers.ModelSerializer):
 
             return user
 
-        def update(self, instance, validated_data):
-
-            password = validated_data.pop('password', None)
-
-            for key, value in validated_data.items():
-                setattr(instance, key, value)
-
-            if password is not None:
-                instance.set_password(password)
-
-            instance.save()
-
-            return instance
 
 
 class AdminSerializer(serializers.ModelSerializer):

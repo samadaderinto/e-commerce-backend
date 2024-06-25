@@ -12,10 +12,8 @@ class CartItemSerializer(serializers.ModelSerializer):
         fields = ('id', 'product', 'quantity', "total")
 
     def main_total(self, cartItem):
-
-        total = sum(
-            [item.quantity * item.product.price for item in cartItem.__class__.objects.filter(id=cartItem)])
-        return total
+        return sum([item.quantity * item.product.price for item in cartItem.__class__.objects.filter(id=cartItem)])
+       
 
 
 class CartSerializer(serializers.ModelSerializer):
@@ -28,6 +26,5 @@ class CartSerializer(serializers.ModelSerializer):
 
     def main_total(self, cart):
 
-        total = sum(
-            [item.quantity * item.product.price for item in CartItem.objects.filter(cart=cart)])
-        return total
+        return sum([item.quantity * item.product.price for item in CartItem.objects.filter(cart=cart)])
+

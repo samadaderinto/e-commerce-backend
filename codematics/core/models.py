@@ -8,7 +8,7 @@ from utils.mixins import DatesMixin
 
 from phonenumber_field.modelfields import PhoneNumberField
 from product.models import Product
-from core.utilities import USPS_SERVICE_CHOICE, GENDER_STATUS, DELIVERY_METHOD_CHOICE
+
 
 
 from notifications.base.models import AbstractNotification
@@ -54,6 +54,10 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser):
+    GENDER_STATUS = (
+    ("male", "male"),
+    ("female", "female"))
+    
     username = None
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
@@ -83,7 +87,7 @@ class Address(DatesMixin):
 class Review(DatesMixin):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    label = models.CharField(max_length=40)
+    label = models.CharField(max_length=80)
     comment = models.TextField(max_length=60)
     rating = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(5)])
 
@@ -94,6 +98,9 @@ class Review(DatesMixin):
 
     def num_of_reviews(self):
         return Review.objects.filter(productId=self.productId.id).count()
+    
+    class Meta:
+        ordering = ["-create_date"]
 
 
 class Wishlist(DatesMixin):

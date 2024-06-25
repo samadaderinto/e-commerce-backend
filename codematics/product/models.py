@@ -6,12 +6,7 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 # Create your models here.
 from store.models import Store
 from utils.mixins import DatesMixin
-from core.utilities import (
-    CATEGORIES_CHOICE,
-    LABEL_CHOICE,
-    USPS_SERVICE_CHOICE,
-    DELIVERY_METHOD_CHOICE,
-)
+
 
 from nanoid import generate
 
@@ -19,6 +14,29 @@ from taggit.managers import TaggableManager
 
 
 class Product(DatesMixin):
+    CATEGORIES_CHOICE = (
+    ("fishing", "fishing"),
+    ("sports", "sports"),
+    ("electronics", "electronics"),
+    ("phones", "phones"),
+    ("games", "games"),
+    ("tablets", "tablets"),
+    ("outwear", "outwear"),
+    ("pets", "pets"),
+    ("toys", "toys"),
+    ("computing", "computing"),
+    ("lingerie", "lingerie"),
+    ("books", "books"),
+    ("beverages", "beverages"))
+    
+    LABEL_CHOICE = (
+    ("new", "new"),
+    ("", "none"),
+    ("bestseller", "bestseller"),
+    ("sold out", "sold out"),
+)
+    
+    
     store = models.ForeignKey(Store, on_delete=models.CASCADE)
     title = models.CharField(max_length=225, blank=False, null=False)
     description = models.TextField(null=False, blank=False)

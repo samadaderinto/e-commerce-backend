@@ -40,7 +40,7 @@ class set_product_visibility(CronJobBase):
 
 class update_product_label(CronJobBase):
     RUN_EVERY_MINS = 1
-    # every 2 hours
+    # every 2 hourssawawa`1`
 
     schedule = CronShedule(run_every_mins=RUN_EVERY_MINS)
 

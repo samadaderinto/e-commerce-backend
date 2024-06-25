@@ -1,4 +1,3 @@
-from django.urls import reverse
 import pytest
 
 from core.models import User
@@ -7,8 +6,8 @@ from rest_framework.test import APIClient
 
 @pytest.fixture
 def api_client():
-    client = APIClient()
-    return client
+    return APIClient()
+
 
 
 @pytest.mark.django_db
