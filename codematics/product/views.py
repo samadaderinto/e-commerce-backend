@@ -35,7 +35,7 @@ from usps import SERVICE_PRIORITY, LABEL_ZPL
 
 
 
-
+class ProductViewSet:
 
 def product_images_by_product_id(request, productId):
     
