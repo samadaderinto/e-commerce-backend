@@ -6,7 +6,7 @@ from cart.models import Cart, CartItem
 from utils.functions import make_payment
 from payment.models import Coupon, DeliveryInfo
 from product.models import Product
-from core.models import Address,  User
+from core.models import Address, User
 
 from drf_spectacular.utils import extend_schema
 
@@ -24,73 +24,59 @@ from rest_framework import viewsets
 
 import stripe
 
+from django.shortcuts import get_object_or_404, get_list_or_404
 
 stripe.api_key = settings.STRIPE_SECRET
 
 
 # Create your views here.
 
+
 class PaymentViewSet(viewsets.GenericViewSet):
     auth_user: User = di[User]
     cart_item: CartItem = di[CartItem]
     user_cart: Cart = di[Cart]
-    
-    
+
     @extend_schema(responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['post'], url_path='checkout/create')
     def create_checkout_session(self, request):
-            data = JSONParser().parse(request)
-            cart = self.user_cart.objects.get(user=data["user"], ordered=False)
-            items = self.cart_item.objects.filter(cart=cart.id)
+        data = JSONParser().parse(request)
+        cart = get_object_or_404(self.user_cart, user=data['user'], ordered=False)
+        items = get_list_or_404(self.cart_item, cart=cart.id)
 
-            for item in items:
-                product = Product.objects.get(pk=item.productId)
+        for item in items:
+            product = Product.objects.get(pk=item.productId)
 
-                if not product.available:
-                    return Response( data={"message": "One of your products is sold out"}, status=status.HTTP_409_CONFLICT)
+            if product.available == 0:
+                return Response(data={'message': 'One of your products is sold out'}, status=status.HTTP_409_CONFLICT)
 
-            return Response("proceed to checkout", status=status.HTTP_200_OK)
-
+        return Response('proceed to checkout', status=status.HTTP_200_OK)
 
     @extend_schema(responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['post'], url_path='checkout/pay')
     def capture_checkout_session(self, request):
-            data = JSONParser().parse(request)
-            serializer = OrdersSerializer(data=data)
+        data = JSONParser().parse(request)
+        serializer = OrdersSerializer(data=data)
 
-            serializer.is_valid(raise_exception=True)
-            global coupon_discount
-            coupon_discount = 0
-            user = self.auth_user.objects.get(id=serializer.validated_data["user"])
-            cart = self.user_cart.objects.get(user=user.id, ordered=False)
-            items = self.cart_item.objects.filter(cart=cart.id)
-            # default_address = Address.objects.get(
-            #     user=user.id, is_default=True)
-            address = serializer.validated_data.get("address", {})
-            address_serializer = DeliveryInfo(data=address)
-            cart_serializer = CartSerializer(cart)
-            code = serializer.validated_data["coupon_code"]
+        serializer.is_valid(raise_exception=True)
 
-            if code:
-                try:
-                    coupon = Coupon.objects.get(code=code)
-                    if coupon.can_use():
-                        coupon_discount = coupon.discount
-                    else:
-                        return Response("invalid coupon", status=status.HTTP_401_UNAUTHORIZED)
-                except:
-                    return Response("invalid coupon", status=status.HTTP_404_NOT_FOUND)
+        user = get_object_or_404(self.auth_user, id=serializer.validated_data['user'])
+        cart = get_object_or_404(self.user_cart, user=user.id, ordered=False)
+        items = get_object_or_404(self.cart_item, cart=cart.id)
 
-            address_serializer.is_valid(raise_exception=True)
-            
-            checkout_session = make_payment(items, cart_serializer.total, coupon_discount)
-            if checkout_session["payment_status"] == "paid":
-                cart.ordered = True
-                coupon.used()
-                cart.save()
-                address_serializer.save()
-                serializer.save()
+        cart_serializer = CartSerializer(cart)
+        coupon = get_object_or_404(Coupon, code=serializer.validated_data['coupon'])
+        discount = coupon.discount if coupon.can_use() else None
 
-            created_order_nofication(user, "order sucessfully created")
-            return Response({'id': checkout_session.id})
-        
+        if not discount:
+            return Response('invalid coupon code', status=status.HTTP_404_NOT_FOUND)
+
+        checkout_session = make_payment(items, cart_serializer.total, discount)
+        if checkout_session['payment_status'] == 'paid':
+            cart.ordered = True
+            coupon.used()
+            cart.save()
+            serializer.save()
+
+        created_order_nofication(user, 'order sucessfully created')
+        return Response({'id': checkout_session.id})

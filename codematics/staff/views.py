@@ -49,7 +49,7 @@ from django.utils.encoding import (
 usps = USPSApi(settings.USPS_USERNAME, test=True)
 
 
-
+class StaffViewSet:
 def create_staff(request):
     if request.method == methods["post"]:
         data = JSONParser().parse(request)

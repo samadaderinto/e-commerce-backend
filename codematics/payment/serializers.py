@@ -12,9 +12,9 @@ class OrdersSerializer(serializers.ModelSerializer):
 
         fields = [
             "user",
-            "cartId",
-            "orderId",
-            "coupon_code",
+            "cart",
+            "order",
+            "coupon",
             "tax",
             "status",
             "total",

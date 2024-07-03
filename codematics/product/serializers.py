@@ -80,5 +80,5 @@ class ProductCardSerializer(serializers.ModelSerializer):
             "label",
             "price",
             "sale_price",
-            "average_rating",
+            "average_rating"
         ]

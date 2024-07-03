@@ -90,14 +90,13 @@ class Order(DatesMixin):
     
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE)
-    orderId = models.CharField(max_length=15, default=generate(size=13), unique=True, editable=False)
-    coupon_code = models.CharField(max_length=50)
+    order = models.CharField(max_length=15, default=generate(size=13), unique=True, editable=False)
+    coupon = models.CharField(max_length=50)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=15)
     delivery = models.ForeignKey(DeliveryInfo, on_delete=models.CASCADE)
     ordered = models.BooleanField(default=False)
     payment_type = models.CharField(max_length=30, default='card')
-    ordered_date = models.DateTimeField(auto_now=True)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     
