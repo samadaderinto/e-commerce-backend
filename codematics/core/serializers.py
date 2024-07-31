@@ -68,7 +68,6 @@ class UserSerializer(serializers.ModelSerializer):
             "created",
             "updated",
         ]
-   
 
         
 class LoginSerializer(serializers.Serializer):
@@ -104,7 +103,6 @@ class StaffSerializer(serializers.ModelSerializer):
             user = User.objects.create_staffuser(**validated_data)
             user.set_password(self.password)
             user.save()
-
             return user
 
 
