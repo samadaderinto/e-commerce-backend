@@ -1,0 +1,13 @@
+{
+  "name": "proace-commerce",
+  "private": true,
+  "workspaces": ["client"],
+  "scripts": {
+    "dev": "npm run dev --workspace=client",
+    "build": "npm run build --workspace=client",
+    "typecheck": "npm run typecheck --workspace=client",
+    "test:unit": "npm run test:unit --workspace=client",
+    "test:integration": "npm run test:integration --workspace=client",
+    "test:e2e": "npm run test:e2e --workspace=client"
+  }
+}

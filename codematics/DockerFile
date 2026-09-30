@@ -1,7 +1,0 @@
-FROM python:3
-WORKDIR /var/www/proace
-RUN pip3 install pipenv
-ADD Pipfile /var/www/proace
-ADD Pipfile.lock /var/www/proace
-RUN python3 -m pipenv install
-ADD . /var/www/proace

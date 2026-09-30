@@ -1,0 +1,173 @@
+name: CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  pull_request:
+    branches:
+      - main
+      - master
+      - develop
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  DJANGO_SETTINGS_MODULE: codematics.test_settings
+  SECRET_KEY: ci-only-not-for-production
+  SQLITE_DATABASE_PATH: ${{ github.workspace }}/server/main.sqlite3
+  SQLITE_TEST_DATABASE_PATH: ${{ github.workspace }}/server/test.sqlite3
+  PIPENV_VENV_IN_PROJECT: "1"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Pipenv
+        run: python -m pip install --upgrade pip pipenv
+
+      - name: Cache virtual environment
+        uses: actions/cache@v4
+        with:
+          path: server/.venv
+          key: ${{ runner.os }}-pipenv-${{ env.PYTHON_VERSION }}-${{ hashFiles('server/Pipfile') }}
+          restore-keys: |
+            ${{ runner.os }}-pipenv-${{ env.PYTHON_VERSION }}-
+
+      - name: Install dependencies
+        run: pipenv install --dev --skip-lock
+
+      - name: Django system check
+        run: pipenv run python manage.py check --settings=codematics.test_settings
+
+      - name: Run tests with coverage
+        run: pipenv run coverage run -m pytest --verbose
+
+      - name: Coverage report
+        run: pipenv run coverage report --show-missing
+
+      - name: Storefront API integration tests
+        run: pipenv run python manage.py test storefront --settings=codematics.storefront_settings --noinput
+
+  frontend:
+    name: Next.js Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+
+  security:
+    name: Security and Vulnerability Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install scanners and app dependencies
+        run: |
+          python -m pip install --upgrade pip pipenv bandit pip-audit
+          pipenv install --dev --skip-lock
+
+      - name: Audit installed Python packages
+        run: pipenv run pip-audit
+
+      - name: Static security scan
+        run: bandit -r . -x "./.venv,./*/migrations,./*/tests.py" --severity-level medium
+
+      - name: Secret scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Filesystem vulnerability scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
+          format: table
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python,javascript-typescript
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs:
+      - test
+      - security
+      - codeql
+      - frontend
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    env:
+      DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+
+    steps:
+      - name: No deployment target configured
+        if: env.DEPLOY_WEBHOOK_URL == ''
+        run: echo "Set DEPLOY_WEBHOOK_URL to enable deployment."
+
+      - name: Trigger deployment webhook
+        if: env.DEPLOY_WEBHOOK_URL != ''
+        run: |
+          curl --fail --show-error --silent \
+            --request POST \
+            --header "Content-Type: application/json" \
+            --data "{\"sha\":\"${GITHUB_SHA}\",\"ref\":\"${GITHUB_REF_NAME}\"}" \
+            "$DEPLOY_WEBHOOK_URL"

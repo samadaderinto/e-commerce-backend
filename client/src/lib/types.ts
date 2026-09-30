@@ -1,0 +1,10 @@
+export type Product = { id: number; title: string; description: string; category: string; brand: string; price: string; sale_price: string; discount: number; available: number; average_rating: string; rating_count: number; store: number; store_name: string; store_username: string; image: string; images: string[]; tags: string[]; created: string };
+export type User = { id: number; email: string; first_name: string; last_name: string; phone1: string };
+export type Address = { id: number; address: string; city: string; state: string; country: string; zip: string; is_default: boolean };
+export type CartLine = { product: Product; quantity: number; total: string; purchasable: boolean };
+export type Cart = { id?: number; items: CartLine[]; subtotal: string; shipping: string; total: string };
+export type Order = { id: number; reference: string; status: string; created: string; total: string; subtotal: string; payment_type: string; items: { product: number; title: string; image: string; quantity: number; unit_price: string }[]; address: Address };
+export type Store = { id: number; name: string; username: string; status: string };
+export type MerchantProduct = { id: number; title: string; description: string; category: string; price: string; available: number; discount: number; visibility: boolean; brand: string; image_url: string; images: {id: number; image: string}[]; tags: string[]; sales: number };
+export type Page<T> = { count: number; results: T[]; next?: string | null; previous?: string | null; pages?: number; page?: number };
+export type Dashboard = { inventory: { total: number; published: number; drafts: number; units: number; low_stock: number; out_of_stock: number }; orders: { total: number; by_status: {status: string; count: number}[] }; sales: { units: number; estimated_item_value: string }; orders_by_day: {date: string; count: number}[]; top_products: {product_id: number; product__title: string; units: number}[]; low_stock_products: { id: number; title: string; available: number}[] };

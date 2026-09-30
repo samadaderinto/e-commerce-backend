@@ -1,0 +1,14 @@
+node_modules/
+.next/
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+.env
+.env.local
+*.sqlite3
+*.sqlite3-*
+server/media/
+client/test-results/
+client/playwright-report/
+artifacts/

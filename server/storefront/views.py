@@ -1,0 +1,423 @@
+from decimal import Decimal
+
+from django.conf import settings
+from django.contrib.auth import authenticate
+from django.contrib.auth.password_validation import validate_password
+from django.contrib.auth.tokens import default_token_generator
+from django.core import signing
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.core.mail import send_mail
+from django.db import transaction
+from django.db.models import Count, Q
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
+
+from cart.models import Cart, CartItem
+from core.models import Address, Review, User, Wishlist
+from payment.models import Coupon, DeliveryInfo, Order
+from product.models import Product
+from store.views import invalidate_catalog
+from store.models import Store
+from .serializers import (
+    AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
+    CartSerializer, CatalogPageSerializer,
+    CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
+    OrderSerializer, ProductIdRequestSerializer, RegisterSerializer,
+    ReviewSerializer, UserSerializer, unit_price,
+)
+
+
+def catalog():
+    return Product.objects.filter(
+        visibility=True,
+        store__status=Store.STATUS_ACTIVE,
+        store__verified_at__isnull=False,
+    ).select_related('store').prefetch_related('images', 'tags').annotate(rating_count=Count('review', distinct=True))
+
+
+def tokens(user):
+    refresh = RefreshToken.for_user(user)
+    return {'access': str(refresh.access_token), 'refresh': str(refresh), 'user': UserSerializer(user).data}
+
+
+class AuthView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_scope = 'auth'
+
+    @extend_schema(
+        request=AuthRequestSerializer,
+        responses={
+            200: OpenApiTypes.OBJECT,
+            201: OpenApiTypes.OBJECT,
+            204: OpenApiResponse(description='Logged out successfully.'),
+            400: OpenApiTypes.OBJECT,
+            401: OpenApiTypes.OBJECT,
+        },
+        auth=[],
+        description=(
+            'Submit an action-specific payload. Supported actions: login, register, verify, '
+            'forgot, reset, refresh, and logout. Successful login returns access and refresh '
+            'JWTs plus the user; other actions return a detail message or refreshed token.'
+        ),
+    )
+    def post(self, request, action):
+        data = request.data
+        if action == 'login':
+            email = str(data.get('email', '')).strip().lower()
+            password = data.get('password', '')
+            if not isinstance(password, str) or len(password) > 128:
+                raise ValidationError({'detail': 'Invalid email or password.'})
+            user = authenticate(request, email=email, password=password)
+            if user is None:
+                return Response({'detail': 'Invalid email or password. Verify your email if you just registered.'}, status=401)
+            return Response(tokens(user))
+        if action == 'register':
+            payload = {**data, 'email': str(data.get('email', '')).strip().lower()}
+            serializer = RegisterSerializer(data=payload)
+            try:
+                serializer.is_valid(raise_exception=True)
+            except DjangoValidationError as error:
+                raise ValidationError({'password': error.messages})
+            user = User.objects.create_user(**serializer.validated_data, is_active=False)
+            token = signing.dumps({'user': user.pk}, salt='proace-verify')
+            url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
+            send_mail('Verify your Proace account', f'Welcome to Proace. Verify your email: {url}', settings.DEFAULT_FROM_EMAIL, [user.email])
+            return Response({'detail': 'Check your email to activate your account.'}, status=201)
+        if action == 'verify':
+            try:
+                payload = signing.loads(data.get('token', ''), salt='proace-verify', max_age=86400)
+                user = User.objects.get(pk=payload['user'])
+            except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError):
+                raise ValidationError({'detail': 'This verification link is invalid or expired.'})
+            user.is_active = True
+            user.save(update_fields=['is_active'])
+            return Response({'detail': 'Email verified. You can now sign in.'})
+        if action == 'forgot':
+            email = serializers.EmailField().run_validation(data.get('email'))
+            user = User.objects.filter(email__iexact=email, is_active=True).first()
+            if user:
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                token = default_token_generator.make_token(user)
+                url = f'{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}'
+                send_mail('Reset your Proace password', f'Reset your password: {url}', settings.DEFAULT_FROM_EMAIL, [user.email])
+            return Response({'detail': 'If an active account exists, a reset link has been sent.'})
+        if action == 'reset':
+            try:
+                user = User.objects.get(pk=force_str(urlsafe_base64_decode(data.get('uid', ''))))
+            except (ValueError, TypeError, UnicodeDecodeError, User.DoesNotExist):
+                raise ValidationError({'detail': 'Invalid reset link.'})
+            if not default_token_generator.check_token(user, data.get('token', '')):
+                raise ValidationError({'detail': 'This reset link is invalid or expired.'})
+            password = serializers.CharField(min_length=8, max_length=128).run_validation(data.get('password'))
+            try:
+                validate_password(password, user)
+            except DjangoValidationError as error:
+                raise ValidationError({'password': error.messages})
+            user.set_password(password)
+            user.save(update_fields=['password'])
+            from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+            for token in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=token)
+            return Response({'detail': 'Password updated. Sign in with your new password.'})
+        if action == 'refresh':
+            serializer = TokenRefreshSerializer(data=data)
+            serializer.is_valid(raise_exception=True)
+            return Response(serializer.validated_data)
+        if action == 'logout':
+            try:
+                RefreshToken(data.get('refresh', '')).blacklist()
+            except Exception:
+                pass
+            return Response(status=204)
+        return Response(status=404)
+
+
+class MeView(APIView):
+    @extend_schema(responses=UserSerializer)
+    def get(self, request):
+        return Response(UserSerializer(request.user).data)
+
+    @extend_schema(request=UserSerializer, responses=UserSerializer)
+    def patch(self, request):
+        serializer = UserSerializer(request.user, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class ProductsView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        operation_id='storefront_products_list',
+        parameters=[CatalogQuerySerializer],
+        responses=CatalogPageSerializer,
+        auth=[],
+        description='Returns a page of active-store products. Each page contains at most 24 results.',
+    )
+    def get(self, request):
+        products = catalog()
+        params = request.query_params
+        if params.get('search'):
+            products = products.filter(Q(title__icontains=params['search']) | Q(brand__icontains=params['search']) | Q(description__icontains=params['search']))
+        if params.get('category'):
+            products = products.filter(category=params['category'])
+        if params.get('store'):
+            store = serializers.IntegerField(min_value=1).run_validation(params['store'])
+            products = products.filter(store_id=store)
+        if params.get('deals') == 'true':
+            products = products.filter(discount__gt=0)
+        for field, lookup in [('min_price', 'price__gte'), ('max_price', 'price__lte')]:
+            if params.get(field):
+                value = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0).run_validation(params[field])
+                products = products.filter(**{lookup: value})
+        ordering = params.get('ordering', '-created')
+        if ordering not in ['-created', 'price', '-price', '-average_rating', '-sales', '-discount']:
+            ordering = '-created'
+        page = serializers.IntegerField(min_value=1, default=1).run_validation(params.get('page', 1))
+        page_size = 24
+        count = products.count()
+        products = products.order_by(ordering, '-pk')[(page - 1) * page_size:page * page_size]
+        return Response({'count': count, 'page': page, 'pages': max(1, (count + page_size - 1) // page_size), 'results': CatalogSerializer(products, many=True, context={'request': request}).data})
+
+
+class ProductDetailView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(operation_id='storefront_product_retrieve', responses=CatalogSerializer, auth=[])
+    def get(self, request, pk):
+        product = get_object_or_404(catalog(), pk=pk)
+        return Response(CatalogSerializer(product, context={'request': request}).data)
+
+
+class ReviewsView(APIView):
+    def get_permissions(self):
+        return [AllowAny()] if self.request.method == 'GET' else super().get_permissions()
+
+    @extend_schema(responses=ReviewSerializer(many=True), auth=[])
+    def get(self, request, pk):
+        product = get_object_or_404(catalog(), pk=pk)
+        return Response(ReviewSerializer(Review.objects.filter(product=product).select_related('user')[:50], many=True).data)
+
+    @extend_schema(request=ReviewSerializer, responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT})
+    def post(self, request, pk):
+        product = get_object_or_404(catalog(), pk=pk)
+        instance = Review.objects.filter(user=request.user, product=product).first()
+        serializer = ReviewSerializer(instance, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        review = serializer.save(user=request.user, product=product)
+        review.set_avg_rating()
+        invalidate_catalog(product)
+        return Response(serializer.data, status=201)
+
+
+class WishlistView(APIView):
+    @extend_schema(responses=CatalogSerializer(many=True))
+    def get(self, request):
+        products = catalog().filter(wishlist__user=request.user, wishlist__liked=True)
+        return Response(CatalogSerializer(products, many=True, context={'request': request}).data)
+
+    @extend_schema(request=ProductIdRequestSerializer, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request):
+        product_id = serializers.IntegerField(min_value=1).run_validation(request.data.get('product'))
+        product = get_object_or_404(catalog(), pk=product_id)
+        Wishlist.objects.update_or_create(user=request.user, product=product, defaults={'liked': True})
+        return Response({'saved': True})
+
+    @extend_schema(
+        parameters=[OpenApiParameter('product', OpenApiTypes.INT, OpenApiParameter.QUERY, required=True)],
+        responses={204: OpenApiResponse(description='Item removed.')},
+    )
+    def delete(self, request):
+        product_id = serializers.IntegerField(min_value=1).run_validation(
+            request.query_params.get('product', request.data.get('product'))
+        )
+        Wishlist.objects.filter(user=request.user, product_id=product_id).delete()
+        return Response(status=204)
+
+
+class AddressesView(APIView):
+    @extend_schema(responses=AddressSerializer(many=True))
+    def get(self, request):
+        return Response(AddressSerializer(Address.objects.filter(user=request.user).order_by('-is_default', '-pk'), many=True).data)
+
+    @transaction.atomic
+    @extend_schema(request=AddressSerializer, responses={201: AddressSerializer})
+    def post(self, request):
+        User.objects.select_for_update().get(pk=request.user.pk)
+        serializer = AddressSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        if serializer.validated_data.get('is_default', True):
+            Address.objects.filter(user=request.user).update(is_default=False)
+        serializer.save(user=request.user)
+        return Response(serializer.data, status=201)
+
+    @extend_schema(
+        parameters=[OpenApiParameter('id', OpenApiTypes.INT, OpenApiParameter.QUERY, required=True)],
+        responses={204: OpenApiResponse(description='Address deleted.')},
+    )
+    def delete(self, request):
+        pk = serializers.IntegerField(min_value=1).run_validation(
+            request.query_params.get('id', request.data.get('id'))
+        )
+        get_object_or_404(Address, pk=pk, user=request.user).delete()
+        return Response(status=204)
+
+
+def active_cart(user):
+    cart = Cart.objects.filter(user=user, ordered=False).order_by('pk').first()
+    return cart if cart else Cart.objects.create(user=user)
+
+
+def cart_data(cart, request):
+    items = cart.cart_items.select_related('product__store').prefetch_related('product__images', 'product__tags')
+    rows = [{'product': CatalogSerializer(item.product, context={'request': request}).data,
+             'quantity': item.quantity, 'total': str(unit_price(item.product) * item.quantity),
+             'purchasable': item.product.visibility and item.product.store.status == Store.STATUS_ACTIVE
+             and item.product.store.verified_at is not None and item.quantity <= item.product.available} for item in items]
+    subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
+    shipping = Decimal('0') if subtotal >= 100000 or not rows else Decimal('2500')
+    return {'id': cart.pk, 'items': rows, 'subtotal': str(subtotal), 'shipping': str(shipping), 'total': str(subtotal + shipping)}
+
+
+class CartView(APIView):
+    @extend_schema(responses=CartSerializer)
+    @transaction.atomic
+    def get(self, request):
+        User.objects.select_for_update().get(pk=request.user.pk)
+        return Response(cart_data(active_cart(request.user), request))
+
+    @extend_schema(
+        request=CartMutationRequestSerializer,
+        responses={200: CartSerializer, 400: OpenApiTypes.OBJECT},
+    )
+    @transaction.atomic
+    def mutate(self, request):
+        User.objects.select_for_update().get(pk=request.user.pk)
+        cart = active_cart(request.user)
+        product_id = request.query_params.get('product', request.data.get('product')) \
+            if request.method == 'DELETE' else request.data.get('product')
+        pk = serializers.IntegerField(min_value=1).run_validation(product_id)
+        if request.method == 'DELETE':
+            cart.cart_items.filter(product_id=pk).delete()
+        else:
+            quantity = serializers.IntegerField(min_value=1, max_value=1000).run_validation(request.data.get('quantity', 1))
+            product = get_object_or_404(catalog(), pk=pk)
+            item = cart.cart_items.filter(product=product).first()
+            if request.method == 'POST' and item:
+                quantity += item.quantity
+            if quantity > product.available:
+                raise ValidationError({'detail': f'Only {product.available} units of {product.title} are available.'})
+            if item:
+                item.quantity = quantity
+                item.save(update_fields=['quantity', 'updated'])
+            else:
+                CartItem.objects.create(cart=cart, product=product, quantity=quantity)
+        from cart.cache import invalidate_cart_cache
+        transaction.on_commit(lambda: invalidate_cart_cache(cart))
+        return Response(cart_data(cart, request))
+
+    post = mutate
+    patch = mutate
+
+    @extend_schema(
+        parameters=[OpenApiParameter('product', OpenApiTypes.INT, OpenApiParameter.QUERY, required=True)],
+        responses={200: CartSerializer, 400: OpenApiTypes.OBJECT},
+    )
+    def delete(self, request):
+        return self.mutate(request)
+
+
+def order_data(order):
+    return {'id': order.pk, 'reference': order.orderId, 'status': order.status,
+            'created': order.created, 'total': str(order.total), 'subtotal': str(order.subtotal),
+            'payment_type': order.payment_type, 'items': order.items_snapshot,
+            'address': order.address_snapshot}
+
+
+class OrdersView(APIView):
+    @extend_schema(responses=OrderSerializer(many=True))
+    def get(self, request):
+        orders = Order.objects.filter(user=request.user).order_by('-created')
+        return Response([order_data(order) for order in orders[:100]])
+
+
+class OrderDetailView(APIView):
+    @extend_schema(responses=OrderSerializer)
+    def get(self, request, pk):
+        orders = Order.objects.filter(user=request.user).order_by('-created')
+        return Response(order_data(get_object_or_404(orders, pk=pk)))
+
+
+class CheckoutView(APIView):
+    @extend_schema(
+        request=CheckoutRequestSerializer,
+        responses={201: OrderSerializer, 200: OrderSerializer, 400: OpenApiTypes.OBJECT},
+        description='Places an order from the active cart. Reusing checkout_key returns the original order.',
+    )
+    @transaction.atomic
+    def post(self, request):
+        User.objects.select_for_update().get(pk=request.user.pk)
+        key = serializers.UUIDField().run_validation(request.data.get('checkout_key'))
+        existing = Order.objects.filter(checkout_key=key).first()
+        if existing:
+            if existing.user_id != request.user.pk:
+                raise ValidationError({'detail': 'Invalid checkout reference.'})
+            return Response(order_data(existing))
+        address_id = serializers.IntegerField(min_value=1).run_validation(request.data.get('address'))
+        address = get_object_or_404(Address, pk=address_id, user=request.user)
+        if request.data.get('payment_type', 'cash_on_delivery') != 'cash_on_delivery':
+            raise ValidationError({'detail': 'Only cash on delivery is currently available.'})
+        cart = active_cart(request.user)
+        items = list(cart.cart_items.order_by('product_id'))
+        if not items:
+            raise ValidationError({'detail': 'Your cart is empty.'})
+        snapshots = []
+        for item in items:
+            product = Product.objects.select_for_update().get(pk=item.product_id)
+            if (
+                not product.visibility
+                or product.store.status != Store.STATUS_ACTIVE
+                or product.store.verified_at is None
+                or product.available < item.quantity
+            ):
+                raise ValidationError({'detail': f'{product.title} is unavailable in the requested quantity.'})
+            snapshots.append({'product': product.pk, 'store': product.store_id, 'title': product.title,
+                              'image': product.image_url, 'quantity': item.quantity, 'unit_price': str(unit_price(product))})
+            product.available -= item.quantity
+            product.sales += item.quantity
+            product.save(update_fields=['available', 'sales', 'updated'])
+            transaction.on_commit(lambda product=product: invalidate_catalog(product))
+        subtotal = sum((Decimal(row['unit_price']) * row['quantity'] for row in snapshots), Decimal('0'))
+        if subtotal > Decimal('99999999.99'):
+            raise ValidationError({'detail': 'Order value exceeds the supported maximum.'})
+        discount = Decimal('0')
+        code = str(request.data.get('coupon', '')).strip()
+        if code:
+            coupon = Coupon.objects.select_for_update().filter(code__iexact=code, active=True, valid_from__lte=timezone.now(), valid_to__gte=timezone.now()).first()
+            if not coupon or not coupon.can_use():
+                raise ValidationError({'coupon': 'This coupon is invalid or has expired.'})
+            discount = (subtotal * coupon.discount / 100).quantize(Decimal('.01'))
+            coupon.used()
+        shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
+        delivery = DeliveryInfo.objects.create(user=request.user, address=address, method='home delivery', delivery_type='priority', total=int(shipping))
+        order = Order.objects.create(user=request.user, cart=cart, delivery=delivery,
+                                     status='confirmed', ordered=True, coupon_code=code,
+                                     total=subtotal - discount + shipping, subtotal=subtotal,
+                                     payment_type='cash_on_delivery', checkout_key=key,
+                                     items_snapshot=snapshots, address_snapshot=AddressSerializer(address).data)
+        cart.ordered = True
+        cart.save(update_fields=['ordered', 'updated'])
+        return Response(order_data(order), status=201)
