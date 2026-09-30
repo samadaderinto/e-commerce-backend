@@ -73,6 +73,8 @@ jobs:
   frontend:
     name: Next.js Build
     runs-on: ubuntu-latest
+    env:
+      API_URL: ${{ secrets.CI_API_URL || 'http://127.0.0.1:8000/api/v1' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -155,19 +157,105 @@ jobs:
       - codeql
       - frontend
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    environment: production
     env:
-      DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+      RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+      API_URL: ${{ secrets.PROD_API_URL }}
+      DJANGO_SETTINGS_MODULE: codematics.storefront_settings
+      DJANGO_DEBUG: "false"
+      SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
+      ALLOWED_HOSTS: ${{ secrets.PROD_ALLOWED_HOSTS }}
+      FRONTEND_URL: ${{ secrets.PROD_FRONTEND_URL }}
+      DATABASE_ENGINE: postgres
+      POSTGRES_HOST: ${{ secrets.PROD_POSTGRES_HOST }}
+      POSTGRES_PORT: ${{ secrets.PROD_POSTGRES_PORT }}
+      POSTGRES_DB: ${{ secrets.PROD_POSTGRES_DB }}
+      POSTGRES_USER: ${{ secrets.PROD_POSTGRES_USER }}
+      POSTGRES_PASSWORD: ${{ secrets.PROD_POSTGRES_PASSWORD }}
+      DB_REQUIRE_SSL: ${{ secrets.PROD_DB_REQUIRE_SSL || 'true' }}
+      CACHE_URL: ${{ secrets.PROD_CACHE_URL }}
+      OBSERVABILITY_TOKEN: ${{ secrets.PROD_OBSERVABILITY_TOKEN }}
+      OBJECT_STORAGE_ENABLED: ${{ secrets.PROD_OBJECT_STORAGE_ENABLED || 'true' }}
+      MINIO_ENDPOINT_URL: ${{ secrets.PROD_S3_ENDPOINT_URL }}
+      MINIO_PUBLIC_URL: ${{ secrets.PROD_S3_PUBLIC_URL }}
+      MINIO_BUCKET_NAME: ${{ secrets.PROD_S3_BUCKET_NAME }}
+      MINIO_REGION: ${{ secrets.PROD_S3_REGION }}
+      MINIO_ACCESS_KEY: ${{ secrets.PROD_S3_ACCESS_KEY }}
+      MINIO_SECRET_KEY: ${{ secrets.PROD_S3_SECRET_KEY }}
+      OTEL_TRACING_ENABLED: ${{ secrets.PROD_OTEL_TRACING_ENABLED || 'true' }}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ secrets.PROD_OTEL_EXPORTER_OTLP_ENDPOINT }}
+      OTEL_SERVICE_NAME: ${{ secrets.PROD_OTEL_SERVICE_NAME || 'commerce-api' }}
+      OTEL_TRACES_SAMPLER_ARG: ${{ secrets.PROD_OTEL_TRACES_SAMPLER_ARG || '0.05' }}
+      ELASTICSEARCH_ENABLED: ${{ secrets.PROD_ELASTICSEARCH_ENABLED || 'true' }}
+      ELASTICSEARCH_URL: ${{ secrets.PROD_ELASTICSEARCH_URL }}
+      ELASTICSEARCH_PRODUCTS_INDEX: ${{ secrets.PROD_ELASTICSEARCH_PRODUCTS_INDEX || 'commerce-products' }}
+      KAFKA_BOOTSTRAP_SERVERS: ${{ secrets.PROD_KAFKA_BOOTSTRAP_SERVERS }}
+      KAFKA_LOGGING_ENABLED: ${{ secrets.PROD_KAFKA_LOGGING_ENABLED || 'false' }}
+      KAFKA_LOG_TOPIC: ${{ secrets.PROD_KAFKA_LOG_TOPIC || 'commerce.logs' }}
+      CELERY_BROKER_URL: ${{ secrets.PROD_CELERY_BROKER_URL }}
+      EMAIL_HOST: ${{ secrets.PROD_EMAIL_HOST }}
+      EMAIL_HOST_USER: ${{ secrets.PROD_EMAIL_HOST_USER }}
+      EMAIL_HOST_PASSWORD: ${{ secrets.PROD_EMAIL_HOST_PASSWORD }}
+      EMAIL_PORT: ${{ secrets.PROD_EMAIL_PORT || '587' }}
+      EMAIL_USE_TLS: ${{ secrets.PROD_EMAIL_USE_TLS || 'true' }}
+      DEFAULT_FROM_EMAIL: ${{ secrets.PROD_DEFAULT_FROM_EMAIL }}
 
     steps:
-      - name: No deployment target configured
-        if: env.DEPLOY_WEBHOOK_URL == ''
-        run: echo "Set DEPLOY_WEBHOOK_URL to enable deployment."
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Trigger deployment webhook
-        if: env.DEPLOY_WEBHOOK_URL != ''
+      - name: Validate Render deployment secrets
+        run: |
+          required=(
+            RENDER_API_KEY
+            RENDER_SERVICE_ID
+            RENDER_DEPLOY_HOOK_URL
+          )
+          missing=0
+          for name in "${required[@]}"; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub Actions secret for $name"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Validate production app secrets
+        run: |
+          required=(
+            API_URL
+            SECRET_KEY
+            ALLOWED_HOSTS
+            FRONTEND_URL
+            POSTGRES_HOST
+            POSTGRES_DB
+            POSTGRES_USER
+            POSTGRES_PASSWORD
+            CACHE_URL
+            OBSERVABILITY_TOKEN
+            MINIO_BUCKET_NAME
+            MINIO_ACCESS_KEY
+            MINIO_SECRET_KEY
+          )
+          if [ "${ELASTICSEARCH_ENABLED}" != "false" ]; then
+            required+=(ELASTICSEARCH_URL)
+          fi
+          missing=0
+          for name in "${required[@]}"; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub Actions secret for $name"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Sync Render environment variables
+        run: python .github/scripts/render-sync-env.py
+
+      - name: Trigger Render deploy hook
         run: |
           curl --fail --show-error --silent \
             --request POST \
-            --header "Content-Type: application/json" \
-            --data "{\"sha\":\"${GITHUB_SHA}\",\"ref\":\"${GITHUB_REF_NAME}\"}" \
-            "$DEPLOY_WEBHOOK_URL"
+            "$RENDER_DEPLOY_HOOK_URL"

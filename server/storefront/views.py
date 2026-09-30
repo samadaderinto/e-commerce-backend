@@ -34,6 +34,7 @@ from core.models import Address, Review, User, Wishlist
 from payment.models import Coupon, CouponRedemption, DeliveryInfo, Order
 from payment.couponing import calculate_coupon_discount
 from product.models import Product
+from product.search import search_product_ids
 from product.policies import is_own_store, validate_purchase
 from store.views import invalidate_catalog
 from store.models import Store
@@ -181,26 +182,55 @@ class ProductsView(APIView):
     def get(self, request):
         products = catalog()
         params = request.query_params
-        if params.get('search'):
-            products = products.filter(Q(title__icontains=params['search']) | Q(brand__icontains=params['search']) | Q(description__icontains=params['search']))
+        search = params.get('search')
         if params.get('category'):
             products = products.filter(category=params['category'])
         if params.get('store'):
             store = serializers.IntegerField(min_value=1).run_validation(params['store'])
             products = products.filter(store_id=store)
+        else:
+            store = None
         if params.get('deals') == 'true':
             products = products.filter(discount__gt=0)
         for field, lookup in [('min_price', 'price__gte'), ('max_price', 'price__lte')]:
             if params.get(field):
                 value = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0).run_validation(params[field])
                 products = products.filter(**{lookup: value})
+            else:
+                value = None
+            if field == 'min_price':
+                min_price = value
+            else:
+                max_price = value
         ordering = params.get('ordering', '-created')
         if ordering not in ['-created', 'price', '-price', '-average_rating', '-sales', '-discount']:
             ordering = '-created'
         page = serializers.IntegerField(min_value=1, default=1).run_validation(params.get('page', 1))
         page_size = 24
+        offset = (page - 1) * page_size
+        if search:
+            search_results = search_product_ids(
+                search,
+                filters={
+                    'category': params.get('category') or None,
+                    'store_id': store,
+                    'deals': params.get('deals') == 'true',
+                    'min_price': min_price,
+                    'max_price': max_price,
+                },
+                ordering=ordering,
+                offset=offset,
+                limit=page_size,
+            )
+            if search_results is not None:
+                ids = search_results['ids']
+                count = search_results['count']
+                products_by_id = products.filter(pk__in=ids).in_bulk(ids)
+                products = [products_by_id[pk] for pk in ids if pk in products_by_id]
+                return Response({'count': count, 'page': page, 'pages': max(1, (count + page_size - 1) // page_size), 'results': CatalogSerializer(products, many=True, context={'request': request}).data})
+            products = products.filter(Q(title__icontains=search) | Q(brand__icontains=search) | Q(description__icontains=search))
         count = products.count()
-        products = products.order_by(ordering, '-pk')[(page - 1) * page_size:page * page_size]
+        products = products.order_by(ordering, '-pk')[offset:page * page_size]
         return Response({'count': count, 'page': page, 'pages': max(1, (count + page_size - 1) // page_size), 'results': CatalogSerializer(products, many=True, context={'request': request}).data})
 
 

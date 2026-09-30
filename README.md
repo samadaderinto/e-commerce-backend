@@ -14,6 +14,20 @@ package inside it is still named `codematics`. Existing backend work was moved,
 not replaced. The runnable commerce configuration is
 `codematics.storefront_settings`; the legacy settings remain available separately.
 
+## Code Documentation
+
+Project documentation lives in [`docs/`](docs/README.md). Start there for the
+frontend, backend, infrastructure and observability code maps.
+
+When changing code, update the matching doc in the same pass:
+
+- frontend routes/components/API behavior: [`docs/frontend.md`](docs/frontend.md);
+- backend apps/models/serializers/views/auth/tests: [`docs/backend.md`](docs/backend.md);
+- Docker, Postgres, Redis, Kafka, Nginx, storage or deployment:
+  [`docs/infrastructure.md`](docs/infrastructure.md);
+- health, metrics, logs, traces, profiling, Grafana, Loki, Prometheus, Tempo or
+  Alloy: [`docs/observability.md`](docs/observability.md).
+
 ## Run Locally
 
 Requires Node.js 22 and Python 3.11 or newer.
@@ -37,31 +51,34 @@ npm run dev
 ```
 
 Open <http://127.0.0.1:3000>. The client defaults to
-`http://127.0.0.1:8000/api/v1`; override `API_URL` in `client/.env.local` when needed.
+`http://127.0.0.1:8000/api/v1`; override `API_URL` in `client/.env` when needed.
 Email verification and password-reset links print to the API terminal locally.
 Set `FRONTEND_URL=http://127.0.0.1:3000` to keep email links on that exact host.
 
 ## Run The Container Stack
 
-The container stack runs the Django API, official Redis cache, and the local
-monitoring tools. Local Compose uses the persistent `media-data` volume for
-uploads, so it does not require MinIO or another object-storage registry.
+The container stack runs the Django API, official Redis cache, official
+PostgreSQL database, Elasticsearch search engine, and the local monitoring tools.
+Local Compose uses the persistent `media-data` volume for uploads, so it does not
+require MinIO or another object-storage registry.
 
 From the repository root:
 
 ```sh
 cd server
 ../.venv/bin/python monitoring/init_local.py
-export OBSERVABILITY_TOKEN="$(tr -d '\n' < monitoring/secrets/metrics-token)"
-docker compose -f compose.yaml up --build -d api redis postgres
+docker compose -f compose.yaml up --build -d api redis postgres elasticsearch
 docker compose -f monitoring/compose.yaml up -d
+docker compose -f compose.yaml exec api python manage.py rebuild_product_index
 ```
 
 The API uses `redis://redis:6379/0` inside Compose. The API is available at
 <http://127.0.0.1:8000>, Redis is bound to `127.0.0.1:6379`, Grafana is at
 <http://127.0.0.1:3002>, and Prometheus is at <http://127.0.0.1:9090>. PostgreSQL
-is available at `127.0.0.1:5432` and persists in the `postgres-data` volume. The
-generated Grafana password is stored in `server/monitoring/.env`.
+is available at `127.0.0.1:5432`, Elasticsearch is at `127.0.0.1:9200`, and both
+persist in named Docker volumes. The Grafana password and metrics token live in
+`server/.env`. Log aggregation is part of this stack too: Alloy collects Docker
+container stdout and sends it to Loki, which is available in Grafana Explore.
 
 Check both stacks and follow their logs:
 
@@ -69,6 +86,13 @@ Check both stacks and follow their logs:
 docker compose -f compose.yaml ps
 docker compose -f monitoring/compose.yaml ps
 docker compose -f compose.yaml logs -f api redis
+```
+
+In Grafana, open Explore, select Loki, and query API logs with:
+
+```logql
+{service_name="api"}
+{service_name="api"} | json | level="ERROR"
 ```
 
 The API health endpoint is <http://127.0.0.1:8000/health/live/>. Stop the
@@ -86,11 +110,15 @@ queue-consumer work with:
 docker compose -f monitoring/compose.yaml --profile messaging up -d kafka rabbitmq
 ```
 
-For production, set `DJANGO_DEBUG=false`, replace all local secrets, use a
-managed PostgreSQL database and S3-compatible object storage, and run migrations
-as a release job before starting multiple API replicas. Full deployment details
-are in [`server/deployment.md`](server/deployment.md) and
+For production, set these values as GitHub Actions secrets or deployment-platform
+environment variables, not checked-in env files. Use a managed PostgreSQL database
+and S3-compatible object storage, and run migrations as a release job before
+starting multiple API replicas. Full deployment details are in [`server/deployment.md`](server/deployment.md) and
 [`server/monitoring/README.md`](server/monitoring/README.md).
+
+The GitHub Actions deploy job targets Render. It validates Render control secrets,
+syncs production secrets to the Render service environment, then triggers the
+Render deploy hook.
 
 ### Sample Accounts
 

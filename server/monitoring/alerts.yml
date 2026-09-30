@@ -26,9 +26,33 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: 'API p95 latency exceeds one second'
+      - alert: CommerceTailLatencyHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(commerce_http_duration_seconds_bucket[5m]))) > 2.5
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 'API p99 latency exceeds 2.5 seconds'
       - alert: CommerceHostDiskLow
         expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes < 0.1
         for: 10m
         labels: {severity: warning}
         annotations:
           summary: 'Less than 10% disk space remains on {{ $labels.instance }}'
+      - alert: CommerceElasticsearchExporterUnavailable
+        expr: up{service="elasticsearch"} == 0
+        for: 2m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Elasticsearch exporter is unreachable'
+      - alert: CommerceElasticsearchClusterRed
+        expr: elasticsearch_cluster_health_status{color="red"} == 1
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: 'Elasticsearch cluster health is red'
+      - alert: CommerceElasticsearchHeapHigh
+        expr: 100 * elasticsearch_jvm_memory_used_bytes{area="heap"} / elasticsearch_jvm_memory_max_bytes{area="heap"} > 85
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Elasticsearch JVM heap is above 85%'

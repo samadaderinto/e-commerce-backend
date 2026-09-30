@@ -10,13 +10,16 @@ For the current containerized setup, use the repository-level instructions in
 ```sh
 cd server
 ../.venv/bin/python monitoring/init_local.py
-export OBSERVABILITY_TOKEN="$(tr -d '\n' < monitoring/secrets/metrics-token)"
-docker compose -f compose.yaml up --build -d api redis postgres
+docker compose -f compose.yaml up --build -d api redis postgres elasticsearch
 docker compose -f monitoring/compose.yaml up -d
+docker compose -f compose.yaml exec api python manage.py rebuild_product_index
 ```
 
-This starts Django, the official Redis cache, Prometheus, Grafana, Tempo, Loki,
-and Alloy. Local media uses the `media-data` volume. See
+This starts Django, the official Redis cache, official PostgreSQL database,
+Elasticsearch, Prometheus, Grafana, Tempo, Loki, Alloy and the Elasticsearch
+exporter. Alloy collects Docker container stdout into Loki, so the API, Redis,
+Postgres, Elasticsearch and monitoring logs are searchable in Grafana Explore.
+Local media uses the `media-data` volume. See
 [`monitoring/README.md`](monitoring/README.md) for health checks, dashboards,
 profiling, logs, and production settings.
 

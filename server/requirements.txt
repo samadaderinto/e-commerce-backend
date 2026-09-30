@@ -18,3 +18,4 @@ psycopg[binary]>=3.2,<4
 kafka-python>=2.0,<3
 celery>=5.4,<6
 stripe>=12.0,<14
+elasticsearch>=8.15,<9

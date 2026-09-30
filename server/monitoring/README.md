@@ -9,9 +9,15 @@ cached.
 Each API request gets a request ID and sampled trace ID. JSON logs include the
 method, route template, status, duration, database query count and database time.
 SQL text, query parameters, authorization headers, cookies and bodies are excluded.
-Prometheus records request rate, status counts, p50/p95/p99 latency, in-flight work,
-and database workload. Route labels use Django route templates to avoid user-ID
-cardinality.
+Prometheus records request rate, status counts, p50/p95/p99 latency, in-flight
+work, database workload and Elasticsearch exporter metrics. Route labels use
+Django route templates to avoid user-ID cardinality.
+
+Monitoring, log aggregation and observability are related, but they are not the
+same thing. Monitoring answers "is it healthy and how loaded is it?" with metrics,
+dashboards and alerts. Log aggregation collects application and infrastructure
+logs into one searchable place. Observability is the bigger production practice:
+metrics, logs, traces, health checks and profiling together.
 
 ## Local
 
@@ -22,15 +28,21 @@ From the repository root:
 ```sh
 cd server
 ../.venv/bin/python monitoring/init_local.py
-export OBSERVABILITY_TOKEN="$(tr -d '\n' < monitoring/secrets/metrics-token)"
 docker compose -f compose.yaml up --build -d api redis postgres
 docker compose -f monitoring/compose.yaml up -d
 ```
 
 The API is at `http://127.0.0.1:8000`, Grafana is at
 `http://127.0.0.1:3002`, and Prometheus is at `http://127.0.0.1:9090`. The API
-uses the official Redis service at `redis://redis:6379/0`. The generated Grafana
-password is in `monitoring/.env`.
+uses the official Redis service at `redis://redis:6379/0`. Elasticsearch runs at
+`http://127.0.0.1:9200` in the app stack. The generated Grafana password and
+metrics token are in `server/.env`.
+
+Alloy collects Docker container stdout through the Docker socket and sends it to
+Loki. Django writes JSON logs to stdout, so request IDs, route templates, status
+codes, duration, database query counts and exception stack metadata are searchable
+without needing a side file. Kafka log publishing is optional and disabled unless
+`KAFKA_LOGGING_ENABLED=true`.
 
 Inspect or stop both stacks:
 
@@ -40,6 +52,29 @@ docker compose -f monitoring/compose.yaml ps
 docker compose -f compose.yaml logs -f api redis
 docker compose -f compose.yaml down
 docker compose -f monitoring/compose.yaml down
+```
+
+To restart only the log aggregation path after changing Alloy or Loki:
+
+```sh
+docker compose -f monitoring/compose.yaml up -d --force-recreate loki alloy grafana
+```
+
+In Grafana, go to Explore and choose the Loki data source. Useful local queries:
+
+```logql
+{service_name="api"}
+{service_name="api"} | json | level="ERROR"
+{service_name="api"} | json | status_code >= 500
+{service_name="postgres"}
+{service_name="redis"}
+{service_name="elasticsearch"}
+```
+
+For one request, copy the `request_id` from an API response header or log line:
+
+```logql
+{service_name="api"} | json | request_id="paste-request-id-here"
 ```
 
 The container API binds Gunicorn to `0.0.0.0:8000` internally so the host and
@@ -59,7 +94,6 @@ cd server
 ../.venv/bin/python monitoring/init_local.py
 DJANGO_SETTINGS_MODULE=codematics.storefront_settings \
 DJANGO_DEBUG=true \
-OBSERVABILITY_TOKEN=$(tr -d '\n' < monitoring/secrets/metrics-token) \
 PROMETHEUS_MULTIPROC_DIR=/tmp/commerce-prometheus \
 GUNICORN_BIND=0.0.0.0:8000 \
 ../.venv/bin/gunicorn -c gunicorn.conf.py codematics.wsgi:application
@@ -74,8 +108,8 @@ Start the local stack:
 docker compose -f monitoring/compose.yaml up -d
 ```
 
-Grafana is at `http://127.0.0.1:3002`, with the generated password in
-`monitoring/.env`; Prometheus is at `http://127.0.0.1:9090`. The dashboard is
+Grafana is at `http://127.0.0.1:3002`, with the password in `server/.env`;
+Prometheus is at `http://127.0.0.1:9090`. The dashboard is
 provisioned as “Commerce API Overview”. Set `OTEL_TRACING_ENABLED=true`,
 `OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318`, and
 `OTEL_TRACES_SAMPLER_ARG=1.0` for local traces.
@@ -88,7 +122,8 @@ when `DJANGO_DEBUG=false`.
 ## Production
 
 Run the API behind Nginx/Gunicorn. Set a strong secret and a separate metrics
-token in the secret manager. Set `DJANGO_DEBUG=false`,
+token through GitHub Actions secrets or the deployment platform secret manager.
+Set `DJANGO_DEBUG=false`,
 `LOCAL_PROFILING_ENABLED=false`, and use a small trace sampling ratio such as
 `OTEL_TRACES_SAMPLER_ARG=0.05`. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at a private
 collector or Tempo endpoint.
@@ -101,8 +136,12 @@ corresponding exporter is enabled. Configure Alertmanager or Grafana Alerting
 for paging.
 
 The local stack retains 15 days of metrics, 48 hours of traces and 7 days of logs.
-The included Loki/Tempo configuration is compact local infrastructure; use a
-durable, authenticated, highly available deployment for production.
+The included Loki/Tempo/Alloy configuration is compact local infrastructure. In
+production, collect container logs with the platform collector, Alloy, Fluent Bit
+or an equivalent agent, and send them to a durable, authenticated Loki-compatible
+or managed logging backend. Keep labels low-cardinality: service, environment,
+version and container are good labels; request IDs and user IDs should stay inside
+the JSON log body.
 
 Production profiling is low overhead: request histograms, in-flight requests,
 DB query counts/time, error rate and sampled traces. Use a log trace ID to open a

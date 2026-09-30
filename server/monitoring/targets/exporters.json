@@ -1,1 +1,6 @@
-[]
+[
+  {
+    "targets": ["elasticsearch-exporter:9114"],
+    "labels": {"service": "elasticsearch"}
+  }
+]

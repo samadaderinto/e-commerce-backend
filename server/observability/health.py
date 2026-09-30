@@ -43,4 +43,22 @@ def check_dependencies():
         results[f'cache:{alias}'] = {
             'status': status, 'backend': backend, 'duration_seconds': perf_counter() - started,
         }
+    if getattr(settings, 'ELASTICSEARCH_ENABLED', False):
+        started = perf_counter()
+        status = 'ok'
+        backend = settings.ELASTICSEARCH_URL
+        try:
+            from elasticsearch import Elasticsearch
+            es = Elasticsearch(
+                settings.ELASTICSEARCH_URL,
+                request_timeout=settings.ELASTICSEARCH_TIMEOUT,
+                max_retries=0,
+            )
+            if not es.ping():
+                status = 'error'
+        except Exception:
+            status = 'error'
+        results['search:elasticsearch'] = {
+            'status': status, 'backend': backend, 'duration_seconds': perf_counter() - started,
+        }
     return results

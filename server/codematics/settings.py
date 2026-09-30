@@ -270,6 +270,15 @@ else:
     }
 
 
+ELASTICSEARCH_ENABLED = os.environ.get("ELASTICSEARCH_ENABLED", "false").lower() == "true"
+ELASTICSEARCH_URL = os.environ.get("ELASTICSEARCH_URL", "http://127.0.0.1:9200")
+ELASTICSEARCH_INDEX_PREFIX = os.environ.get("ELASTICSEARCH_INDEX_PREFIX", "commerce")
+ELASTICSEARCH_PRODUCTS_INDEX = os.environ.get(
+    "ELASTICSEARCH_PRODUCTS_INDEX",
+    f"{ELASTICSEARCH_INDEX_PREFIX}-products",
+)
+ELASTICSEARCH_TIMEOUT = float(os.environ.get("ELASTICSEARCH_TIMEOUT", "2"))
+
 CORS_ALLOW_METHODS = [
     "DELETE",
     "GET",

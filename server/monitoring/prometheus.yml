@@ -7,7 +7,7 @@ scrape_configs:
     metrics_path: /metrics/
     scrape_timeout: 10s
     authorization:
-      credentials_file: /run/secrets/metrics-token
+      credentials: __OBSERVABILITY_TOKEN__
     file_sd_configs:
       - files: [/etc/prometheus/targets/app.json]
   - job_name: infrastructure
