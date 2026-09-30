@@ -41,6 +41,57 @@ Open <http://127.0.0.1:3000>. The client defaults to
 Email verification and password-reset links print to the API terminal locally.
 Set `FRONTEND_URL=http://127.0.0.1:3000` to keep email links on that exact host.
 
+## Run The Container Stack
+
+The container stack runs the Django API, official Redis cache, and the local
+monitoring tools. Local Compose uses the persistent `media-data` volume for
+uploads, so it does not require MinIO or another object-storage registry.
+
+From the repository root:
+
+```sh
+cd server
+../.venv/bin/python monitoring/init_local.py
+export OBSERVABILITY_TOKEN="$(tr -d '\n' < monitoring/secrets/metrics-token)"
+docker compose -f compose.yaml up --build -d api redis postgres
+docker compose -f monitoring/compose.yaml up -d
+```
+
+The API uses `redis://redis:6379/0` inside Compose. The API is available at
+<http://127.0.0.1:8000>, Redis is bound to `127.0.0.1:6379`, Grafana is at
+<http://127.0.0.1:3002>, and Prometheus is at <http://127.0.0.1:9090>. PostgreSQL
+is available at `127.0.0.1:5432` and persists in the `postgres-data` volume. The
+generated Grafana password is stored in `server/monitoring/.env`.
+
+Check both stacks and follow their logs:
+
+```sh
+docker compose -f compose.yaml ps
+docker compose -f monitoring/compose.yaml ps
+docker compose -f compose.yaml logs -f api redis
+```
+
+The API health endpoint is <http://127.0.0.1:8000/health/live/>. Stop the
+application and monitoring stacks with:
+
+```sh
+docker compose -f compose.yaml down
+docker compose -f monitoring/compose.yaml down
+```
+
+Kafka and RabbitMQ are optional and are disabled by default. Start them only for
+queue-consumer work with:
+
+```sh
+docker compose -f monitoring/compose.yaml --profile messaging up -d kafka rabbitmq
+```
+
+For production, set `DJANGO_DEBUG=false`, replace all local secrets, use a
+managed PostgreSQL database and S3-compatible object storage, and run migrations
+as a release job before starting multiple API replicas. Full deployment details
+are in [`server/deployment.md`](server/deployment.md) and
+[`server/monitoring/README.md`](server/monitoring/README.md).
+
 ### Sample Accounts
 
 The seed command creates these accounts only when absent:

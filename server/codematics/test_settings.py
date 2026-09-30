@@ -11,6 +11,7 @@ INSTALLED_APPS = [
     'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
     'rest_framework', 'taggit', 'core', 'store', 'product', 'cart', 'payment',
     'notification.apps.EventNotificationConfig',
+    'observability.apps.ObservabilityConfig',
     'affiliates',
     'django_cleanup.apps.CleanupConfig',
 ]
@@ -32,6 +33,7 @@ DATABASES = {
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+QUEUE_EMAILS = False
 DEFAULT_FROM_EMAIL = 'Proace <hello@proace.test>'
 FRONTEND_URL = 'http://testserver'
 REST_FRAMEWORK = {

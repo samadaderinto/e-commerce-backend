@@ -4,7 +4,8 @@ from django.urls import include, path
 from rest_framework.permissions import AllowAny
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from .views import (
-    AddressesView, AuthView, CartView, CheckoutView, MeView, OrderDetailView,
+    AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView,
+    WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, ReviewsView, WishlistView,
 )
 
@@ -22,10 +23,12 @@ urlpatterns = [
     path('api/v1/addresses/', AddressesView.as_view()),
     path('api/v1/cart/', CartView.as_view()),
     path('api/v1/checkout/', CheckoutView.as_view()),
+    path('api/v1/checkout/wallet-session/', WalletCheckoutSessionView.as_view()),
+    path('api/v1/checkout/wallet-confirm/', WalletCheckoutConfirmView.as_view()),
+    path('api/v1/admin/coupons/', CouponAdminView.as_view()),
     path('api/v1/orders/', OrdersView.as_view()),
     path('api/v1/orders/<int:pk>/', OrderDetailView.as_view()),
     path('api/v1/stores/', include('store.urls')),
-    path('api/v1/notifications/', include('notification.urls')),
 ]
 if settings.LOCAL_PROFILING_ENABLED:
     urlpatterns += [path('silk/', include('silk.urls', namespace='silk'))]

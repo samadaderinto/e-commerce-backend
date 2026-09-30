@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import timedelta
 import json
 from types import SimpleNamespace
 from uuid import uuid4
@@ -10,7 +11,7 @@ from rest_framework.test import APIClient
 
 from cart.models import CartItem
 from core.models import Address, User
-from payment.models import Order
+from payment.models import Coupon, CouponRedemption, Order
 from product.models import Product
 from store.models import Store
 from storefront.serializers import unit_price
@@ -217,6 +218,37 @@ class StorefrontTests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.available, 5)
         self.assertEqual(Order.objects.count(), 0)
+
+    def test_coupon_types_and_one_redemption_per_user(self):
+        coupon = Coupon.objects.create(code='TOTAL10', valid_to=timezone.now() + timedelta(days=1), discount=10, num_available=10, type=Coupon.ORDER_TOTAL)
+        self.add(2)
+        response = self.checkout(coupon='total10')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['total'], '17800.00')
+        self.assertEqual(CouponRedemption.objects.filter(coupon=coupon, user=self.buyer).count(), 1)
+        self.product.refresh_from_db()
+        self.product.available = 3
+        self.product.save()
+        self.add(1)
+        response = self.checkout(coupon='TOTAL10')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('already used', str(response.data))
+
+    def test_product_quantity_coupon_applies_only_to_qualifying_product(self):
+        coupon = Coupon.objects.create(code='BUY2', valid_to=timezone.now() + timedelta(days=1), discount=20, num_available=10, type=Coupon.PRODUCT_QUANTITY, product=self.product, minimum_quantity=2)
+        self.add(2)
+        response = self.checkout(coupon='BUY2')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['total'], '16100.00')
+
+    def test_admin_can_create_targeted_coupon_but_customer_cannot(self):
+        self.client.force_authenticate(self.buyer)
+        payload = {'code': 'ADMIN10', 'valid_to': (timezone.now() + timedelta(days=1)).isoformat(), 'discount': 10, 'num_available': 5, 'type': 'category', 'category': 'electronics', 'minimum_quantity': 1}
+        self.assertEqual(self.client.post('/api/v1/admin/coupons/', payload, format='json').status_code, 403)
+        self.buyer.is_staff = True
+        self.buyer.save(update_fields=['is_staff'])
+        response = self.client.post('/api/v1/admin/coupons/', payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
 
     def test_checkout_revalidates_stock(self):
         self.add()

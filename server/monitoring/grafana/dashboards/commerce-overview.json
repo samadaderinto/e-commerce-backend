@@ -1,0 +1,24 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {"title": "Request rate", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "targets": [{"expr": "sum(rate(commerce_http_requests_total[5m]))", "legendFormat": "requests/s"}]},
+    {"title": "Error rate", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "targets": [{"expr": "100 * sum(rate(commerce_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(commerce_http_requests_total[5m])), 0.001)", "legendFormat": "5xx %"}, {"expr": "100 * sum(rate(commerce_http_requests_total{status=~\"4..\"}[5m])) / clamp_min(sum(rate(commerce_http_requests_total[5m])), 0.001)", "legendFormat": "4xx %"}]},
+    {"title": "API latency", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "targets": [{"expr": "histogram_quantile(0.50, sum by (le) (rate(commerce_http_duration_seconds_bucket[5m])))", "legendFormat": "p50"}, {"expr": "histogram_quantile(0.95, sum by (le) (rate(commerce_http_duration_seconds_bucket[5m])))", "legendFormat": "p95"}, {"expr": "histogram_quantile(0.99, sum by (le) (rate(commerce_http_duration_seconds_bucket[5m])))", "legendFormat": "p99"}]},
+    {"title": "Requests in flight", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "targets": [{"expr": "commerce_http_inflight", "legendFormat": "in flight"}]},
+    {"title": "Database queries by route", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}, "targets": [{"expr": "topk(10, rate(commerce_db_queries_total[5m]))", "legendFormat": "{{route}}"}]},
+    {"title": "Database time by route", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}, "targets": [{"expr": "topk(10, rate(commerce_db_duration_seconds_sum[5m]))", "legendFormat": "{{route}}"}]},
+    {"title": "Dependency health", "type": "stat", "gridPos": {"h": 6, "w": 12, "x": 0, "y": 24}, "targets": [{"expr": "commerce_dependency_up", "legendFormat": "{{dependency}}"}], "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"0": {"text": "DOWN", "color": "red"}, "1": {"text": "UP", "color": "green"}}}]}}},
+    {"title": "Dependency check latency", "type": "timeseries", "gridPos": {"h": 6, "w": 12, "x": 12, "y": 24}, "targets": [{"expr": "commerce_dependency_check_seconds", "legendFormat": "{{dependency}}"}]}
+  ],
+  "refresh": "15s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["commerce", "production", "local"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "title": "Commerce API Overview",
+  "uid": "commerce-overview",
+  "version": 1
+}

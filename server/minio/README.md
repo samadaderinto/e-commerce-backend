@@ -1,31 +1,19 @@
-# MinIO image storage
+# Optional S3-compatible image storage
 
-From the repository root:
-
-```sh
-.venv/bin/python -m pip install -r server/requirements.txt
-docker compose --env-file server/.env -f server/compose.yaml up -d
-.venv/bin/python server/manage.py runserver --settings=codematics.storefront_settings
-```
-
-`server/.env` holds local settings and is ignored by Git. `server/.env.example`
-documents every MinIO setting. Replace the example passwords for deployment.
-The console is at http://127.0.0.1:9001; use the root credentials from `.env`.
-The initialization service creates the bucket and a separate application user
-whose read/write/delete permissions are limited to that bucket. Anonymous access
-allows image reads only. Do not put private documents in this image bucket.
+The default `server/compose.yaml` uses the persistent `media-data` volume for
+local uploads, so the application does not depend on a MinIO image registry.
+Use `OBJECT_STORAGE_ENABLED=true` only when connecting Django to an S3-compatible
+provider that you operate or trust. The MinIO configuration below is retained as
+legacy deployment guidance and is not started by the default Compose file.
 
 Uploads still pass through the existing authenticated API for validation; Django
-stores the contents in MinIO instead of `server/media`. Image URLs point directly
-to MinIO. Replacements, explicit deletes, and parent cascades remove old objects
-after the database transaction commits. Failed database transactions preserve old
-images. As with any separate object store, failed database saves after an upload
-can leave an unreferenced object; storage cleanup failures are logged by django-cleanup.
 
-Use `MINIO_ENDPOINT_URL=http://minio:9000` for Django inside the Compose network.
+For an external S3-compatible provider, set `OBJECT_STORAGE_ENABLED=true`,
+`MINIO_ENDPOINT_URL`, `MINIO_PUBLIC_URL`, `MINIO_BUCKET_NAME`,
+`MINIO_ACCESS_KEY`, and `MINIO_SECRET_KEY` in the deployment secret manager.
 `MINIO_PUBLIC_URL` must be reachable by browsers, without a bucket suffix. Use an
-HTTPS public endpoint for an HTTPS frontend. Docker stores objects in the named
-`minio-data` volume; `docker compose down` retains it, `down -v` removes it.
+HTTPS endpoint for an HTTPS frontend. Create the bucket and its read/write policy
+through the provider's supported tooling before starting the API.
 
 Existing files are not automatically migrated. To keep their database paths,
 copy the contents of `server/media/` into the bucket root (preserving `images/`).

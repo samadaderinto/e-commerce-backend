@@ -13,28 +13,34 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.conf import settings
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+try:
+    import stripe
+except ImportError:  # Wallet payments remain unavailable until the optional SDK is installed.
+    stripe = None
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from cart.models import Cart, CartItem
 from affiliates.services import reward_referral
 from core.models import Address, Review, User, Wishlist
-from payment.models import Coupon, DeliveryInfo, Order
+from payment.models import Coupon, CouponRedemption, DeliveryInfo, Order
+from payment.couponing import calculate_coupon_discount
 from product.models import Product
 from product.policies import is_own_store, validate_purchase
 from store.views import invalidate_catalog
 from store.models import Store
 from .serializers import (
     AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
-    CartSerializer, CatalogPageSerializer,
-    CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
+    CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
+    CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer, WalletCheckoutSerializer,
     OrderSerializer, ProductIdRequestSerializer, RegisterSerializer,
     ReviewSerializer, UserSerializer, unit_price,
 )
@@ -369,63 +375,155 @@ class OrderDetailView(APIView):
 
 
 class CheckoutView(APIView):
-    @extend_schema(
-        request=CheckoutRequestSerializer,
-        responses={201: OrderSerializer, 200: OrderSerializer, 400: OpenApiTypes.OBJECT},
-        description='Places an order from the active cart. Reusing checkout_key returns the original order.',
-    )
+    def _lines(self, request, lock=False):
+        cart = active_cart(request.user)
+        items = list(cart.cart_items.order_by('product_id'))
+        if not items:
+            raise ValidationError({'detail': 'Your cart is empty.'})
+        snapshots, coupon_lines = [], []
+        for item in items:
+            query = Product.objects.select_for_update() if lock else Product.objects
+            product = query.get(pk=item.product_id)
+            validate_purchase(product, request.user)
+            if (not product.visibility or product.store.status != Store.STATUS_ACTIVE
+                    or product.store.verified_at is None or product.available < item.quantity):
+                raise ValidationError({'detail': f'{product.title} is unavailable in the requested quantity.'})
+            price = unit_price(product)
+            snapshots.append({'product': product.pk, 'store': product.store_id, 'title': product.title,
+                              'image': product.image_url, 'quantity': item.quantity, 'unit_price': str(price)})
+            coupon_lines.append({'product': product, 'quantity': item.quantity, 'unit_price': price})
+        subtotal = sum((Decimal(row['unit_price']) * row['quantity'] for row in snapshots), Decimal('0'))
+        if subtotal > Decimal('99999999.99'):
+            raise ValidationError({'detail': 'Order value exceeds the supported maximum.'})
+        return cart, snapshots, coupon_lines, subtotal
+
+    def _complete(self, request, key, address, code, payment_type, stripe_session_id=None):
+        User.objects.select_for_update().get(pk=request.user.pk)
+        existing = Order.objects.filter(checkout_key=key).first()
+        if existing:
+            if existing.user_id != request.user.pk:
+                raise ValidationError({'detail': 'Invalid checkout reference.'})
+            return existing
+        cart, snapshots, coupon_lines, subtotal = self._lines(request, lock=True)
+        coupon = None
+        discount = Decimal('0')
+        if code:
+            coupon = Coupon.objects.select_for_update().filter(
+                code__iexact=code, active=True, valid_from__lte=timezone.now(), valid_to__gte=timezone.now()
+            ).first()
+            discount = calculate_coupon_discount(coupon, request.user, coupon_lines, subtotal)
+            coupon.used()
+        for item in cart.cart_items.order_by('product_id'):
+            product = Product.objects.select_for_update().get(pk=item.product_id)
+            product.available -= item.quantity
+            product.sales += item.quantity
+            product.save(update_fields=['available', 'sales', 'updated'])
+            transaction.on_commit(lambda product=product: invalidate_catalog(product))
+        shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
+        delivery = DeliveryInfo.objects.create(user=request.user, address=address, method='home delivery',
+                                                delivery_type='priority', total=int(shipping))
+        order = Order.objects.create(
+            user=request.user, cart=cart, delivery=delivery, status='confirmed', ordered=True,
+            coupon_code=code, total=subtotal - discount + shipping, subtotal=subtotal,
+            payment_type=payment_type, checkout_key=key, stripe_session_id=stripe_session_id,
+            items_snapshot=snapshots, address_snapshot=AddressSerializer(address).data,
+        )
+        if coupon:
+            CouponRedemption.objects.filter(coupon=coupon, user=request.user).update(order=order)
+        cart.ordered = True
+        cart.save(update_fields=['ordered', 'updated'])
+        return order
+
+    @extend_schema(request=CheckoutRequestSerializer, responses={201: OrderSerializer, 200: OrderSerializer})
     @transaction.atomic
     def post(self, request):
-        User.objects.select_for_update().get(pk=request.user.pk)
         key = serializers.UUIDField().run_validation(request.data.get('checkout_key'))
         existing = Order.objects.filter(checkout_key=key).first()
         if existing:
             if existing.user_id != request.user.pk:
                 raise ValidationError({'detail': 'Invalid checkout reference.'})
-            return Response(order_data(existing))
-        address_id = serializers.IntegerField(min_value=1).run_validation(request.data.get('address'))
-        address = get_object_or_404(Address, pk=address_id, user=request.user)
-        if request.data.get('payment_type', 'cash_on_delivery') != 'cash_on_delivery':
-            raise ValidationError({'detail': 'Only cash on delivery is currently available.'})
-        cart = active_cart(request.user)
-        items = list(cart.cart_items.order_by('product_id'))
-        if not items:
-            raise ValidationError({'detail': 'Your cart is empty.'})
-        snapshots = []
-        for item in items:
-            product = Product.objects.select_for_update().get(pk=item.product_id)
-            validate_purchase(product, request.user)
-            if (
-                not product.visibility
-                or product.store.status != Store.STATUS_ACTIVE
-                or product.store.verified_at is None
-                or product.available < item.quantity
-            ):
-                raise ValidationError({'detail': f'{product.title} is unavailable in the requested quantity.'})
-            snapshots.append({'product': product.pk, 'store': product.store_id, 'title': product.title,
-                              'image': product.image_url, 'quantity': item.quantity, 'unit_price': str(unit_price(product))})
-            product.available -= item.quantity
-            product.sales += item.quantity
-            product.save(update_fields=['available', 'sales', 'updated'])
-            transaction.on_commit(lambda product=product: invalidate_catalog(product))
-        subtotal = sum((Decimal(row['unit_price']) * row['quantity'] for row in snapshots), Decimal('0'))
-        if subtotal > Decimal('99999999.99'):
-            raise ValidationError({'detail': 'Order value exceeds the supported maximum.'})
-        discount = Decimal('0')
-        code = str(request.data.get('coupon', '')).strip()
-        if code:
-            coupon = Coupon.objects.select_for_update().filter(code__iexact=code, active=True, valid_from__lte=timezone.now(), valid_to__gte=timezone.now()).first()
-            if not coupon or not coupon.can_use():
-                raise ValidationError({'coupon': 'This coupon is invalid or has expired.'})
-            discount = (subtotal * coupon.discount / 100).quantize(Decimal('.01'))
-            coupon.used()
-        shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
-        delivery = DeliveryInfo.objects.create(user=request.user, address=address, method='home delivery', delivery_type='priority', total=int(shipping))
-        order = Order.objects.create(user=request.user, cart=cart, delivery=delivery,
-                                     status='confirmed', ordered=True, coupon_code=code,
-                                     total=subtotal - discount + shipping, subtotal=subtotal,
-                                     payment_type='cash_on_delivery', checkout_key=key,
-                                     items_snapshot=snapshots, address_snapshot=AddressSerializer(address).data)
-        cart.ordered = True
-        cart.save(update_fields=['ordered', 'updated'])
+            return Response(order_data(existing), status=200)
+        address = get_object_or_404(Address, pk=serializers.IntegerField(min_value=1).run_validation(request.data.get('address')),
+                                     user=request.user)
+        payment_type = request.data.get('payment_type', 'cash_on_delivery')
+        if payment_type != 'cash_on_delivery':
+            raise ValidationError({'detail': 'Choose cash on delivery or use the wallet checkout.'})
+        order = self._complete(request, key, address, str(request.data.get('coupon', '')).strip(), payment_type)
         return Response(order_data(order), status=201)
+
+
+class WalletCheckoutSessionView(CheckoutView):
+    @extend_schema(request=WalletCheckoutSerializer, responses=OpenApiTypes.OBJECT)
+    @transaction.atomic
+    def post(self, request):
+        if stripe is None or not getattr(settings, 'STRIPE_SECRET', ''):
+            raise ValidationError({'detail': 'Wallet payments are not configured.'})
+        stripe.api_key = settings.STRIPE_SECRET
+        key = serializers.UUIDField().run_validation(request.data.get('checkout_key'))
+        address = get_object_or_404(Address, pk=serializers.IntegerField(min_value=1).run_validation(request.data.get('address')),
+                                     user=request.user)
+        code = str(request.data.get('coupon', '')).strip()
+        cart, snapshots, coupon_lines, subtotal = self._lines(request)
+        coupon = None
+        discount = Decimal('0')
+        if code:
+            coupon = Coupon.objects.filter(code__iexact=code, active=True, valid_from__lte=timezone.now(), valid_to__gte=timezone.now()).first()
+            discount = calculate_coupon_discount(coupon, request.user, coupon_lines, subtotal, reserve=False)
+        shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
+        total = subtotal - discount + shipping
+        methods = [item.strip() for item in getattr(settings, 'STRIPE_WALLET_PAYMENT_METHODS', 'paypal,cashapp').split(',') if item.strip()]
+        if not methods:
+            raise ValidationError({'detail': 'No Stripe wallet payment methods are configured.'})
+        session = stripe.checkout.Session.create(
+            mode='payment', payment_method_types=methods,
+            line_items=[{'price_data': {'currency': getattr(settings, 'STRIPE_CURRENCY', 'ngn'),
+                                        'product_data': {'name': 'Proace order'},
+                                        'unit_amount': int(total * 100)}, 'quantity': 1}],
+            client_reference_id=str(request.user.pk),
+            metadata={'checkout_key': str(key), 'address': str(address.pk), 'coupon': code},
+            success_url=f"{settings.FRONTEND_URL}/checkout?wallet_session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{settings.FRONTEND_URL}/checkout?wallet_cancelled=1",
+        )
+        return Response({'id': session.id, 'url': session.url, 'payment_methods': methods})
+
+
+class WalletCheckoutConfirmView(CheckoutView):
+    @extend_schema(request=serializers.Serializer, responses=OrderSerializer)
+    @transaction.atomic
+    def post(self, request):
+        session_id = str(request.data.get('session_id', '')).strip()
+        if stripe is None or not session_id or not getattr(settings, 'STRIPE_SECRET', ''):
+            raise ValidationError({'detail': 'Invalid wallet session.'})
+        stripe.api_key = settings.STRIPE_SECRET
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+        except Exception:
+            raise ValidationError({'detail': 'Unable to verify wallet payment.'})
+        if session.get('payment_status') != 'paid' or session.get('client_reference_id') != str(request.user.pk):
+            raise ValidationError({'detail': 'Wallet payment has not been completed.'})
+        key = serializers.UUIDField().run_validation(session.get('metadata', {}).get('checkout_key'))
+        existing = Order.objects.filter(checkout_key=key).first()
+        if existing:
+            if existing.user_id != request.user.pk:
+                raise ValidationError({'detail': 'Invalid checkout reference.'})
+            return Response(order_data(existing), status=200)
+        address = get_object_or_404(Address, pk=serializers.IntegerField(min_value=1).run_validation(session.get('metadata', {}).get('address')),
+                                     user=request.user)
+        order = self._complete(request, key, address, session.get('metadata', {}).get('coupon', ''), 'stripe_wallet', session_id)
+        return Response(order_data(order), status=201)
+
+
+
+class CouponAdminView(APIView):
+    permission_classes = [IsAdminUser]
+
+    @extend_schema(responses=CouponAdminSerializer(many=True))
+    def get(self, request):
+        coupons = Coupon.objects.select_related('product').order_by('-created', '-pk')
+        return Response(CouponAdminSerializer(coupons, many=True).data)
+
+    @extend_schema(request=CouponAdminSerializer, responses=CouponAdminSerializer)
+    def post(self, request):
+        serializer = CouponAdminSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response(CouponAdminSerializer(serializer.save()).data, status=201)

@@ -3,6 +3,27 @@ from datetime import datetime, timezone
 import json
 import logging
 import traceback
+import os
+
+
+class KafkaLogHandler(logging.Handler):
+    """Best-effort transport; local console logging remains the source of truth."""
+    def emit(self, record):
+        try:
+            from kafka import KafkaProducer
+            payload = json.loads(JsonFormatter().format(record))
+            producer = KafkaProducer(
+                bootstrap_servers=os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092'),
+                value_serializer=lambda value: json.dumps(value).encode('utf-8'),
+                request_timeout_ms=500,
+                linger_ms=20,
+            )
+            producer.send(os.environ.get('KAFKA_LOG_TOPIC', 'commerce.logs'), payload)
+            producer.flush(timeout=0.5)
+            producer.close(timeout=0.5)
+        except Exception:
+            # Kafka must never take down the web process or hide the console log.
+            return
 
 
 request_context = contextvars.ContextVar('observability_request', default={})

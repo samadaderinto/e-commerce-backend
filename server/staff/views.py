@@ -49,6 +49,8 @@ from core.models import User, Refund
 from product.models import Product, Specification
 from product.cache import invalidate_product_cache
 from store.models import StoreAddress, Store
+from observability.models import LogEntry
+from observability.serializers import LogEntrySerializer
 
 from usps import USPSApi, Address as uspsAddress
 from usps import SERVICE_PRIORITY, LABEL_ZPL
@@ -79,6 +81,38 @@ class StaffViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAdminUser]
     pagination_class = BackofficePagination
     filter_backends = [SearchFilter, OrderingFilter]
+
+    @action(detail=False, methods=["get"], url_path="logs")
+    def logs(self, request):
+        queryset = LogEntry.objects.all()
+        search = request.query_params.get("search")
+        level = request.query_params.get("level")
+        category = request.query_params.get("category")
+        service = request.query_params.get("service")
+        route = request.query_params.get("route")
+        if search:
+            queryset = queryset.filter(Q(message__icontains=search) | Q(logger__icontains=search) | Q(request_id__icontains=search))
+        if level:
+            queryset = queryset.filter(level=level.upper())
+        if category:
+            queryset = queryset.filter(category=category)
+        if service:
+            queryset = queryset.filter(service=service)
+        if route:
+            queryset = queryset.filter(route__icontains=route)
+        if request.query_params.get("from"):
+            queryset = queryset.filter(occurred_at__gte=request.query_params["from"])
+        if request.query_params.get("to"):
+            queryset = queryset.filter(occurred_at__lte=request.query_params["to"])
+        return self.paginate_response(queryset, LogEntrySerializer)
+
+    @action(detail=False, methods=["get"], url_path="logs/facets")
+    def log_facets(self, request):
+        return Response({
+            "levels": list(LogEntry.objects.order_by().values_list("level", flat=True).distinct()),
+            "categories": list(LogEntry.objects.order_by().values_list("category", flat=True).distinct()),
+            "services": list(LogEntry.objects.order_by().values_list("service", flat=True).distinct()),
+        })
 
     def paginate_response(self, queryset, serializer_class):
         page = self.paginate_queryset(queryset)

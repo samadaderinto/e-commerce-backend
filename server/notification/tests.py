@@ -1,4 +1,5 @@
 from django.test import TestCase, override_settings
+from django.core import mail
 from django.urls import include, path
 from rest_framework.test import APIClient
 
@@ -108,3 +109,21 @@ class NotificationApiTests(TestCase):
         self.assertTrue(Notification.objects.filter(recipient=self.staff).exists())
         self.assertFalse(Notification.objects.filter(recipient=self.user).exists())
         self.assertFalse(Notification.objects.filter(recipient=inactive_staff).exists())
+
+    def test_actionable_notifications_email_and_can_opt_out(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            create_notification(
+                recipient=self.user,
+                verb="wallet credited",
+                description="Your wallet was credited.",
+                data={"event": "wallet_credited"},
+            )
+            create_notification(
+                recipient=self.user,
+                verb="quiet update",
+                data={"email": False},
+            )
+
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [self.user.email])
+        self.assertIn("wallet was credited", mail.outbox[0].body)

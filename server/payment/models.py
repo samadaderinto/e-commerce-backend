@@ -28,13 +28,27 @@ class Payment(DatesMixin):
 
 
 class Coupon(DatesMixin):
+    ORDER_TOTAL = 'order_total'
+    PRODUCT = 'product'
+    PRODUCT_QUANTITY = 'product_quantity'
+    CATEGORY = 'category'
+    TYPE_CHOICES = (
+        (ORDER_TOTAL, 'Order total'),
+        (PRODUCT, 'Product'),
+        (PRODUCT_QUANTITY, 'Product quantity'),
+        (CATEGORY, 'Category'),
+    )
     code = models.CharField(max_length=50, unique=True, blank=False, null=False)
     valid_from = models.DateTimeField(auto_now_add=True)
     valid_to = models.DateTimeField()
-    discount = models.IntegerField(validators=[MinValueValidator(0), MaxValueValidator(60)])
+    discount = models.IntegerField(validators=[MinValueValidator(1), MaxValueValidator(100)])
     num_available = models.IntegerField(validators=[MinValueValidator(0)])
     num_used = models.IntegerField(validators=[MinValueValidator(0)], default=0)
     active = models.BooleanField(default=True)
+    type = models.CharField(max_length=30, choices=TYPE_CHOICES, default=ORDER_TOTAL)
+    product = models.ForeignKey('product.Product', null=True, blank=True, on_delete=models.CASCADE, related_name='coupons')
+    category = models.CharField(max_length=100, blank=True, default='')
+    minimum_quantity = models.PositiveIntegerField(default=1)
 
     def can_use(self):
         is_active = self.active
@@ -46,6 +60,15 @@ class Coupon(DatesMixin):
         if self.num_used >= self.num_available:
             self.active = False
         self.save()
+
+
+class CouponRedemption(DatesMixin):
+    coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE, related_name='redemptions')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='coupon_redemptions')
+    order = models.OneToOneField('Order', null=True, blank=True, on_delete=models.SET_NULL, related_name='coupon_redemption')
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['coupon', 'user'], name='unique_coupon_redemption_per_user')]
 
 
 class DeliveryInfo(DatesMixin):
@@ -107,6 +130,7 @@ class Order(DatesMixin):
     items_snapshot = models.JSONField(default=list, blank=True)
     address_snapshot = models.JSONField(default=dict, blank=True)
     checkout_key = models.UUIDField(null=True, blank=True, unique=True)
+    stripe_session_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
     
     def save(self, *args, **kwargs):
         if not self.orderId:

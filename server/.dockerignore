@@ -1,15 +1,17 @@
-# virtual enviroments
-venv/
-.venv
-.venv.baks
-
-# enviroments
+.git
+.gitignore
 .env
-env/
-ENV/
-.ENV
-.env.baks
-
-
-# database
-db.sqlite3
+.env.*
+!.env.example
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+media/
+staticfiles/
+monitoring/.env
+monitoring/secrets/
+monitoring/logs/
+node_modules/
+.DS_Store

@@ -6,6 +6,8 @@ from django.core.exceptions import ImproperlyConfigured
 
 def configure(namespace):
     namespace['OBSERVABILITY_TOKEN'] = os.environ.get('OBSERVABILITY_TOKEN', '')
+    namespace['KAFKA_BOOTSTRAP_SERVERS'] = os.environ.get('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
+    namespace['KAFKA_LOG_TOPIC'] = os.environ.get('KAFKA_LOG_TOPIC', 'commerce.logs')
     namespace['OTEL_TRACING_ENABLED'] = os.environ.get('OTEL_TRACING_ENABLED', 'false').lower() == 'true'
     namespace['LOCAL_PROFILING_ENABLED'] = os.environ.get('LOCAL_PROFILING_ENABLED', 'false').lower() == 'true'
     if namespace['LOCAL_PROFILING_ENABLED'] and not namespace['DEBUG']:
@@ -31,3 +33,7 @@ def configure(namespace):
     namespace['SILKY_INTERCEPT_PERCENT'] = 10
     namespace['SILKY_IGNORE_PATHS'] = ['/health/live/', '/health/ready/', '/health/status/', '/metrics/']
     namespace['LOGGING']['formatters']['standard'] = {'()': 'observability.logging.JsonFormatter'}
+    namespace['LOGGING']['handlers']['kafka'] = {
+        'class': 'observability.logging.KafkaLogHandler',
+    }
+    namespace['LOGGING']['loggers']['codematics']['handlers'].append('kafka')

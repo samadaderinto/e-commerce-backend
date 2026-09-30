@@ -4,6 +4,22 @@
 
 **Server:** Django, Django rest Framework, HTML, Docker, Kubernetes, Jekins
 
+For the current containerized setup, use the repository-level instructions in
+[`../README.md`](../README.md). The short version is:
+
+```sh
+cd server
+../.venv/bin/python monitoring/init_local.py
+export OBSERVABILITY_TOKEN="$(tr -d '\n' < monitoring/secrets/metrics-token)"
+docker compose -f compose.yaml up --build -d api redis postgres
+docker compose -f monitoring/compose.yaml up -d
+```
+
+This starts Django, the official Redis cache, Prometheus, Grafana, Tempo, Loki,
+and Alloy. Local media uses the `media-data` volume. See
+[`monitoring/README.md`](monitoring/README.md) for health checks, dashboards,
+profiling, logs, and production settings.
+
 ## Run Locally
 
 Clone the project

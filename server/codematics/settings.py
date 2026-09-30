@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "notification.apps.EventNotificationConfig",
+    "observability.apps.ObservabilityConfig",
     "core.apps.CoreConfig",
     "product.apps.ProductConfig",
     "store.apps.StoreConfig",
@@ -114,7 +115,7 @@ WSGI_APPLICATION = "codematics.wsgi.application"
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
 
-# Temporary SQLite main database until the official database is wired back in.
+DATABASE_ENGINE = os.environ.get("DATABASE_ENGINE", "sqlite").lower()
 DATABASE_PATH = os.environ.get("SQLITE_DATABASE_PATH") or os.path.join(BASE_DIR, "main.sqlite3")
 
 DATABASES = {
@@ -124,31 +125,31 @@ DATABASES = {
     }
 }
 
-DB_USERNAME = str(os.environ.get("POSTGRES_USER"))
-DB_PASSWORD = str(os.environ.get("POSTGRES_PASSWORD"))
-DB_DATABASE = str(os.environ.get("POSTGRES_DB"))
+DB_USERNAME = os.environ.get("POSTGRES_USER")
+DB_PASSWORD = os.environ.get("POSTGRES_PASSWORD")
+DB_DATABASE = os.environ.get("POSTGRES_DB")
 DB_HOST = os.environ.get("POSTGRES_HOST")
-DB_PORT = os.environ.get("POSTGRES_PORT")
+DB_PORT = os.environ.get("POSTGRES_PORT", "5432")
 DB_IS_AVAIL = all([DB_USERNAME, DB_PASSWORD, DB_DATABASE, DB_HOST, DB_PORT])
-DB_IGNORE_SSL = os.environ.get("DB_ IGNORE_SSL") == "true"
+DB_REQUIRE_SSL = os.environ.get("DB_REQUIRE_SSL", "false").lower() == "true"
 
-
-# TODO: Re-enable the official database when its connection details are ready.
-# if DB_IS_AVAIL:
-#     DATABASES = {
-#         "default": {
-#             "ENGINE": "django.db.backends.postgresql",
-#             "NAME": DB_DATABASE,
-#             "USER": DB_USERNAME,
-#             "PASSWORD": DB_PASSWORD,
-#             "HOST": DB_HOST,
-#             "PORT": DB_PORT,
-#         }
-#     }
-
-
-# if not DB_IGNORE_SSL:
-#     DATABASES["default"]["OPTIONS"] = {"sslmode": "require"}
+if DATABASE_ENGINE in {"postgres", "postgresql"}:
+    if not DB_IS_AVAIL:
+        raise RuntimeError("PostgreSQL requires POSTGRES_HOST, POSTGRES_DB, POSTGRES_USER, and POSTGRES_PASSWORD.")
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": DB_DATABASE,
+            "USER": DB_USERNAME,
+            "PASSWORD": DB_PASSWORD,
+            "HOST": DB_HOST,
+            "PORT": DB_PORT,
+            "CONN_MAX_AGE": int(os.environ.get("DB_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": True,
+        }
+    }
+    if DB_REQUIRE_SSL:
+        DATABASES["default"]["OPTIONS"] = {"sslmode": "require"}
 
 
 # Password validation
@@ -196,7 +197,9 @@ STATIC_URL = "static/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 MEDIA_URL = "/media/"
 
-# Media lives in MinIO; static assets continue using Django's static storage.
+# Object storage is optional locally. Production can enable any S3-compatible
+# provider through the same django-storages settings below.
+OBJECT_STORAGE_ENABLED = os.environ.get('OBJECT_STORAGE_ENABLED', 'true').lower() == 'true'
 MINIO_ENDPOINT_URL = os.environ.get('MINIO_ENDPOINT_URL', 'http://127.0.0.1:9000')
 MINIO_PUBLIC_URL = os.environ.get('MINIO_PUBLIC_URL', MINIO_ENDPOINT_URL).rstrip('/')
 MINIO_BUCKET_NAME = os.environ.get('MINIO_BUCKET_NAME', 'commerce-images')
@@ -221,7 +224,11 @@ STORAGES = {
     },
     'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
 }
-MEDIA_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/'
+if OBJECT_STORAGE_ENABLED:
+    MEDIA_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/'
+else:
+    STORAGES['default'] = {'BACKEND': 'django.core.files.storage.FileSystemStorage'}
+    MEDIA_URL = '/media/'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
@@ -390,6 +397,14 @@ EMAIL_HOST_PASSWORD = str(os.environ.get("EMAIL_HOST_PASSWORD"))
 EMAIL_PORT = os.environ.get("EMAIL_HOST_PORT")
 APPLICATION_EMAIL = str(os.environ.get("APPLICATION_EMAIL"))
 DEFAULT_FROM_EMAIL = str(os.environ.get("DEFAULT_FROM_EMAIL"))
+QUEUE_EMAILS = os.environ.get("QUEUE_EMAILS", "true").lower() == "true"
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "amqp://guest:guest@127.0.0.1:5672//")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "rpc://")
+CELERY_TASK_DEFAULT_QUEUE = "commerce.email"
+CELERY_TASK_ROUTES = {"notification.tasks.send_email_task": {"queue": "commerce.email"}}
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_TASK_TIME_LIMIT = 120
 
 
 PASSWORD_HASHERS = [

@@ -23,11 +23,12 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 ROOT_URLCONF = 'storefront.urls'
-DATABASES = {'default': {
-    'ENGINE': 'django.db.backends.sqlite3',
-    'NAME': os.environ.get('SQLITE_DATABASE_PATH', str(BASE_DIR / 'storefront.sqlite3')),
-    'OPTIONS': {'timeout': 20},
-}}
+if DATABASE_ENGINE not in {'postgres', 'postgresql'}:
+    DATABASES = {'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': os.environ.get('SQLITE_DATABASE_PATH', str(BASE_DIR / 'storefront.sqlite3')),
+        'OPTIONS': {'timeout': 20},
+    }}
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework_simplejwt.authentication.JWTAuthentication'],
@@ -59,6 +60,8 @@ EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'true').lower() == 'true'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Proace <hello@proace.example>')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'paypal,cashapp')
+STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'ngn')
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_CONTENT_TYPE_NOSNIFF = True

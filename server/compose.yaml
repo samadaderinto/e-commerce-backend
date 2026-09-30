@@ -1,40 +1,91 @@
 services:
-  minio:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
-    command: server /data --console-address ':9001'
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_OBJECT_STORAGE: ${INSTALL_OBJECT_STORAGE:-false}
+    restart: unless-stopped
+    init: true
+    ports:
+      - '${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000'
+    environment:
+      DJANGO_SETTINGS_MODULE: codematics.storefront_settings
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
+      SECRET_KEY: ${SECRET_KEY:-local-container-secret-change-me}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost}
+      FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3000}
+      DATABASE_ENGINE: postgres
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-commerce}
+      POSTGRES_USER: ${POSTGRES_USER:-commerce}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+      DB_REQUIRE_SSL: 'false'
+      CACHE_URL: redis://redis:6379/0
+      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
+      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://127.0.0.1:9000}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://127.0.0.1:9000}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-commerce-images}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+      OBSERVABILITY_TOKEN: ${OBSERVABILITY_TOKEN:-local-observability-token-change-me}
+      OTEL_TRACING_ENABLED: ${OTEL_TRACING_ENABLED:-false}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-commerce-api}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318}
+      GUNICORN_BIND: 0.0.0.0:8000
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
+      RUN_COLLECTSTATIC: ${RUN_COLLECTSTATIC:-false}
+    volumes:
+      - media-data:/app/media
+      - prometheus-multiproc:/tmp/prometheus
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live/', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1000']
+    ports:
+      - '${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:17-alpine
     restart: unless-stopped
     ports:
-      - '${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000'
-      - '${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001'
+      - '${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT_HOST:-5432}:5432'
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Set MINIO_ROOT_USER in .env}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-commerce}
+      POSTGRES_USER: ${POSTGRES_USER:-commerce}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
     volumes:
-      - minio-data:/data
-
-  minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
-    depends_on:
-      - minio
-    restart: on-failure
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
-      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-commerce-images}
-    entrypoint: ['/bin/sh', '-ec']
-    command:
-      - |
-        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do sleep 2; done
-        mc mb --ignore-existing "local/$$MINIO_BUCKET_NAME"
-        mc anonymous set download "local/$$MINIO_BUCKET_NAME"
-        mc admin user add local "$$MINIO_ACCESS_KEY" "$$MINIO_SECRET_KEY"
-        sed "s/BUCKET_NAME/$$MINIO_BUCKET_NAME/g" /config/media-policy.json > /tmp/media-policy.json
-        mc admin policy create local commerce-media /tmp/media-policy.json
-        mc admin policy attach local commerce-media --user "$$MINIO_ACCESS_KEY"
-    volumes:
-      - ./minio/media-policy.json:/config/media-policy.json:ro
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
-  minio-data:
+  media-data:
+  redis-data:
+  postgres-data:
+  prometheus-multiproc:

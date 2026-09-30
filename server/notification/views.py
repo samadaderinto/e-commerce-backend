@@ -1,4 +1,6 @@
 from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
+from django.core.mail import send_mail
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
@@ -23,10 +25,32 @@ def _content_type_for(obj):
     return ContentType.objects.get_for_model(obj, for_concrete_model=False)
 
 
+def _send_external_notification(notification):
+    """Deliver actionable notifications by email without blocking the request."""
+    recipient = notification.recipient
+    data = notification.data or {}
+    if not getattr(recipient, "email", None) or data.get("email") is False:
+        return
+
+    subject = f"Proace: {notification.verb.capitalize()}"
+    body = notification.description or notification.verb.capitalize()
+    if getattr(settings, "QUEUE_EMAILS", True):
+        from notification.tasks import send_email_task
+        send_email_task.delay(subject, body, recipient.email)
+    else:
+        send_mail(
+            subject,
+            body,
+            getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@proace.com"),
+            [recipient.email],
+            fail_silently=True,
+        )
+
+
 def create_notification(recipient, verb, actor=None, target=None, action_object=None,
                         description="", level="info", data=None, public=True):
     actor = actor or recipient
-    return Notification.objects.create(
+    notification = Notification.objects.create(
         recipient=recipient,
         actor_content_type=_content_type_for(actor),
         actor_object_id=str(actor.pk),
@@ -40,6 +64,8 @@ def create_notification(recipient, verb, actor=None, target=None, action_object=
         data=data or {},
         public=public,
     )
+    transaction.on_commit(lambda: _send_external_notification(notification))
+    return notification
 
 
 def notify_users(recipients, verb, actor=None, target=None, action_object=None,
@@ -100,7 +126,7 @@ def staff_created_nofication(staff_user, actor=None):
 
 
 def store_withdrawed_cash_nofication(store, amount=None, actor=None):
-    return notify_staff(
+    staff_notifications = notify_staff(
         "store withdrawal requested",
         actor=actor or store.user,
         target=store,
@@ -108,6 +134,16 @@ def store_withdrawed_cash_nofication(store, amount=None, actor=None):
         level="info",
         data={"event": "store_withdrawal_requested", "amount": str(amount) if amount is not None else None},
     )
+    owner_notification = create_notification(
+        recipient=store.user,
+        actor=actor or store.user,
+        target=store,
+        verb="store withdrawal submitted",
+        description=f"Your withdrawal request for {amount} is being reviewed." if amount is not None else "Your store withdrawal request is being reviewed.",
+        level="info",
+        data={"event": "store_withdrawal_requested", "amount": str(amount) if amount is not None else None},
+    )
+    return [*staff_notifications, owner_notification]
 
 
 def store_moderation_notification(store, actor=None, blocked=True):

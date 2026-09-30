@@ -6,6 +6,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from core.models import Address, Review, User
 from product.models import Product
+from payment.models import Coupon
 from product.policies import is_own_store
 
 
@@ -149,8 +150,37 @@ class CheckoutRequestSerializer(serializers.Serializer):
     checkout_key = serializers.UUIDField()
     coupon = serializers.CharField(required=False, allow_blank=True)
     payment_type = serializers.ChoiceField(
-        choices=['cash_on_delivery'], required=False, default='cash_on_delivery'
+        choices=['cash_on_delivery', 'stripe_wallet'], required=False, default='cash_on_delivery'
     )
+
+
+class WalletCheckoutSerializer(serializers.Serializer):
+    address = serializers.IntegerField(min_value=1)
+    checkout_key = serializers.UUIDField()
+    coupon = serializers.CharField(required=False, allow_blank=True)
+
+
+class CouponAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Coupon
+        fields = ['id', 'code', 'valid_from', 'valid_to', 'discount', 'num_available', 'num_used', 'active',
+                  'type', 'product', 'category', 'minimum_quantity']
+        read_only_fields = ['id', 'valid_from', 'num_used']
+
+    def validate(self, attrs):
+        coupon_type = attrs.get('type', getattr(self.instance, 'type', Coupon.ORDER_TOTAL))
+        product = attrs.get('product', getattr(self.instance, 'product', None))
+        category = attrs.get('category', getattr(self.instance, 'category', ''))
+        minimum = attrs.get('minimum_quantity', getattr(self.instance, 'minimum_quantity', 1))
+        if coupon_type in (Coupon.PRODUCT, Coupon.PRODUCT_QUANTITY) and not product:
+            raise serializers.ValidationError({'product': 'This coupon type requires a product.'})
+        if coupon_type == Coupon.CATEGORY and not category:
+            raise serializers.ValidationError({'category': 'This coupon type requires a category.'})
+        if coupon_type != Coupon.PRODUCT_QUANTITY and minimum != 1:
+            raise serializers.ValidationError({'minimum_quantity': 'Quantity thresholds are only valid for product quantity coupons.'})
+        if coupon_type == Coupon.PRODUCT_QUANTITY and minimum < 2:
+            raise serializers.ValidationError({'minimum_quantity': 'Use at least 2 units for a quantity coupon.'})
+        return attrs
 
 
 class OrderAddressSnapshotSerializer(serializers.Serializer):
