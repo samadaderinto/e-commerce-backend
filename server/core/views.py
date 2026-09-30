@@ -210,7 +210,7 @@ class UserViewSet(viewsets.GenericViewSet):
     
         serializer = UserSerializer(user, partial=True, data=data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        refund = serializer.save()
         return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
     
     @extend_schema(request=None, responses={status.HTTP_202_ACCEPTED:  None})
@@ -459,5 +459,5 @@ class UserViewSet(viewsets.GenericViewSet):
         }
         
         send_mail('refund-request-acknowledged', email, data=mail_data)
-        refund_requested_nofication()
+        refund_requested_nofication(actor=request.user, refund=refund, order=refund.order)
         return Response({'message': 'Refund accepted, this may take 1 to 3 business days before you get a response'}, status=status.HTTP_201_CREATED)

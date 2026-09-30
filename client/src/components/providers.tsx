@@ -46,6 +46,7 @@ function ShopProvider({ children }: { children: ReactNode }) {
   const cart = user ? cartQuery.data || { items: [], subtotal: '0', shipping: '0', total: '0' } : guestCart;
 
   async function add(product: Product, quantity = 1) {
+    if (user && product.is_own_store) throw new Error("You cannot buy products from any store you own.");
     if (user) {
       const result = await api<Cart>('cart', 'POST', { product: product.id, quantity });
       client.setQueryData(['cart', user.id], result);
@@ -86,9 +87,9 @@ function ShopProvider({ children }: { children: ReactNode }) {
     setGuest(remaining);
     for (const product of guestSaved) await api('wishlist', 'POST', { product: product.id }).catch(() => null);
     setGuestSaved([]);
-    await client.invalidateQueries({ queryKey: ['cart'] });
+    await client.invalidateQueries();
     await client.invalidateQueries({ queryKey: ['saved'] });
-    notify(remaining.length ? 'Signed in. Some guest items could not be added; please check their stock.' : `Welcome back, ${result.user.first_name}`);
+    notify(remaining.length ? 'Signed in. Some guest items could not be added because they are unavailable or belong to your own store.' : `Welcome back, ${result.user.first_name}`);
   }
   async function logout() {
     await api('auth/logout', 'POST', {});

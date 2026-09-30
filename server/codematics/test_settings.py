@@ -10,8 +10,16 @@ ALLOWED_HOSTS = ['testserver', 'localhost']
 INSTALLED_APPS = [
     'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
     'rest_framework', 'taggit', 'core', 'store', 'product', 'cart', 'payment',
+    'notification.apps.EventNotificationConfig',
+    'affiliates',
+    'django_cleanup.apps.CleanupConfig',
 ]
 MIDDLEWARE = []
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.InMemoryStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+}
+MEDIA_URL = '/media/'
 ROOT_URLCONF = 'store.test_urls'
 TEST_DATABASE_PATH = os.environ.get("SQLITE_TEST_DATABASE_PATH") or os.path.join(BASE_DIR, "test.sqlite3")  # noqa: F405
 DATABASES = {
@@ -23,7 +31,11 @@ DATABASES = {
 }
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
+EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
+DEFAULT_FROM_EMAIL = 'Proace <hello@proace.test>'
+FRONTEND_URL = 'http://testserver'
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework_simplejwt.authentication.JWTAuthentication'],
+    'EXCEPTION_HANDLER': 'utils.exceptions.custom_exception_handler',
 }

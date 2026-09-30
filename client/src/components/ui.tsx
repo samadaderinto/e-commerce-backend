@@ -18,7 +18,7 @@ export function ProductCard({ product }: { product: Product }) {
     <div className="product-photo"><Link href={`/products/${product.id}`} aria-label={`View ${product.title}`}><ProductImage src={product.image} alt={product.title} /></Link>
       {product.discount > 0 && <span className="discount">−{product.discount}%</span>}
       <button className={`icon-button save-button ${liked ? 'saved' : ''}`} aria-label={`${liked ? 'Unsave' : 'Save'} ${product.title}`} title={liked ? 'Remove from saved items' : 'Save for later'} onClick={() => toggleSave(product).catch(error => notify(error.message, true))}><Heart size={18} fill={liked ? 'currentColor' : 'none'} /></button>
-      <button className="quick-add" disabled={busy || !product.available} onClick={async () => { setBusy(true); try { await add(product); } catch (error) { notify((error as Error).message, true); } finally { setBusy(false); } }}><Plus size={16} />{!product.available ? 'Sold out' : busy ? 'Adding…' : 'Add to bag'}</button>
+      <button className="quick-add" disabled={busy || !product.available || product.is_own_store} onClick={async () => { setBusy(true); try { await add(product); } catch (error) { notify((error as Error).message, true); } finally { setBusy(false); } }}><Plus size={16} />{product.is_own_store ? 'Your listing' : !product.available ? 'Sold out' : busy ? 'Adding…' : 'Add to bag'}</button>
     </div>
     <div className="product-meta"><span>{product.brand || product.store_name}</span><span><Star size={12} fill="currentColor" />{Number(product.average_rating) > 0 ? Number(product.average_rating).toFixed(1) : 'New'}</span></div>
     <Link className="product-title" href={`/products/${product.id}`}>{product.title}</Link>

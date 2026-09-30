@@ -1,12 +1,13 @@
 from django.conf import settings
 
-from kink import di
-
 from cart.models import Cart, CartItem
 from cart.cache import invalidate_cart_cache
 from utils.functions import make_payment
 from payment.models import Coupon, DeliveryInfo
 from product.models import Product
+from product.policies import validate_purchase
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
 from core.models import Address, User
 
 from drf_spectacular.utils import extend_schema
@@ -34,19 +35,21 @@ stripe.api_key = settings.STRIPE_SECRET
 
 
 class PaymentViewSet(viewsets.GenericViewSet):
-    auth_user: User = di[User]
-    cart_item: CartItem = di[CartItem]
-    user_cart: Cart = di[Cart]
+    permission_classes = [IsAuthenticated]
+    auth_user = User
+    cart_item = CartItem
+    user_cart = Cart
 
     @extend_schema(responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['post'], url_path='checkout/create')
     def create_checkout_session(self, request):
         data = JSONParser().parse(request)
-        cart = get_object_or_404(self.user_cart, user=data['user'], ordered=False)
+        cart = get_object_or_404(self.user_cart, user=request.user, ordered=False)
         items = get_list_or_404(self.cart_item, cart=cart.id)
 
         for item in items:
             product = item.product
+            validate_purchase(product, request.user)
 
             if product.available < item.quantity:
                 return Response(data={'message': 'One of your products is sold out'}, status=status.HTTP_409_CONFLICT)
@@ -57,13 +60,22 @@ class PaymentViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['post'], url_path='checkout/pay')
     def capture_checkout_session(self, request):
         data = JSONParser().parse(request)
+        data["user"] = request.user.pk
         serializer = OrdersSerializer(data=data)
 
         serializer.is_valid(raise_exception=True)
 
-        user = serializer.validated_data['user']
+        user = request.user
         cart = get_object_or_404(self.user_cart, user=user, ordered=False)
         items = get_list_or_404(self.cart_item, cart=cart)
+
+        if serializer.validated_data['cart'].pk != cart.pk:
+            raise ValidationError({'detail': 'Invalid cart.'})
+        delivery = serializer.validated_data.get('delivery')
+        if delivery and delivery.user_id != user.pk:
+            raise ValidationError({'detail': 'Invalid delivery.'})
+        for item in items:
+            validate_purchase(item.product, user)
 
         cart_serializer = CartSerializer(cart)
         coupon = get_object_or_404(Coupon, code=serializer.validated_data['coupon_code'])

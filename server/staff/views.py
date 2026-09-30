@@ -19,7 +19,7 @@ from rest_framework.pagination import LimitOffsetPagination
 
 from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
-from notification.views import refund_requested_nofication 
+from notification.views import refund_requested_nofication, store_moderation_notification
 from store.serializers import StoreAddressSerializer
 
 from staff.serilalizers import (
@@ -205,6 +205,7 @@ class StaffViewSet(viewsets.GenericViewSet):
         store = serializer.block(store, request.user)
         for product in Product.objects.filter(store=store).only("id", "store_id"):
             invalidate_product_cache(product)
+        store_moderation_notification(store, actor=request.user, blocked=True)
         return Response(BackofficeStoreSerializer(store).data)
 
     @action(detail=False, methods=["post"], url_path=r"stores/(?P<store_pk>\d+)/unblock")
@@ -215,6 +216,7 @@ class StaffViewSet(viewsets.GenericViewSet):
         store = serializer.unblock(store)
         for product in Product.objects.filter(store=store).only("id", "store_id"):
             invalidate_product_cache(product)
+        store_moderation_notification(store, actor=request.user, blocked=False)
         return Response(BackofficeStoreSerializer(store).data)
 
     @action(detail=False, methods=["get"])

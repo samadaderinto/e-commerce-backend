@@ -1,4 +1,6 @@
 import os
+import logging
+
 from django.db import transaction
 from django.db.models import Count, Prefetch
 from django.conf import settings
@@ -42,6 +44,9 @@ from product.cache import (
     store_product_cache_key, invalidate_product_cache, get_cached_product_data,
     get_cached_store_product_data, get_cached_landing_products,
 )
+
+logger = logging.getLogger("codematics.product")
+
 
 class ProductViewSet(viewsets.GenericViewSet):
     user_store: Store = di[Store]
@@ -160,11 +165,7 @@ class ProductViewSet(viewsets.GenericViewSet):
     @extend_schema(request=SpecificationSerializer, responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['delete'], url_path='specifications/delete')
     def delete_specifications(self, request, product):
-        try:
-            specification = self.product_specification.objects.get(product=product)
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
+        specification = get_object_or_404(self.product_specification, product=product)
         specification.delete()
         return Response(status=status.HTTP_202_ACCEPTED)
 
@@ -172,12 +173,7 @@ class ProductViewSet(viewsets.GenericViewSet):
     @extend_schema(request=SpecificationSerializer, responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['get'], url_path='specifications/get')
     def get_specifications(self, request, product):
-        try:
-            specifications = self.product_specification.objects.filter(product=product)
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        
+        specifications = self.product_specification.objects.filter(product=product)
         serializer = SpecificationSerializer(specifications, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -195,12 +191,7 @@ class ProductViewSet(viewsets.GenericViewSet):
     @extend_schema(request=ProductSerializer, responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['delete'], url_path='product/delete')
     def delete(self, request, store, product):
-        try:
-            product = self.store_product.objects.get(store=store, id=product)
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        
+        product = get_object_or_404(self.store_product, store=store, id=product)
         invalidate_product_cache(product)
         product.delete()
         return Response(status=status.HTTP_202_ACCEPTED)
@@ -210,12 +201,13 @@ class ProductViewSet(viewsets.GenericViewSet):
     @extend_schema(request=ProductSerializer, responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['put', 'patch'], url_path='product/update')
     def edit_product(self, request, storeId, productId):
-        data = JSONParser().parse(request)
-
-        try:
-            product = self.store_product.objects.get(store=storeId, id=productId, store__user=request.user)
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+        data = request.data
+        product = get_object_or_404(
+            self.store_product,
+            store=storeId,
+            id=productId,
+            store__user=request.user,
+        )
 
         
         serializer = ProductSerializer(product, data=data)
@@ -232,14 +224,12 @@ class ProductViewSet(viewsets.GenericViewSet):
         if cached_product is not None:
             return Response(cached_product, status=status.HTTP_200_OK)
 
-        try:
-            product = self.store_product.objects.get(
-                store=storeId,
-                id=productId,
-                visibility=True,
-            )
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
+        product = get_object_or_404(
+            self.store_product,
+            store=storeId,
+            id=productId,
+            visibility=True,
+        )
 
         
         data = get_cached_store_product_data(storeId, productId)
@@ -253,24 +243,14 @@ class ProductViewSet(viewsets.GenericViewSet):
 
 
     def store_product_image(self, request, storeId, product, image):
-        try:
-            product = ProductImg.objects.get(id=image, product=product)
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        
+        product = get_object_or_404(ProductImg, id=image, product=product)
         serializer = ProductImgSerializer(product)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 
     def store_product_images(self, request, storeId, productId):
-        try:
-            product = ProductImg.objects.filter(product=productId)
-        except:
-            return Response(status=status.HTTP_404_NOT_FOUND)
-
-        
+        product = ProductImg.objects.filter(product=productId)
         serializer = ProductImgSerializer(product, many=True)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -288,7 +268,7 @@ class ProductViewSet(viewsets.GenericViewSet):
 
 
     def create_specifications(self, request):
-            data = JSONParser().parse(request)
+            data = request.data
             serializer = SpecificationSerializer(data=data, context={"request": request})
             serializer.is_valid(raise_exception=True)
             serializer.save()
@@ -302,7 +282,17 @@ class ProductViewSet(viewsets.GenericViewSet):
             filenamenoExt = filename.replace(f"{ext}", "")
             fileDir = "%s/%s.%s" % ("img", filenamenoExt, ext)
             if os.path.isfile((f"media/images/{filename}")):
-                os.remove(fileDir)
+                try:
+                    os.remove(fileDir)
+                except OSError:
+                    logger.exception(
+                        "Failed to delete product file",
+                        extra={"product": product, "store": store, "filename": filename},
+                    )
+                    return Response(
+                        {"detail": "Could not delete file."},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
                 return Response(f"{filename} deleted", status=status.HTTP_202_ACCEPTED)
             return Response("file not found", status=status.HTTP_404_NOT_FOUND)
 

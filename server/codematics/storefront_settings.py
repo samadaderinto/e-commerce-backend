@@ -11,7 +11,8 @@ INSTALLED_APPS = [
     'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
     'rest_framework', 'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular', 'taggit',
-    'core', 'store', 'product', 'cart', 'payment', 'storefront',
+    'core', 'store', 'product', 'cart', 'payment', 'affiliates', 'storefront',
+    'django_cleanup.apps.CleanupConfig',
 ]
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -63,4 +64,5 @@ CSRF_COOKIE_SECURE = not DEBUG
 SECURE_CONTENT_TYPE_NOSNIFF = True
 PASSWORD_RESET_TIMEOUT = 3600
 MEDIA_ROOT = BASE_DIR / 'media'
-MEDIA_URL = '/media/'
+
+configure_observability(globals())

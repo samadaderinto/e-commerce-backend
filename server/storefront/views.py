@@ -24,9 +24,11 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from cart.models import Cart, CartItem
+from affiliates.services import reward_referral
 from core.models import Address, Review, User, Wishlist
 from payment.models import Coupon, DeliveryInfo, Order
 from product.models import Product
+from product.policies import is_own_store, validate_purchase
 from store.views import invalidate_catalog
 from store.models import Store
 from .serializers import (
@@ -90,7 +92,10 @@ class AuthView(APIView):
                 serializer.is_valid(raise_exception=True)
             except DjangoValidationError as error:
                 raise ValidationError({'password': error.messages})
+            referral_code = serializer.validated_data.pop('referral_code', '').strip()
             user = User.objects.create_user(**serializer.validated_data, is_active=False)
+            if referral_code:
+                reward_referral(referral_code, user)
             token = signing.dumps({'user': user.pk}, salt='proace-verify')
             url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
             send_mail('Verify your Proace account', f'Welcome to Proace. Verify your email: {url}', settings.DEFAULT_FROM_EMAIL, [user.email])
@@ -285,7 +290,8 @@ def cart_data(cart, request):
     items = cart.cart_items.select_related('product__store').prefetch_related('product__images', 'product__tags')
     rows = [{'product': CatalogSerializer(item.product, context={'request': request}).data,
              'quantity': item.quantity, 'total': str(unit_price(item.product) * item.quantity),
-             'purchasable': item.product.visibility and item.product.store.status == Store.STATUS_ACTIVE
+             'purchasable': not is_own_store(item.product, request.user)
+             and item.product.visibility and item.product.store.status == Store.STATUS_ACTIVE
              and item.product.store.verified_at is not None and item.quantity <= item.product.available} for item in items]
     subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
     shipping = Decimal('0') if subtotal >= 100000 or not rows else Decimal('2500')
@@ -315,6 +321,7 @@ class CartView(APIView):
         else:
             quantity = serializers.IntegerField(min_value=1, max_value=1000).run_validation(request.data.get('quantity', 1))
             product = get_object_or_404(catalog(), pk=pk)
+            validate_purchase(product, request.user)
             item = cart.cart_items.filter(product=product).first()
             if request.method == 'POST' and item:
                 quantity += item.quantity
@@ -387,6 +394,7 @@ class CheckoutView(APIView):
         snapshots = []
         for item in items:
             product = Product.objects.select_for_update().get(pk=item.product_id)
+            validate_purchase(product, request.user)
             if (
                 not product.visibility
                 or product.store.status != Store.STATUS_ACTIVE

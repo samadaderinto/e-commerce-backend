@@ -13,10 +13,13 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 from datetime import timedelta
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
+import dotenv
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+dotenv.read_dotenv(str(BASE_DIR / '.env'))
 SETTINGS_PATH = os.path.dirname(os.path.dirname(__file__))
 
 # Quick-start development settings - unsuitable for production
@@ -26,7 +29,7 @@ SETTINGS_PATH = os.path.dirname(os.path.dirname(__file__))
 SECRET_KEY = str(os.environ.get("SECRET_KEY"))
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DJANGO_DEBUG', 'true').lower() == 'true'
 
 ENV_ALLOWED_HOST = str(os.environ.get("ENV_ALLOWED_HOST"))
 ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
@@ -43,7 +46,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
-    "event_notification.apps.EventNotificationConfig",
+    "notification.apps.EventNotificationConfig",
     "core.apps.CoreConfig",
     "product.apps.ProductConfig",
     "store.apps.StoreConfig",
@@ -64,10 +67,10 @@ INSTALLED_APPS = [
     "taggit",
     "stripe",
     "rest_framework_word_filter",
-    "notifications",
     "dotenv",
     'silk',
-    'django_elasticsearch_dsl'
+    'django_elasticsearch_dsl',
+    'django_cleanup.apps.CleanupConfig',
 
 ]
 
@@ -193,6 +196,33 @@ STATIC_URL = "static/"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 MEDIA_URL = "/media/"
 
+# Media lives in MinIO; static assets continue using Django's static storage.
+MINIO_ENDPOINT_URL = os.environ.get('MINIO_ENDPOINT_URL', 'http://127.0.0.1:9000')
+MINIO_PUBLIC_URL = os.environ.get('MINIO_PUBLIC_URL', MINIO_ENDPOINT_URL).rstrip('/')
+MINIO_BUCKET_NAME = os.environ.get('MINIO_BUCKET_NAME', 'commerce-images')
+_media_endpoint = urlsplit(MINIO_PUBLIC_URL)
+STORAGES = {
+    'default': {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            'access_key': os.environ.get('MINIO_ACCESS_KEY', ''),
+            'secret_key': os.environ.get('MINIO_SECRET_KEY', ''),
+            'bucket_name': MINIO_BUCKET_NAME,
+            'endpoint_url': MINIO_ENDPOINT_URL,
+            'region_name': os.environ.get('MINIO_REGION', 'us-east-1'),
+            'signature_version': 's3v4',
+            'addressing_style': 'path',
+            'default_acl': None,
+            'file_overwrite': False,
+            'querystring_auth': False,
+            'custom_domain': f'{_media_endpoint.netloc}{_media_endpoint.path}/{MINIO_BUCKET_NAME}',
+            'url_protocol': f'{_media_endpoint.scheme}:',
+        },
+    },
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+}
+MEDIA_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/'
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
 
@@ -212,6 +242,8 @@ if CACHE_URL:
             "OPTIONS": {
                 "CLIENT_CLASS": "django_redis.client.DefaultClient",
                 "IGNORE_EXCEPTIONS": True,
+                "SOCKET_CONNECT_TIMEOUT": 2,
+                "SOCKET_TIMEOUT": 2,
             },
             "KEY_PREFIX": os.environ.get("CACHE_KEY_PREFIX", "codematics"),
             "TIMEOUT": CACHE_TIMEOUT,
@@ -260,6 +292,7 @@ REST_FRAMEWORK = {
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
     ],
+    "EXCEPTION_HANDLER": "utils.exceptions.custom_exception_handler",
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
     "PAGE_SIZE": 15,
     "DEFAULT_THROTTLE_CLASSES": [
@@ -271,6 +304,45 @@ REST_FRAMEWORK = {
         "anon": os.environ.get("DRF_ANON_THROTTLE_RATE", "100/hour"),
         "user": os.environ.get("DRF_USER_THROTTLE_RATE", "1000/hour"),
         "auth": os.environ.get("DRF_AUTH_THROTTLE_RATE", "10/minute"),
+    },
+}
+
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(levelname)s %(asctime)s %(name)s %(message)s"
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+        },
+    },
+    "loggers": {
+        "codematics": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "codematics.api": {
+            "handlers": ["console"],
+            "level": LOG_LEVEL,
+            "propagate": False,
+        },
+        "django.request": {
+            "handlers": ["console"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "django.security": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
     },
 }
 
@@ -350,13 +422,6 @@ CSRF_COOKIE_SECURE = False
 SECURE_SSL_REDIRECT = False
 
 
-NOTIFICATIONS_NOTIFICATION_MODEL = "event_notification.Notification"
-DJANGO_NOTIFICATIONS_CONFIG = {
-    "USE_JSONFIELD": True,
-    "SOFT_DELETE": True,
-}
-
-
 USER_AGENTS_CACHE = 'default'
 # AIRSHIP_KEY = str(os.environ.get("AIRSHIP_KEY"))
 # MASTER_SECRET = str(os.environ.get("MASTER_SECRET"))
@@ -376,3 +441,6 @@ ELASTICSEARCH_DSL={
         'hosts': 'localhost:9200'
     },
 }
+
+from observability.config import configure as configure_observability
+configure_observability(globals())

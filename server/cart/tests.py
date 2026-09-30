@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from django.test import TestCase, override_settings
 from rest_framework import status
-from rest_framework.test import APIRequestFactory
+from rest_framework.test import APIRequestFactory, force_authenticate
 
 from cart.models import Cart, CartItem
 from cart.views import CartViewSet
@@ -54,7 +54,18 @@ class CartViewSetTests(TestCase):
         )
 
     def view(self, method, action):
-        return CartViewSet.as_view({method: action})
+        def authenticated_view(request):
+            force_authenticate(request, user=self.user)
+            return CartViewSet.as_view({method: action})(request)
+        return authenticated_view
+
+    def test_owner_cannot_add_own_product_by_submitting_another_user(self):
+        self.store.user = self.user
+        self.store.save()
+        request = self.factory.post('/cart/add/', {'user': self.seller.pk, 'product': self.product.pk}, format='json')
+        response = self.view('post', 'add_to_cart')(request)
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(CartItem.objects.exists())
 
     def test_get_or_create_cart_returns_empty_cart(self):
         request = self.factory.get("/cart/get/", {"user": self.user.id})

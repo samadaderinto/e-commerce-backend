@@ -15,9 +15,25 @@ spec:
     spec:
       containers:
         - name: nginx
-          image: nginx:latest
+          image: nginx:stable-alpine
+          command: ["nginx"]
+          args: ["-p", "/etc/nginx/", "-c", "nginx.conf", "-g", "daemon off;"]
           ports:
-            - containerPort: 80
+            - containerPort: 8080
+          volumeMounts:
+            - name: nginx-security
+              mountPath: /etc/nginx
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+      volumes:
+        - name: nginx-security
+          configMap:
+            name: nginx-security
 
 ---
 
@@ -29,11 +45,12 @@ metadata:
   name: nginx-service
 spec:
   type: LoadBalancer
+  externalTrafficPolicy: Local
   ports:
     - name: http
       protocol: TCP
       port: 80
-      targetPort: 80
+      targetPort: 8080
   selector:
     app: nginx-deployment
 

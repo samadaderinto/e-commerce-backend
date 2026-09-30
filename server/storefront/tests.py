@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from django.core import mail, signing
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from cart.models import CartItem
@@ -78,7 +79,7 @@ class StorefrontTests(TestCase):
     def setUp(self):
         self.buyer = User.objects.create_user(email='buyer@test.com', password='Strong-test-password-123', first_name='Alex')
         self.seller = User.objects.create_user(email='seller@test.com', password='Strong-test-password-123')
-        self.store = Store.objects.create(user=self.seller, name='Test store')
+        self.store = Store.objects.create(user=self.seller, name='Test store', status=Store.STATUS_ACTIVE, verified_at=timezone.now())
         self.product = Product.objects.create(store=self.store, title='A speaker', description='Portable', category='electronics', price='10000.00', discount=15, available=5)
         self.address = Address.objects.create(user=self.buyer, address='12 Test Road', city='Lagos', state='Lagos', country='Nigeria', zip='100001')
         self.client = APIClient()
@@ -116,6 +117,55 @@ class StorefrontTests(TestCase):
         self.assertEqual(self.add(6).status_code, 400)
         self.assertEqual(self.add(1.5).status_code, 400)
         self.assertEqual(CartItem.objects.count(), 0)
+
+    def test_cannot_add_products_from_any_owned_store_even_with_spoofed_user(self):
+        for name in ['First store', 'Second store']:
+            store = Store.objects.create(user=self.buyer, name=name, status=Store.STATUS_ACTIVE, verified_at=timezone.now())
+            product = Product.objects.create(store=store, title=name, price=100, discount=0, available=5)
+            response = self.client.post('/api/v1/cart/', {'product': product.pk, 'user': self.seller.pk}, format='json')
+            self.assertEqual(response.status_code, 400, response.data)
+            self.assertIn('any store you own', str(response.data))
+        self.assertFalse(CartItem.objects.exists())
+        self.assertEqual(self.add(1).status_code, 200)
+
+    def test_existing_own_item_is_unpurchasable_but_can_be_removed(self):
+        self.add(1)
+        self.store.user = self.buyer
+        self.store.save()
+        response = self.client.get('/api/v1/cart/')
+        self.assertFalse(response.data['items'][0]['purchasable'])
+        self.assertTrue(response.data['items'][0]['product']['is_own_store'])
+        response = self.client.patch('/api/v1/cart/', {'product': self.product.pk, 'quantity': 2}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(CartItem.objects.get().quantity, 1)
+        self.assertEqual(self.client.delete(f'/api/v1/cart/?product={self.product.pk}').status_code, 200)
+        self.assertFalse(CartItem.objects.exists())
+
+    def test_mixed_cart_self_purchase_rolls_back_entire_checkout(self):
+        self.add(1)
+        cart = CartItem.objects.get().cart
+        store = Store.objects.create(user=self.buyer, name='Own store', status=Store.STATUS_ACTIVE, verified_at=timezone.now())
+        product = Product.objects.create(store=store, title='Own product', price=100, discount=0, available=5)
+        CartItem.objects.create(cart=cart, product=product, quantity=1)
+        response = self.checkout(user=self.seller.pk)
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('any store you own', str(response.data))
+        for item in [self.product, product]:
+            item.refresh_from_db()
+            self.assertEqual(item.available, 5)
+            self.assertEqual(item.sales, 0)
+        cart.refresh_from_db()
+        self.assertFalse(cart.ordered)
+        self.assertEqual(cart.cart_items.count(), 2)
+        self.assertFalse(Order.objects.exists())
+
+    def test_catalog_ownership_is_specific_to_authenticated_account(self):
+        url = f'/api/v1/products/{self.product.pk}/'
+        self.assertFalse(self.client.get(url).data['is_own_store'])
+        self.client.force_authenticate(self.seller)
+        self.assertTrue(self.client.get(url).data['is_own_store'])
+        self.client.force_authenticate(None)
+        self.assertFalse(self.client.get(url).data['is_own_store'])
 
     def test_cart_and_address_delete_accept_documented_query_parameters(self):
         self.add(1)

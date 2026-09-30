@@ -3,11 +3,13 @@ from decimal import Decimal
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from rest_framework.test import APIRequestFactory
+from rest_framework.exceptions import ValidationError
 
 from core.models import Review, User, Wishlist
 from product.models import Product
 from product.serializers import ProductSerializer
 from store.models import Store
+from utils.exceptions import custom_exception_handler
 
 
 class ProductInteractionTests(TestCase):
@@ -95,3 +97,35 @@ class ProductInteractionTests(TestCase):
                     rating=payload["rating"],
                 )
         self.assertEqual(Review.objects.count(), 1)
+
+
+class ApiExceptionHandlerTests(TestCase):
+    def setUp(self):
+        self.factory = APIRequestFactory()
+
+    def test_validation_errors_use_consistent_error_envelope(self):
+        request = self.factory.post("/products/", {}, format="json")
+        response = custom_exception_handler(
+            ValidationError({"title": ["This field is required."]}),
+            {"request": request, "view": None},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"]["code"], "invalid")
+        self.assertEqual(response.data["error"]["message"], "Request validation failed.")
+        self.assertEqual(
+            response.data["error"]["details"]["title"],
+            ["This field is required."],
+        )
+
+    def test_unhandled_errors_are_logged_and_hidden(self):
+        request = self.factory.get("/products/")
+        with self.assertLogs("codematics.api", level="ERROR"):
+            response = custom_exception_handler(
+                RuntimeError("database exploded"),
+                {"request": request, "view": None},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.data["error"]["code"], "server_error")
+        self.assertEqual(response.data["error"]["message"], "An unexpected error occurred.")

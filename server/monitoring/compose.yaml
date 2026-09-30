@@ -1,0 +1,79 @@
+name: commerce-monitoring
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    command: ['--config.file=/etc/prometheus/prometheus.yml', '--storage.tsdb.retention.time=15d', '--storage.tsdb.retention.size=5GB']
+    restart: unless-stopped
+    ports: ['127.0.0.1:9090:9090']
+    extra_hosts: ['host.docker.internal:host-gateway']
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ./targets:/etc/prometheus/targets:ro
+      - ./secrets/metrics-token:/run/secrets/metrics-token:ro
+      - prometheus-data:/prometheus
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    ports: ['127.0.0.1:3002:3000']
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Run python3 init_local.py first}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
+      GF_ANALYTICS_REPORTING_ENABLED: 'false'
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+  tempo:
+    image: grafana/tempo:2.8.2
+    command: ['-config.file=/etc/tempo.yaml']
+    restart: unless-stopped
+    ports: ['127.0.0.1:4318:4318']
+    volumes:
+      - ./tempo.yml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+  loki:
+    image: grafana/loki:3.5.3
+    command: ['-config.file=/etc/loki/local-config.yaml']
+    restart: unless-stopped
+    volumes:
+      - ./loki.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+  alloy:
+    image: grafana/alloy:v1.10.2
+    command: ['run', '--storage.path=/var/lib/alloy', '/etc/alloy/config.alloy']
+    restart: unless-stopped
+    volumes:
+      - ./alloy.alloy:/etc/alloy/config.alloy:ro
+      - ./logs:/var/log/commerce:ro
+      - alloy-data:/var/lib/alloy
+  node-exporter:
+    image: prom/node-exporter:v1.9.1
+    profiles: ['linux-host']
+    restart: unless-stopped
+    pid: host
+    command: ['--path.rootfs=/host']
+    volumes: ['/:/host:ro,rslave']
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    profiles: ['postgres']
+    restart: unless-stopped
+    extra_hosts: ['host.docker.internal:host-gateway']
+    environment:
+      DATA_SOURCE_NAME: ${POSTGRES_EXPORTER_DSN:-}
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.74.0
+    profiles: ['redis']
+    restart: unless-stopped
+    extra_hosts: ['host.docker.internal:host-gateway']
+    environment:
+      REDIS_ADDR: ${REDIS_EXPORTER_ADDR:-redis://host.docker.internal:6379}
+      REDIS_PASSWORD: ${REDIS_EXPORTER_PASSWORD:-}
+volumes:
+  prometheus-data:
+  grafana-data:
+  tempo-data:
+  loki-data:
+  alloy-data:

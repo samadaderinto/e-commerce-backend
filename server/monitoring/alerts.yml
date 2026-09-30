@@ -1,0 +1,34 @@
+groups:
+  - name: commerce
+    rules:
+      - alert: CommerceScrapeUnavailable
+        expr: up{job="commerce"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: 'Commerce metrics unreachable on {{ $labels.instance }}'
+          description: 'Check process health, scrape token, allowed hosts and networking.'
+      - alert: CommerceDependencyUnavailable
+        expr: commerce_dependency_up == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: '{{ $labels.dependency }} is unavailable on {{ $labels.instance }}'
+      - alert: CommerceHighErrorRate
+        expr: sum(rate(commerce_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(commerce_http_requests_total[5m])), 0.001) > 0.05 and sum(increase(commerce_http_requests_total[5m])) > 20
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 'More than 5% of API requests are failing'
+      - alert: CommerceSlowRequests
+        expr: histogram_quantile(0.95, sum by (le) (rate(commerce_http_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 'API p95 latency exceeds one second'
+      - alert: CommerceHostDiskLow
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs"} / node_filesystem_size_bytes < 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Less than 10% disk space remains on {{ $labels.instance }}'

@@ -9,6 +9,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path('', include('observability.urls')),
     path('api/schema/', SpectacularAPIView.as_view(permission_classes=[AllowAny], authentication_classes=[]), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema', permission_classes=[AllowAny], authentication_classes=[]), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema', permission_classes=[AllowAny], authentication_classes=[]), name='redoc'),
@@ -24,6 +25,9 @@ urlpatterns = [
     path('api/v1/orders/', OrdersView.as_view()),
     path('api/v1/orders/<int:pk>/', OrderDetailView.as_view()),
     path('api/v1/stores/', include('store.urls')),
+    path('api/v1/notifications/', include('notification.urls')),
 ]
+if settings.LOCAL_PROFILING_ENABLED:
+    urlpatterns += [path('silk/', include('silk.urls', namespace='silk'))]
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

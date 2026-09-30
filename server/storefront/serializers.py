@@ -6,6 +6,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
 from core.models import Address, Review, User
 from product.models import Product
+from product.policies import is_own_store
 
 
 def unit_price(product):
@@ -21,13 +22,17 @@ class UserSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(UserSerializer):
     password = serializers.CharField(write_only=True, min_length=8, max_length=128, trim_whitespace=False)
+    referral_code = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ['password']
+        fields = UserSerializer.Meta.fields + ['password', 'referral_code']
         read_only_fields = ['id']
 
     def validate(self, data):
-        validate_password(data['password'], user=User(**{k: v for k, v in data.items() if k != 'password'}))
+        validate_password(
+            data['password'],
+            user=User(**{k: v for k, v in data.items() if k not in ['password', 'referral_code']}),
+        )
         return data
 
 
@@ -38,6 +43,7 @@ class AddressSerializer(serializers.ModelSerializer):
 
 
 class CatalogSerializer(serializers.ModelSerializer):
+    is_own_store = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     sale_price = serializers.SerializerMethodField()
@@ -50,7 +56,11 @@ class CatalogSerializer(serializers.ModelSerializer):
         model = Product
         fields = ['id', 'title', 'description', 'category', 'brand', 'price', 'sale_price',
                   'discount', 'available', 'average_rating', 'rating_count', 'store',
-                  'store_name', 'store_username', 'image', 'images', 'tags', 'created']
+                  'store_name', 'store_username', 'image', 'images', 'tags', 'created', 'is_own_store']
+
+    @extend_schema_field(OpenApiTypes.BOOL)
+    def get_is_own_store(self, obj):
+        return is_own_store(obj, getattr(self.context.get('request'), 'user', None))
 
     @extend_schema_field(OpenApiTypes.DECIMAL)
     def get_sale_price(self, obj):
@@ -113,6 +123,7 @@ class AuthRequestSerializer(serializers.Serializer):
     first_name = serializers.CharField(required=False)
     last_name = serializers.CharField(required=False)
     phone1 = serializers.CharField(required=False)
+    referral_code = serializers.CharField(required=False)
     token = serializers.CharField(required=False)
     uid = serializers.CharField(required=False)
     refresh = serializers.CharField(required=False)
@@ -177,5 +188,3 @@ class ProductIdRequestSerializer(serializers.Serializer):
 
 class CartMutationRequestSerializer(ProductIdRequestSerializer):
     quantity = serializers.IntegerField(min_value=1, max_value=1000, required=False)
-
-
