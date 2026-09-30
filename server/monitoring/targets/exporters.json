@@ -2,5 +2,12 @@
   {
     "targets": ["elasticsearch-exporter:9114"],
     "labels": {"service": "elasticsearch"}
-  }
+  },
+  {"targets": ["postgres-exporter:9187"], "labels": {"service": "postgres"}},
+  {"targets": ["redis-exporter:9121"], "labels": {"service": "redis"}},
+  {"targets": ["node-exporter:9100"], "labels": {"service": "host"}},
+  {"targets": ["cadvisor:8080"], "labels": {"service": "containers"}},
+  {"targets": ["grafana:3000"], "labels": {"service": "grafana"}},
+  {"targets": ["loki:3100"], "labels": {"service": "loki"}},
+  {"targets": ["tempo:3200"], "labels": {"service": "tempo"}}
 ]

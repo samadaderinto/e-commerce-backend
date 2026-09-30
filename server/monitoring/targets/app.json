@@ -1,1 +1,1 @@
-[{"targets": ["host.docker.internal:8000"], "labels": {"environment": "local"}}]
+[{"targets": ["api:8000"], "labels": {"environment": "local", "service": "api"}}]

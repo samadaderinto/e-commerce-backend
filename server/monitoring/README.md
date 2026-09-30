@@ -28,8 +28,8 @@ From the repository root:
 ```sh
 cd server
 ../.venv/bin/python monitoring/init_local.py
-docker compose -f compose.yaml up --build -d api redis postgres
-docker compose -f monitoring/compose.yaml up -d
+docker compose --env-file .env -f compose.yaml up --build -d
+docker compose --env-file .env -f monitoring/compose.yaml up -d
 ```
 
 The API is at `http://127.0.0.1:8000`, Grafana is at
@@ -37,6 +37,47 @@ The API is at `http://127.0.0.1:8000`, Grafana is at
 uses the official Redis service at `redis://redis:6379/0`. Elasticsearch runs at
 `http://127.0.0.1:9200` in the app stack. The generated Grafana password and
 metrics token are in `server/.env`.
+
+Both projects share `commerce-network` (override `COMMERCE_NETWORK` in `.env`).
+Start the app first: it creates the network that monitoring joins. Always pass
+the same `--env-file` to both projects so database credentials and scrape tokens
+match. The collectors connect through Docker service names, not host-published
+ports. The API's container configuration allows the `api` hostname.
+
+PostgreSQL, Redis, Elasticsearch, node-exporter and cAdvisor all start by default.
+The **Commerce Infrastructure** dashboard shows scrape status, database
+connections/transactions/cache hits/deadlocks/size, Redis operations/memory/hits/
+evictions, container CPU/memory/network/disk I/O, host CPU/memory/disk, and firing
+alerts. **Commerce API Overview** keeps request, query, dependency and search
+metrics. Prometheus also scrapes Grafana, Loki and Tempo themselves.
+
+cAdvisor needs privileged access and read-only host mounts to inspect cgroups
+and Docker metadata. Exporter ports are private to the Docker network. Only
+Compose project/service labels are exported as container labels.
+On Docker Desktop, host metrics describe the Linux VM running Docker, not macOS
+or Windows. Container disk metrics depend on the Docker storage driver. Memory
+limit alerts require an actual container limit; use host memory alerts as well.
+
+The PostgreSQL exporter defaults to the same local credentials as the app.
+For production, set `POSTGRES_EXPORTER_USER` / `POSTGRES_EXPORTER_PASSWORD` to a
+dedicated role with `pg_monitor` and database CONNECT permission; set
+`POSTGRES_EXPORTER_URI` for a different server or TLS configuration. Redis can
+use `REDIS_EXPORTER_ADDR` / `REDIS_EXPORTER_PASSWORD` overrides.
+
+Validate configuration and confirm actual coverage:
+
+```sh
+docker compose --env-file .env -f compose.yaml config --quiet
+docker compose --env-file .env -f monitoring/compose.yaml config --quiet
+docker compose --env-file .env -f monitoring/compose.yaml exec prometheus promtool check config /tmp/prometheus.yml
+../.venv/bin/python monitoring/check_monitoring.py
+```
+
+The verification command fails on missing/down scrape targets, disconnected
+database/cache exporters, or missing API/container/host metrics. It does not
+assume that a running exporter has successfully connected to its dependency.
+Alerts are evaluated in Prometheus and shown in Grafana; email/chat/paging
+delivery requires configuring a real notification destination separately.
 
 Alloy collects Docker container stdout through the Docker socket and sends it to
 Loki. Django writes JSON logs to stdout, so request IDs, route templates, status
@@ -50,14 +91,14 @@ Inspect or stop both stacks:
 docker compose -f compose.yaml ps
 docker compose -f monitoring/compose.yaml ps
 docker compose -f compose.yaml logs -f api redis
-docker compose -f compose.yaml down
 docker compose -f monitoring/compose.yaml down
+docker compose -f compose.yaml down
 ```
 
 To restart only the log aggregation path after changing Alloy or Loki:
 
 ```sh
-docker compose -f monitoring/compose.yaml up -d --force-recreate loki alloy grafana
+docker compose --env-file .env -f monitoring/compose.yaml up -d --force-recreate loki alloy grafana
 ```
 
 In Grafana, go to Explore and choose the Loki data source. Useful local queries:
@@ -84,14 +125,18 @@ Kafka and RabbitMQ are optional messaging dependencies and are disabled by
 default. Start them only when testing the queue consumers:
 
 ```sh
-docker compose -f monitoring/compose.yaml --profile messaging up -d kafka rabbitmq
+docker compose --env-file .env -f monitoring/compose.yaml --profile messaging up -d kafka rabbitmq
 ```
 
 The default monitoring command does not pull or require either messaging image.
 
+### Running the API outside Docker
+
+The default scrape target is `api:8000`. For a host-run API, change
+`targets/app.json` to `host.docker.internal:8000`, add that hostname to
+`ALLOWED_HOSTS`, and keep the infrastructure stack running. Use:
+
 ```sh
-cd server
-../.venv/bin/python monitoring/init_local.py
 DJANGO_SETTINGS_MODULE=codematics.storefront_settings \
 DJANGO_DEBUG=true \
 PROMETHEUS_MULTIPROC_DIR=/tmp/commerce-prometheus \
@@ -105,7 +150,7 @@ simple Django run, omit the Gunicorn variables and use `manage.py runserver`.
 Start the local stack:
 
 ```sh
-docker compose -f monitoring/compose.yaml up -d
+docker compose --env-file .env -f monitoring/compose.yaml up -d
 ```
 
 Grafana is at `http://127.0.0.1:3002`, with the password in `server/.env`;
@@ -129,11 +174,8 @@ Set `DJANGO_DEBUG=false`,
 collector or Tempo endpoint.
 
 Prometheus should scrape `/metrics/` over a private network. Replace
-`targets/app.json` with production targets and add node, Postgres or Redis
-exporters to `targets/exporters.json` as needed. The dashboard and alerts cover
-API workload, errors, latency, DB/cache state and host disk capacity when the
-corresponding exporter is enabled. Configure Alertmanager or Grafana Alerting
-for paging.
+`targets/app.json` and exporter connection settings with production targets as
+needed. Configure Alertmanager or Grafana Alerting for paging.
 
 The local stack retains 15 days of metrics, 48 hours of traces and 7 days of logs.
 The included Loki/Tempo/Alloy configuration is compact local infrastructure. In

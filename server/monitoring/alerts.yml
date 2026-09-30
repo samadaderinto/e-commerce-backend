@@ -56,3 +56,75 @@ groups:
         labels: {severity: warning}
         annotations:
           summary: 'Elasticsearch JVM heap is above 85%'
+      - alert: CommerceInfrastructureScrapeUnavailable
+        expr: up{job="infrastructure"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: '{{ $labels.service }} metrics are unreachable'
+      - alert: CommercePostgresUnavailable
+        expr: pg_up == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: 'PostgreSQL exporter cannot connect to the database'
+      - alert: CommercePostgresConnectionsHigh
+        expr: sum by (instance) (pg_stat_database_numbackends) / on(instance) pg_settings_max_connections > 0.8
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 'PostgreSQL connections exceed 80% of the limit'
+      - alert: CommercePostgresDeadlocks
+        expr: increase(pg_stat_database_deadlocks[5m]) > 0
+        for: 1m
+        labels: {severity: warning}
+        annotations:
+          summary: 'PostgreSQL deadlocks detected in {{ $labels.datname }}'
+      - alert: CommerceRedisUnavailable
+        expr: redis_up == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: 'Redis exporter cannot connect to the cache'
+      - alert: CommerceRedisMemoryHigh
+        expr: (redis_memory_used_bytes / redis_memory_max_bytes > 0.85) and (redis_memory_max_bytes > 0)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Redis memory exceeds 85% of its configured limit'
+      - alert: CommerceRedisEvictions
+        expr: increase(redis_evicted_keys_total[5m]) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Redis is evicting cache entries'
+      - alert: CommerceHostCpuHigh
+        expr: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 90
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Docker host CPU exceeds 90%'
+      - alert: CommerceHostMemoryHigh
+        expr: 1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes > 0.9
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Docker host memory exceeds 90%'
+      - alert: CommerceContainerMemoryHigh
+        expr: (container_memory_working_set_bytes{container_label_com_docker_compose_service!=""} / container_spec_memory_limit_bytes > 0.9) and (container_spec_memory_limit_bytes > 0) and (container_spec_memory_limit_bytes < 1e18)
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: '{{ $labels.container_label_com_docker_compose_service }} exceeds 90% of its memory limit'
+      - alert: CommerceContainerOom
+        expr: increase(container_oom_events_total{container_label_com_docker_compose_service!=""}[5m]) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: '{{ $labels.container_label_com_docker_compose_service }} had an out-of-memory event'
+      - alert: CommerceContainerMetricsMissing
+        expr: absent(container_last_seen{container_label_com_docker_compose_service="api"})
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: 'API container metrics are missing from cAdvisor'
+          description: 'Check cAdvisor Docker discovery and host mounts, or whether the API container has stopped.'

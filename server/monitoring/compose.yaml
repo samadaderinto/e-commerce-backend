@@ -32,9 +32,8 @@ services:
       - kafka-data:/var/lib/kafka/data
   prometheus:
     image: prom/prometheus:v3.5.0
+    entrypoint: ['/bin/sh', '-ec']
     command:
-      - /bin/sh
-      - -c
       - sed "s|__OBSERVABILITY_TOKEN__|$${OBSERVABILITY_TOKEN}|g" /etc/prometheus/prometheus.yml > /tmp/prometheus.yml && exec prometheus --config.file=/tmp/prometheus.yml --storage.tsdb.retention.time=15d --storage.tsdb.retention.size=5GB
     restart: unless-stopped
     ports: ['127.0.0.1:9090:9090']
@@ -88,32 +87,43 @@ services:
       - alloy-data:/var/lib/alloy
   node-exporter:
     image: prom/node-exporter:v1.9.1
-    profiles: ['linux-host']
     restart: unless-stopped
     pid: host
-    command: ['--path.rootfs=/host']
-    volumes: ['/:/host:ro,rslave']
+    command: ['--path.rootfs=/host', '--path.procfs=/host/proc', '--path.sysfs=/host/sys']
+    volumes: ['/:/host:ro']
+  cadvisor:
+    image: ghcr.io/google/cadvisor:0.55.1
+    restart: unless-stopped
+    privileged: true
+    command:
+      - --docker_only=true
+      - --housekeeping_interval=15s
+      - --store_container_labels=false
+      - --whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.17.1
-    profiles: ['postgres']
     restart: unless-stopped
-    extra_hosts: ['host.docker.internal:host-gateway']
     environment:
-      DATA_SOURCE_NAME: ${POSTGRES_EXPORTER_DSN:-}
+      DATA_SOURCE_URI: ${POSTGRES_EXPORTER_URI:-postgres:5432/postgres?sslmode=disable}
+      DATA_SOURCE_USER: ${POSTGRES_EXPORTER_USER:-${POSTGRES_USER:-commerce}}
+      DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_PASSWORD:-${POSTGRES_PASSWORD:-change-me-local}}
   redis-exporter:
     image: oliver006/redis_exporter:v1.74.0
-    profiles: ['redis']
     restart: unless-stopped
-    extra_hosts: ['host.docker.internal:host-gateway']
     environment:
-      REDIS_ADDR: ${REDIS_EXPORTER_ADDR:-redis://host.docker.internal:6379}
+      REDIS_ADDR: ${REDIS_EXPORTER_ADDR:-redis://redis:6379}
       REDIS_PASSWORD: ${REDIS_EXPORTER_PASSWORD:-}
   elasticsearch-exporter:
     image: prometheuscommunity/elasticsearch-exporter:v1.9.0
     restart: unless-stopped
     extra_hosts: ['host.docker.internal:host-gateway']
     command:
-      - --es.uri=${ELASTICSEARCH_EXPORTER_URI:-http://host.docker.internal:9200}
+      - --es.uri=${ELASTICSEARCH_EXPORTER_URI:-http://elasticsearch:9200}
       - --es.all
       - --es.indices
       - --es.shards
@@ -126,3 +136,8 @@ volumes:
   tempo-data:
   loki-data:
   alloy-data:
+
+networks:
+  default:
+    external: true
+    name: ${COMMERCE_NETWORK:-commerce-network}
