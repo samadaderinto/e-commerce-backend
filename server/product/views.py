@@ -3,7 +3,6 @@ import logging
 
 from django.db import transaction
 from django.db.models import Count, Prefetch
-from django.conf import settings
 from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.shortcuts import get_object_or_404, get_list_or_404
@@ -33,9 +32,6 @@ from rest_framework.decorators import action
 
 from rest_framework.parsers import JSONParser, MultiPartParser
 from rest_framework.decorators import api_view, parser_classes
-
-from usps import USPSApi, Address as uspsAddress
-from usps import SERVICE_PRIORITY, LABEL_ZPL
 
 # Create your views here.
 
@@ -70,9 +66,6 @@ class ProductViewSet(viewsets.GenericViewSet):
         product_image.delete()
         return Response(status=status.HTTP_202_ACCEPTED)
 
-    # you will also need to request further permissions by emailing uspstechnicalsupport@mailps.custhelp.com about Label API access.
-    # get labelzpi and change value in constants.py
-
     def get_product(self, request, productId):
         cached_product = cache.get(product_cache_key(productId))
         if cached_product is not None and not request.user.is_authenticated:
@@ -99,35 +92,6 @@ class ProductViewSet(viewsets.GenericViewSet):
                 category=product.category,
                 visibility=True,
             ).exclude(id=product.id)[:5]
-        if request.user.is_authenticated:
-            usps = USPSApi(settings.USPS_USERNAME)
-            to_address = uspsAddress(
-                        name='Tobin Brown',
-                        address_1='1234 Test Ave.',
-                        city='Test',
-                        state='NE',
-                        zipcode='55555'
-                    )
-
-            from_address = uspsAddress(
-                        name='Tobin Brown',
-                        address_1='1234 Test Ave.',
-                        city='Test',
-                        state='NE',
-                        zipcode='55555'
-                    )
-            validate_to_address = usps.validate_address(to_address)
-            validate_from_address = usps.validate_address(from_address)
-            weight = 10  # in ounce
-            if validate_to_address.result and validate_from_address.result:
-                    # this is to get estimate delivery date if user orders product in certain range of time
-                    label = usps.create_label(
-                        to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
-                    )
-
-                    data = serializer.data
-                    data['label'] = label.result
-                    return Response(data, status=status.HTTP_200_OK)
         data = get_cached_product_data(product.id)
         cache.set(product_cache_key(product.id), data, PRODUCT_CACHE_TIMEOUT)
         return Response(data, status=status.HTTP_200_OK)

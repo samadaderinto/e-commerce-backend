@@ -31,7 +31,12 @@ def invalidate_product_cache(product):
 
 @versioned_lru_cache('products')
 def get_cached_product_data(product_id):
-    product = Product.objects.get(id=product_id, visibility=True, store__status="active")
+    product = Product.objects.get(
+        id=product_id,
+        visibility=True,
+        store__status="active",
+        store__verified_at__isnull=False,
+    )
     return dict(ProductSerializer(product).data)
 
 
@@ -42,13 +47,18 @@ def get_cached_store_product_data(store_id, product_id):
         id=product_id,
         visibility=True,
         store__status="active",
+        store__verified_at__isnull=False,
     )
     return dict(ProductSerializer(product).data)
 
 
 @versioned_lru_cache('products')
 def get_cached_landing_products():
-    products = Product.objects.filter(visibility=True, store__status="active")
+    products = Product.objects.filter(
+        visibility=True,
+        store__status="active",
+        store__verified_at__isnull=False,
+    )
     newest_products = products.order_by('-created', '-pk')[:10]
     highest_rated_products = products.order_by('-average_rating', '-pk')[:10]
     best_selling_products = products.order_by('-sales', '-pk')[:10]

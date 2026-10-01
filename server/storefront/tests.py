@@ -2,6 +2,7 @@ from decimal import Decimal
 from datetime import timedelta
 import json
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 from django.core import mail, signing
@@ -13,7 +14,8 @@ from cart.models import CartItem
 from core.models import Address, User
 from payment.models import Coupon, CouponRedemption, Order
 from product.models import Product
-from store.models import Store
+from store.models import Schedule, Store
+from store.services import publish_due_products
 from storefront.serializers import unit_price
 
 
@@ -43,6 +45,8 @@ class OpenApiDocumentationTests(SimpleTestCase):
         self.assertIn('/api/v1/products/{id}/', schema['paths'])
         self.assertIn('/api/v1/cart/', schema['paths'])
         self.assertIn('/api/v1/checkout/', schema['paths'])
+        self.assertIn('/api/v1/notifications/', schema['paths'])
+        self.assertIn('/api/v1/admin/stores/', schema['paths'])
         self.assertIn('jwtAuth', schema['components']['securitySchemes'])
         self.assertNotIn('security', schema['paths']['/api/v1/products/']['get'])
         self.assertEqual(
@@ -105,6 +109,46 @@ class StorefrontTests(TestCase):
         self.store.status = Store.STATUS_BLOCKED
         self.store.save()
         self.assertEqual(self.client.get('/api/v1/products/').data['count'], 0)
+
+    def test_store_must_be_staff_approved_before_it_can_be_public(self):
+        pending_store = Store.objects.create(user=self.seller, name='Awaiting review')
+        pending_product = Product.objects.create(
+            store=pending_store, title='Pending product', price='500.00', discount=0, available=2
+        )
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/v1/products/').data['count'], 1)
+        self.assertEqual(self.client.get(f'/api/v1/products/{pending_product.pk}/').status_code, 404)
+
+        self.client.force_authenticate(self.buyer)
+        self.assertEqual(self.client.get('/api/v1/admin/stores/').status_code, 403)
+        self.buyer.is_staff = True
+        self.buyer.save(update_fields=['is_staff'])
+        self.assertEqual(self.client.get('/api/v1/admin/stores/').data['results'][0]['id'], pending_store.pk)
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(f'/api/v1/admin/stores/{pending_store.pk}/approve/')
+        self.assertEqual(response.status_code, 200, response.data)
+        pending_store.refresh_from_db()
+        self.assertEqual(pending_store.status, Store.STATUS_ACTIVE)
+        self.assertIsNotNone(pending_store.verified_at)
+        self.assertEqual(pending_store.verified_by, self.buyer)
+
+        self.client.force_authenticate(None)
+        self.assertEqual(self.client.get('/api/v1/products/').data['count'], 2)
+
+    def test_scheduled_products_remain_queued_until_store_is_approved(self):
+        pending_store = Store.objects.create(user=self.seller, name='Scheduled store')
+        product = Product.objects.create(
+            store=pending_store, title='Scheduled product', price='500.00',
+            discount=0, available=2, visibility=False,
+        )
+        schedule = Schedule.objects.create(
+            store=pending_store, product=product, make_visible_at=timezone.now() - timedelta(minutes=1)
+        )
+
+        self.assertEqual(publish_due_products(), 0)
+        product.refresh_from_db()
+        self.assertFalse(product.visibility)
+        self.assertTrue(Schedule.objects.filter(pk=schedule.pk).exists())
 
     def test_cart_uses_session_owner_and_discounted_prices(self):
         response = self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': 2, 'user': self.seller.pk}, format='json')
@@ -261,6 +305,22 @@ class StorefrontTests(TestCase):
         self.add()
         self.assertEqual(self.checkout(payment_type='card').status_code, 400)
         self.assertFalse(Order.objects.exists())
+
+    @override_settings(STRIPE_SECRET='sk_test', STRIPE_WALLET_PAYMENT_METHODS='paypal,cashapp')
+    @patch('storefront.views.stripe.checkout.Session.create')
+    def test_wallet_checkout_excludes_paypal_from_configured_methods(self, create_session):
+        create_session.return_value = SimpleNamespace(id='cs_test', url='https://checkout.test')
+        self.add()
+
+        response = self.client.post(
+            '/api/v1/checkout/wallet-session/',
+            {'address': self.address.pk, 'checkout_key': str(uuid4())},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['payment_methods'], ['cashapp'])
+        self.assertEqual(create_session.call_args.kwargs['payment_method_types'], ['cashapp'])
 
     def test_registration_requires_verification_and_hashes_password(self):
         self.client.force_authenticate(None)

@@ -19,7 +19,12 @@ import dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-dotenv.read_dotenv(str(BASE_DIR / '.env'))
+LOCAL_ENV_FILE = BASE_DIR / '.env'
+if LOCAL_ENV_FILE.is_file():
+    if hasattr(dotenv, "read_dotenv"):
+        dotenv.read_dotenv(str(LOCAL_ENV_FILE))
+    elif hasattr(dotenv, "load_dotenv"):
+        dotenv.load_dotenv(str(LOCAL_ENV_FILE))
 SETTINGS_PATH = os.path.dirname(os.path.dirname(__file__))
 
 # Quick-start development settings - unsuitable for production
@@ -397,23 +402,52 @@ SIMPLE_JWT = {
 }
 
 
-EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-# EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
-EMAIL_USE_TSL = True
-EMAIL_HOST = str(os.environ.get("EMAIL_HOST"))
-EMAIL_HOST_USER = str(os.environ.get("EMAIL_HOST_USER"))
-EMAIL_HOST_PASSWORD = str(os.environ.get("EMAIL_HOST_PASSWORD"))
-EMAIL_PORT = os.environ.get("EMAIL_HOST_PORT")
-APPLICATION_EMAIL = str(os.environ.get("APPLICATION_EMAIL"))
-DEFAULT_FROM_EMAIL = str(os.environ.get("DEFAULT_FROM_EMAIL"))
-QUEUE_EMAILS = os.environ.get("QUEUE_EMAILS", "true").lower() == "true"
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() == "true"
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+DEFAULT_FROM_EMAIL = os.environ.get(
+    "DEFAULT_FROM_EMAIL",
+    "Proace <hello@proace.example>",
+)
+APPLICATION_EMAIL = os.environ.get("APPLICATION_EMAIL", DEFAULT_FROM_EMAIL)
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "amqp://guest:guest@127.0.0.1:5672//")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "rpc://")
-CELERY_TASK_DEFAULT_QUEUE = "commerce.email"
-CELERY_TASK_ROUTES = {"notification.tasks.send_email_task": {"queue": "commerce.email"}}
+CELERY_TASK_DEFAULT_QUEUE = "commerce.notifications"
+CELERY_BROKER_URL = os.environ.get(
+    "CELERY_BROKER_URL",
+    "redis://127.0.0.1:6379/1",
+)
+CELERY_RESULT_BACKEND = None
+CELERY_TASK_ROUTES = {
+    "notification.tasks.deliver_notification_task": {
+        "queue": CELERY_TASK_DEFAULT_QUEUE,
+    },
+    "notification.tasks.recover_notification_deliveries": {
+        "queue": CELERY_TASK_DEFAULT_QUEUE,
+    },
+}
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TIME_LIMIT = 120
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_BEAT_SCHEDULE = {
+    "recover-notification-deliveries": {
+        "task": "notification.tasks.recover_notification_deliveries",
+        "schedule": timedelta(seconds=60),
+    },
+}
+NOTIFICATION_DELIVERY_MAX_ATTEMPTS = int(
+    os.environ.get("NOTIFICATION_DELIVERY_MAX_ATTEMPTS", "8")
+)
+NOTIFICATION_DELIVERY_STALE_SECONDS = int(
+    os.environ.get("NOTIFICATION_DELIVERY_STALE_SECONDS", "300")
+)
 
 
 PASSWORD_HASHERS = [
@@ -430,14 +464,6 @@ CRON_CLASSES = [
     "core.cron.deactivate_coupon"
 ]
 
-
-PAYPAL_RECEIVER_EMAIL = str(
-    os.environ.get("PAYPAL_RECEIVER_EMAIL")
-)
-
-PAYPAL_TEST = True
-
-USPS_USERNAME = str(os.environ.get("USPS_USERNAME"))
 
 TAGGIT_CASE_INSENSITIVE = True
 

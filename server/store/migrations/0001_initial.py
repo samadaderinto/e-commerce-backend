@@ -101,7 +101,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('created', models.DateTimeField(auto_now_add=True)),
                 ('updated', models.DateTimeField(auto_now=True)),
-                ('amount', models.DecimalField(decimal_places=2, max_digits=10000000000)),
+                ('amount', models.DecimalField(decimal_places=2, max_digits=15)),
                 ('store', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='store.store')),
             ],
             options={
@@ -114,7 +114,7 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('created', models.DateTimeField(auto_now_add=True)),
                 ('updated', models.DateTimeField(auto_now=True)),
-                ('amount', models.DecimalField(decimal_places=2, max_digits=10000000000)),
+                ('amount', models.DecimalField(decimal_places=2, max_digits=15)),
                 ('withdrawed_on', models.DateTimeField(auto_now_add=True)),
                 ('store', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='store.store')),
             ],

@@ -74,7 +74,7 @@ jobs:
     name: Next.js Build
     runs-on: ubuntu-latest
     env:
-      API_URL: ${{ secrets.CI_API_URL || 'http://127.0.0.1:8000/api/v1' }}
+      API_URL: http://127.0.0.1:8000/api/v1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -161,6 +161,7 @@ jobs:
     env:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+      RENDER_WORKER_SERVICE_ID: ${{ secrets.RENDER_WORKER_SERVICE_ID }}
       RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
       API_URL: ${{ secrets.PROD_API_URL }}
       DJANGO_SETTINGS_MODULE: codematics.storefront_settings
@@ -195,12 +196,19 @@ jobs:
       KAFKA_LOGGING_ENABLED: ${{ secrets.PROD_KAFKA_LOGGING_ENABLED || 'false' }}
       KAFKA_LOG_TOPIC: ${{ secrets.PROD_KAFKA_LOG_TOPIC || 'commerce.logs' }}
       CELERY_BROKER_URL: ${{ secrets.PROD_CELERY_BROKER_URL }}
+      NOTIFICATION_DELIVERY_MAX_ATTEMPTS: ${{ secrets.PROD_NOTIFICATION_DELIVERY_MAX_ATTEMPTS || '8' }}
+      NOTIFICATION_DELIVERY_STALE_SECONDS: ${{ secrets.PROD_NOTIFICATION_DELIVERY_STALE_SECONDS || '300' }}
+      EMAIL_BACKEND: ${{ secrets.PROD_EMAIL_BACKEND || 'django.core.mail.backends.smtp.EmailBackend' }}
       EMAIL_HOST: ${{ secrets.PROD_EMAIL_HOST }}
       EMAIL_HOST_USER: ${{ secrets.PROD_EMAIL_HOST_USER }}
       EMAIL_HOST_PASSWORD: ${{ secrets.PROD_EMAIL_HOST_PASSWORD }}
       EMAIL_PORT: ${{ secrets.PROD_EMAIL_PORT || '587' }}
       EMAIL_USE_TLS: ${{ secrets.PROD_EMAIL_USE_TLS || 'true' }}
       DEFAULT_FROM_EMAIL: ${{ secrets.PROD_DEFAULT_FROM_EMAIL }}
+      APPLICATION_EMAIL: ${{ secrets.PROD_APPLICATION_EMAIL }}
+      FCM_ENABLED: ${{ secrets.PROD_FCM_ENABLED || 'false' }}
+      FIREBASE_PROJECT_ID: ${{ secrets.PROD_FIREBASE_PROJECT_ID }}
+      FIREBASE_CREDENTIALS_JSON: ${{ secrets.PROD_FIREBASE_CREDENTIALS_JSON }}
 
     steps:
       - name: Checkout
@@ -211,6 +219,7 @@ jobs:
           required=(
             RENDER_API_KEY
             RENDER_SERVICE_ID
+            RENDER_WORKER_SERVICE_ID
             RENDER_DEPLOY_HOOK_URL
           )
           missing=0
@@ -242,6 +251,12 @@ jobs:
           if [ "${ELASTICSEARCH_ENABLED}" != "false" ]; then
             required+=(ELASTICSEARCH_URL)
           fi
+          if [ "${FCM_ENABLED}" = "true" ]; then
+            required+=(FIREBASE_PROJECT_ID FIREBASE_CREDENTIALS_JSON)
+          fi
+          if [ "${EMAIL_BACKEND}" = "django.core.mail.backends.smtp.EmailBackend" ]; then
+            required+=(EMAIL_HOST EMAIL_HOST_USER EMAIL_HOST_PASSWORD DEFAULT_FROM_EMAIL)
+          fi
           missing=0
           for name in "${required[@]}"; do
             if [ -z "${!name}" ]; then
@@ -259,3 +274,8 @@ jobs:
           curl --fail --show-error --silent \
             --request POST \
             "$RENDER_DEPLOY_HOOK_URL"
+          curl --fail --show-error --silent \
+            --request POST \
+            --header "Authorization: Bearer $RENDER_API_KEY" \
+            --header "Accept: application/json" \
+            "https://api.render.com/v1/services/$RENDER_WORKER_SERVICE_ID/deploys"

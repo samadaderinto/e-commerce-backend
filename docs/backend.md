@@ -97,6 +97,9 @@ Runtime configuration:
 | `ELASTICSEARCH_ENABLED` | Enables Elasticsearch search and health checks |
 | `ELASTICSEARCH_URL` | Elasticsearch HTTP endpoint |
 | `ELASTICSEARCH_PRODUCTS_INDEX` | Product search index name |
+| `FCM_ENABLED` | Enables optional Firebase Cloud Messaging delivery for inbox notifications |
+| `FIREBASE_PROJECT_ID` | Firebase project ID used by the Firebase Admin SDK |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service-account credential file, supplied outside the repository |
 
 Backend tools added or wired:
 
@@ -111,6 +114,13 @@ Backend tools added or wired:
 - `django-silk`: local-only API profiling.
 - `kafka-python`: optional Kafka log publishing and log indexing helpers.
 - `elasticsearch`: official Python client for catalog search.
+- `firebase-admin`: optional Firebase Cloud Messaging delivery; the server uses
+  Application Default Credentials and never stores service-account credentials.
+
+When enabling FCM, set `FCM_ENABLED=true`, set `FIREBASE_PROJECT_ID`, configure
+Google Application Default Credentials, and run the Celery worker. Apply
+migrations before deployment. FCM supplements the in-app inbox; it does not
+replace persisted notifications or email delivery.
 
 ## Local commands
 

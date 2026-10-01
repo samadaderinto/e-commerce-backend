@@ -46,3 +46,7 @@ class NotificationCountSerializer(serializers.Serializer):
     read = serializers.IntegerField()
     archived = serializers.IntegerField()
     total = serializers.IntegerField()
+
+
+class PushDeviceTokenSerializer(serializers.Serializer):
+    token = serializers.CharField(max_length=4096, trim_whitespace=True)

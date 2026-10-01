@@ -39,30 +39,31 @@ uses the official Redis service at `redis://redis:6379/0`. Elasticsearch runs at
 metrics token are in `server/.env`.
 
 Both projects share `commerce-network` (override `COMMERCE_NETWORK` in `.env`).
-Start the app first: it creates the network that monitoring joins. Always pass
-the same `--env-file` to both projects so database credentials and scrape tokens
-match. The collectors connect through Docker service names, not host-published
-ports. The API's container configuration allows the `api` hostname.
+`monitoring/init_local.py` creates the external network when it is missing.
+Always pass the same `--env-file` to both projects so database credentials and
+scrape tokens match. The collectors connect through Docker service names, not
+host-published ports. The API's container configuration allows the `api` hostname.
 
-PostgreSQL, Redis, Elasticsearch, node-exporter and cAdvisor all start by default.
+PostgreSQL, Redis, Elasticsearch, node-exporter and the Docker metrics exporter
+all start by default.
 The **Commerce Infrastructure** dashboard shows scrape status, database
 connections/transactions/cache hits/deadlocks/size, Redis operations/memory/hits/
-evictions, container CPU/memory/network/disk I/O, host CPU/memory/disk, and firing
-alerts. **Commerce API Overview** keeps request, query, dependency and search
-metrics. Prometheus also scrapes Grafana, Loki and Tempo themselves.
+evictions, container CPU/memory/limits, host CPU/memory/disk, and firing alerts.
+**Commerce API Overview** keeps request, query, dependency and search metrics.
+Prometheus also scrapes Grafana, Loki and Tempo themselves.
 
-cAdvisor needs privileged access and read-only host mounts to inspect cgroups
-and Docker metadata. Exporter ports are private to the Docker network. Only
-Compose project/service labels are exported as container labels.
+The Docker metrics exporter reads the Docker socket through a read-only mount and
+exports CPU, memory, limit, OOM and last-seen metrics. Exporter ports are private
+to the Docker network. Only Compose project/service labels are exported as
+container labels.
 On Docker Desktop, host metrics describe the Linux VM running Docker, not macOS
 or Windows. Container disk metrics depend on the Docker storage driver. Memory
 limit alerts require an actual container limit; use host memory alerts as well.
 
 The PostgreSQL exporter defaults to the same local credentials as the app.
 For production, set `POSTGRES_EXPORTER_USER` / `POSTGRES_EXPORTER_PASSWORD` to a
-dedicated role with `pg_monitor` and database CONNECT permission; set
-`POSTGRES_EXPORTER_URI` for a different server or TLS configuration. Redis can
-use `REDIS_EXPORTER_ADDR` / `REDIS_EXPORTER_PASSWORD` overrides.
+dedicated role with `pg_monitor` and database CONNECT permission. Redis can use
+`REDIS_EXPORTER_PASSWORD` when authentication is enabled.
 
 Validate configuration and confirm actual coverage:
 

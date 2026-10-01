@@ -66,7 +66,7 @@ class Command(BaseCommand):
             quantity = index % 3 + 1
             cart = Cart.objects.create(user=buyer, ordered=True)
             CartItem.objects.create(cart=cart, product=product, quantity=quantity)
-            delivery = DeliveryInfo.objects.create(user=buyer, address=address, method='home delivery', delivery_type='priority', total=2500)
+            delivery = DeliveryInfo.objects.create(user=buyer, address=address, method='home delivery', delivery_type='standard', total=2500)
             subtotal = unit_price(product) * quantity
             order = Order.objects.create(user=buyer, cart=cart, delivery=delivery, orderId=reference,
                 ordered=True, status=['delivered', 'shipped', 'confirmed'][index % 3],

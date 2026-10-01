@@ -3,10 +3,13 @@
 A Next.js marketplace and Django API in one base repository.
 
 ```text
-client/       Next.js App Router, TypeScript, React Query and responsive UI
-server/       Existing Django project and the integrated storefront API
-.github/      Backend and frontend CI
-package.json  npm workspace and root frontend commands
+client/                 Next.js frontend app, client docs and client container
+client/Documentation/   Frontend-local docs
+server/                 Django API, server docs and backend containers
+server/Documentation/   Backend-local docs
+docs/                   Root architecture and cross-project docs
+.github/                CI/CD, Render env sync and deploy workflow
+package.json            npm workspace and root frontend commands
 ```
 
 The previous `codematics/` backend directory is now `server/`. The Python settings
@@ -16,8 +19,11 @@ not replaced. The runnable commerce configuration is
 
 ## Code Documentation
 
-Project documentation lives in [`docs/`](docs/README.md). Start there for the
-frontend, backend, infrastructure and observability code maps.
+Project documentation starts in [`docs/`](docs/README.md). Each app also carries
+its own docs:
+
+- client docs: [`client/Documentation/`](client/Documentation/README.md)
+- server docs: [`server/Documentation/`](server/Documentation/README.md)
 
 When changing code, update the matching doc in the same pass:
 
@@ -27,6 +33,21 @@ When changing code, update the matching doc in the same pass:
   [`docs/infrastructure.md`](docs/infrastructure.md);
 - health, metrics, logs, traces, profiling, Grafana, Loki, Prometheus, Tempo or
   Alloy: [`docs/observability.md`](docs/observability.md).
+- client-specific changes should also update `client/Documentation/`;
+- server-specific changes should also update `server/Documentation/`.
+
+## App Boundary
+
+This is one codebase with two separately hostable apps:
+
+- `client/`: Next.js frontend. Host on a frontend platform or as its own
+  container. It talks to the backend through `API_URL`.
+- `server/`: Django API. Deploy to Render. It owns data, auth, search,
+  observability and background/service integrations.
+
+The browser calls the Next.js `/api/*` proxy. The proxy forwards to the Django
+backend configured by `API_URL`, stores tokens in HTTP-only cookies and keeps raw
+JWTs out of browser-visible JSON.
 
 ## Run Locally
 
@@ -67,9 +88,9 @@ From the repository root:
 ```sh
 cd server
 ../.venv/bin/python monitoring/init_local.py
-docker compose -f compose.yaml up --build -d api redis postgres elasticsearch
-docker compose -f monitoring/compose.yaml up -d
-docker compose -f compose.yaml exec api python manage.py rebuild_product_index
+docker compose --env-file .env -f compose.yaml up --build -d api redis postgres elasticsearch
+docker compose --env-file .env -f monitoring/compose.yaml up -d
+docker compose --env-file .env -f compose.yaml exec api python manage.py rebuild_product_index
 ```
 
 The API uses `redis://redis:6379/0` inside Compose. The API is available at

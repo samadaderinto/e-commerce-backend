@@ -65,7 +65,6 @@ class User(AbstractUser):
     phone1 = PhoneNumberField()
     phone2 = PhoneNumberField(null=True, blank=True)
     password = models.CharField(max_length=90)
-    is_active = models.BooleanField(default=True)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name', 'gender', 'phone1', 'password']
@@ -129,7 +128,7 @@ class Recent(DatesMixin):
 
 
 class Refund(DatesMixin):
-    email = models.EmailField(unique=True)
+    email = models.EmailField()
     order = models.ForeignKey(Order, on_delete=models.CASCADE)
     reason = models.TextField()
     accepted = models.BooleanField(default=False)

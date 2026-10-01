@@ -1,6 +1,7 @@
 """Ensure local monitoring credentials exist in server/.env."""
 from pathlib import Path
 import secrets
+import subprocess
 
 server_root = Path(__file__).resolve().parent.parent
 env_path = server_root / '.env'
@@ -26,4 +27,14 @@ if missing:
     with env_path.open('a') as target:
         target.write(prefix + '\n'.join(missing) + '\n')
 
-print('Local credentials ready in server/.env.')
+network = existing.get('COMMERCE_NETWORK', 'commerce-network')
+inspection = subprocess.run(
+    ['docker', 'network', 'inspect', network],
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    check=False,
+)
+if inspection.returncode:
+    subprocess.run(['docker', 'network', 'create', network], check=True)
+
+print(f'Local credentials and Docker network {network!r} are ready.')

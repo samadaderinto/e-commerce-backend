@@ -97,10 +97,10 @@ class Budget(DatesMixin):
     )
     
     store = models.ForeignKey('Store', on_delete=models.CASCADE)
-    amount = models.DecimalField(max_digits=10000000000, decimal_places=2)
+    amount = models.DecimalField(max_digits=15, decimal_places=2)
     type = models.CharField(choices=BUDGET_TYPE, max_length=10)
    
 
 class Wallet(DatesMixin):
     store = models.ForeignKey('Store', on_delete=models.CASCADE)
-    amount = models.DecimalField(max_digits=10000000000, decimal_places=2)
+    amount = models.DecimalField(max_digits=15, decimal_places=2)

@@ -11,7 +11,7 @@ INSTALLED_APPS = [
     'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
     'rest_framework', 'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular', 'taggit',
-    'core', 'store', 'product', 'cart', 'payment', 'affiliates', 'storefront',
+    'core', 'store', 'product', 'cart', 'payment', 'affiliates', 'notification', 'storefront',
     'django_cleanup.apps.CleanupConfig',
 ]
 MIDDLEWARE = [
@@ -56,11 +56,24 @@ SIMPLE_JWT = {
     'CHECK_REVOKE_TOKEN': True,
 }
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = os.environ.get('EMAIL_HOST', '')
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
 EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS', 'true').lower() == 'true'
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'Proace <hello@proace.example>')
+APPLICATION_EMAIL = os.environ.get('APPLICATION_EMAIL', DEFAULT_FROM_EMAIL)
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
-STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'paypal,cashapp')
+FCM_ENABLED = os.environ.get('FCM_ENABLED', 'false').lower() == 'true'
+FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID', '')
+FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON', '')
+if FCM_ENABLED and not (FIREBASE_PROJECT_ID and (
+    FIREBASE_CREDENTIALS_JSON or os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+)):
+    raise ImproperlyConfigured(
+        'Set FIREBASE_PROJECT_ID and Firebase credentials when FCM_ENABLED=true.'
+    )
+STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'cashapp')
 STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'ngn')
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG

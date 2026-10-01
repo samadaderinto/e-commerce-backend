@@ -41,12 +41,19 @@ RENDER_ENV_KEYS = [
     "KAFKA_LOGGING_ENABLED",
     "KAFKA_LOG_TOPIC",
     "CELERY_BROKER_URL",
+    "NOTIFICATION_DELIVERY_MAX_ATTEMPTS",
+    "NOTIFICATION_DELIVERY_STALE_SECONDS",
+    "EMAIL_BACKEND",
     "EMAIL_HOST",
     "EMAIL_HOST_USER",
     "EMAIL_HOST_PASSWORD",
     "EMAIL_PORT",
     "EMAIL_USE_TLS",
     "DEFAULT_FROM_EMAIL",
+    "APPLICATION_EMAIL",
+    "FCM_ENABLED",
+    "FIREBASE_PROJECT_ID",
+    "FIREBASE_CREDENTIALS_JSON",
 ]
 
 
@@ -72,20 +79,26 @@ def render_request(method, path, payload=None):
 
 
 def main():
-    service_id = os.environ["RENDER_SERVICE_ID"]
-    synced = 0
-    for key in RENDER_ENV_KEYS:
-        value = os.environ.get(key)
-        if value is None or value == "":
-            continue
-        render_request(
-            "PUT",
-            f"/services/{quote(service_id)}/env-vars/{quote(key)}",
-            {"value": value},
-        )
-        synced += 1
-        print(f"Synced Render env var: {key}")
-    print(f"Synced {synced} Render environment variables.")
+    services = {
+        "API": os.environ["RENDER_SERVICE_ID"],
+        "notification worker": os.environ["RENDER_WORKER_SERVICE_ID"],
+    }
+    total_synced = 0
+    for service_name, service_id in services.items():
+        synced = 0
+        for key in RENDER_ENV_KEYS:
+            value = os.environ.get(key)
+            if value is None or value == "":
+                continue
+            render_request(
+                "PUT",
+                f"/services/{quote(service_id)}/env-vars/{quote(key)}",
+                {"value": value},
+            )
+            synced += 1
+        total_synced += synced
+        print(f"Synced {synced} Render environment variables to {service_name}.")
+    print(f"Synced {total_synced} Render environment variables.")
 
 
 if __name__ == "__main__":

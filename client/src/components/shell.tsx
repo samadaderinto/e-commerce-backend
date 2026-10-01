@@ -6,8 +6,10 @@ import { useEffect, useRef, useState, FormEvent, ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArrowUpRight, Bell, CheckCheck, ChevronDown, Heart, Inbox, Menu, Search, ShoppingBag, UserRound, X, Truck, ShieldCheck, RotateCcw } from 'lucide-react';
 import { api, categories } from '@/lib/api';
-import type { NotificationCounts, NotificationItem, Page } from '@/lib/types';
+import type { NotificationCounts, NotificationItem, Page, User } from '@/lib/types';
+import { getFirebaseMessaging, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
 import { useShop } from './providers';
+import { onMessage } from 'firebase/messaging';
 
 export function Shell({ children }: { children: ReactNode }) {
   const { user, cart } = useShop();
@@ -35,15 +37,81 @@ export function Shell({ children }: { children: ReactNode }) {
 }
 
 function NotificationCenter() {
+  const { user, notify } = useShop();
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<'inbox' | 'archived'>('inbox');
+  const [pushStatus, setPushStatus] = useState<'checking' | 'ready' | 'enabled' | 'blocked' | 'unsupported'>('checking');
+  const [pushBusy, setPushBusy] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
+  const notifyRef = useRef(notify);
   const client = useQueryClient();
-  const { notify } = useShop();
   const counts = useQuery({ queryKey: ['notifications', 'counts'], queryFn: () => api<NotificationCounts>('notifications/counts'), refetchInterval: open ? false : 45000 });
   const list = useQuery({ queryKey: ['notifications', view], queryFn: () => api<Page<NotificationItem>>(view === 'archived' ? 'notifications/archived' : 'notifications?limit=8'), enabled: open });
   const refresh = async () => { await Promise.all([client.invalidateQueries({ queryKey: ['notifications'] }), client.invalidateQueries({ queryKey: ['notifications', 'counts'] })]); };
   const action = useMutation({ mutationFn: ({ id, path }: { id?: number; path: string }) => api(id ? `notifications/${id}/${path}` : `notifications/${path}`, 'POST', {}), onSuccess: refresh, onError: error => notify((error as Error).message, true) });
+  useEffect(() => { notifyRef.current = notify; }, [notify]);
+  useEffect(() => {
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+
+    async function subscribeToPush() {
+      try {
+        const messaging = await getFirebaseMessaging();
+        if (!active) return;
+        if (!messaging) {
+          setPushStatus('unsupported');
+          return;
+        }
+        setPushStatus(Notification.permission === 'denied'
+          ? 'blocked'
+          : localStorage.getItem('proace-fcm-token')
+            && localStorage.getItem('proace-fcm-owner') === String(user?.id)
+            && Notification.permission === 'granted'
+            ? 'enabled'
+            : 'ready');
+        unsubscribe = onMessage(messaging, payload => {
+          if (payload.data?.recipient_id !== String(client.getQueryData<User>(['me'])?.id)) return;
+          void refresh();
+          if (payload.data.title) notifyRef.current(payload.data.title);
+        });
+      } catch (error) {
+        if (active) {
+          setPushStatus(
+            'Notification' in window && Notification.permission === 'denied'
+              ? 'blocked'
+              : 'ready',
+          );
+          notifyRef.current((error as Error).message, true);
+        }
+      }
+    }
+
+    void subscribeToPush();
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [client, user?.id]);
+  async function togglePush() {
+    if (!user) return;
+    setPushBusy(true);
+    try {
+      if (pushStatus === 'enabled') {
+        await unregisterPushDevice();
+        setPushStatus('ready');
+        notify('Browser push notifications disabled');
+      } else {
+        await registerPushDevice(user.id);
+        setPushStatus('enabled');
+        notify('Browser push notifications enabled');
+      }
+    } catch (error) {
+      notify((error as Error).message, true);
+      if ('Notification' in window && Notification.permission === 'denied') setPushStatus('blocked');
+    } finally {
+      setPushBusy(false);
+    }
+  }
   useEffect(() => { function close(event: MouseEvent) { if (panel.current && !panel.current.contains(event.target as Node)) setOpen(false); } if (open) document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close); }, [open]);
   const unread = counts.data?.unread || 0;
   const items = list.data?.results || [];
@@ -52,6 +120,8 @@ function NotificationCenter() {
     {open && <section className="notification-panel" aria-label="Notifications">
       <div className="notification-head"><div><h2>Notifications</h2><span>{unread ? `${unread} unread` : 'All caught up'}</span></div><button className="icon-button" aria-label="Close notifications" onClick={() => setOpen(false)}><X size={17} /></button></div>
       <div className="notification-tabs"><button className={view === 'inbox' ? 'active' : ''} onClick={() => setView('inbox')}>Inbox</button><button className={view === 'archived' ? 'active' : ''} onClick={() => setView('archived')}>Archived</button></div>
+      {(pushStatus === 'ready' || pushStatus === 'enabled') && <button className="notification-push" disabled={pushBusy} aria-pressed={pushStatus === 'enabled'} onClick={() => void togglePush()}>{pushBusy ? 'Updating browser alerts…' : pushStatus === 'enabled' ? 'Turn off browser alerts' : 'Enable browser alerts'}</button>}
+      {pushStatus === 'blocked' && <p className="notification-push-status">Browser alerts are blocked in your browser settings.</p>}
       {view === 'inbox' && <button className="notification-read-all" disabled={!unread || action.isPending} onClick={() => action.mutate({ path: 'mark-all-read' })}><CheckCheck size={15} />Mark all read</button>}
       <div className="notification-list">{list.isLoading ? <div className="notification-empty">Loading notifications…</div> : list.error ? <div className="notification-empty error">Couldn’t load notifications.</div> : items.length ? items.map(item => <article className={`notification-item ${item.unread ? 'unread' : ''}`} key={item.id}>
         <span className={`notification-dot ${item.level}`} />

@@ -1,5 +1,5 @@
 services:
-  api:
+  api: &app
     build:
       context: .
       dockerfile: Dockerfile
@@ -13,7 +13,7 @@ services:
       DJANGO_SETTINGS_MODULE: codematics.storefront_settings
       DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
       SECRET_KEY: ${SECRET_KEY:-local-container-secret-change-me}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost},api
       FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3000}
       DATABASE_ENGINE: postgres
       POSTGRES_HOST: postgres
@@ -34,6 +34,20 @@ services:
       OTEL_TRACING_ENABLED: ${OTEL_TRACING_ENABLED:-false}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-commerce-api}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      NOTIFICATION_DELIVERY_MAX_ATTEMPTS: ${NOTIFICATION_DELIVERY_MAX_ATTEMPTS:-8}
+      NOTIFICATION_DELIVERY_STALE_SECONDS: ${NOTIFICATION_DELIVERY_STALE_SECONDS:-300}
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}
+      EMAIL_HOST: ${EMAIL_HOST:-}
+      EMAIL_HOST_USER: ${EMAIL_HOST_USER:-}
+      EMAIL_HOST_PASSWORD: ${EMAIL_HOST_PASSWORD:-}
+      EMAIL_PORT: ${EMAIL_PORT:-587}
+      EMAIL_USE_TLS: ${EMAIL_USE_TLS:-true}
+      DEFAULT_FROM_EMAIL: ${DEFAULT_FROM_EMAIL:-Proace <hello@proace.example>}
+      APPLICATION_EMAIL: ${APPLICATION_EMAIL:-Proace <hello@proace.example>}
+      FCM_ENABLED: ${FCM_ENABLED:-false}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      FIREBASE_CREDENTIALS_JSON: ${FIREBASE_CREDENTIALS_JSON:-}
       ELASTICSEARCH_ENABLED: ${ELASTICSEARCH_ENABLED:-true}
       ELASTICSEARCH_URL: http://elasticsearch:9200
       ELASTICSEARCH_PRODUCTS_INDEX: ${ELASTICSEARCH_PRODUCTS_INDEX:-commerce-products}
@@ -51,12 +65,14 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
-    healthcheck:
-      test: ['CMD', 'python', '-c', "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live/', timeout=3)"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+
+  notification-worker:
+    <<: *app
+    ports: []
+    environment:
+      RUN_MIGRATIONS: 'false'
+      RUN_COLLECTSTATIC: 'false'
+    command: ['celery', '-A', 'codematics', 'worker', '--beat', '--loglevel=INFO']
 
   redis:
     image: redis:7.4-alpine
@@ -113,3 +129,8 @@ volumes:
   postgres-data:
   elasticsearch-data:
   prometheus-multiproc:
+
+networks:
+  default:
+    external: true
+    name: ${COMMERCE_NETWORK:-commerce-network}

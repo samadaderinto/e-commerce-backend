@@ -10,6 +10,42 @@ updated whenever frontend, backend, deployment, or observability behavior change
 - [Infrastructure](infrastructure.md): Docker Compose, PostgreSQL, Redis, Kafka/RabbitMQ, Nginx, object storage and production boundaries.
 - [Observability](observability.md): health checks, metrics, p95/p99 latency, logs, traces, profiling and dashboards.
 
+App-local docs:
+
+- [Client docs](../client/Documentation/README.md): frontend bridge, frontend container and client hosting.
+- [Server docs](../server/Documentation/README.md): Django API, Render deployment and backend observability.
+
+## Monorepo shape
+
+```text
+App/
+  client/
+    README.md
+    Documentation/
+      README.md
+      backend.md
+      frontend.md
+      infrastructure.md
+      observability.md
+    src/
+    Dockerfile
+    compose.yaml
+  server/
+    README.md
+    Documentation/
+      README.md
+      backend.md
+      frontend.md
+      infrastructure.md
+      observability.md
+    compose.yaml
+    monitoring/
+```
+
+The frontend and backend share one repository but are deployable separately. The
+frontend host sets `API_URL` to the backend `/api/v1` URL. The backend deploys to
+Render and receives production configuration from GitHub Actions secrets.
+
 ## Update rule
 
 When code changes, update the matching document in the same pass:
@@ -18,6 +54,8 @@ When code changes, update the matching document in the same pass:
 - Django apps, serializers, views, models, auth, permissions or tests: update `docs/backend.md`.
 - Compose, Dockerfile, Nginx, PostgreSQL, Redis, Kafka, RabbitMQ, storage or deployment: update `docs/infrastructure.md`.
 - Health endpoints, logging, metrics, alerts, tracing, profiling, Grafana, Loki, Prometheus, Tempo or Alloy: update `docs/observability.md`.
+- Client-specific changes: update the matching file under `client/Documentation/`.
+- Server-specific changes: update the matching file under `server/Documentation/`.
 - Cross-cutting changes should update more than one document when needed.
 
 Do not treat this directory as marketing copy. It should describe how the code

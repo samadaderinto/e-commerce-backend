@@ -8,6 +8,7 @@ from .views import (
     WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, ReviewsView, WishlistView,
 )
+from store.views import StoreReviewViewSet
 
 urlpatterns = [
     path('', include('observability.urls')),
@@ -26,6 +27,10 @@ urlpatterns = [
     path('api/v1/checkout/wallet-session/', WalletCheckoutSessionView.as_view()),
     path('api/v1/checkout/wallet-confirm/', WalletCheckoutConfirmView.as_view()),
     path('api/v1/admin/coupons/', CouponAdminView.as_view()),
+    path('api/v1/admin/stores/', StoreReviewViewSet.as_view({'get': 'list'})),
+    path('api/v1/admin/stores/<int:pk>/approve/', StoreReviewViewSet.as_view({'post': 'approve'})),
+    path('api/v1/admin/stores/<int:pk>/block/', StoreReviewViewSet.as_view({'post': 'block'})),
+    path('api/v1/notifications/', include('notification.urls')),
     path('api/v1/orders/', OrdersView.as_view()),
     path('api/v1/orders/<int:pk>/', OrderDetailView.as_view()),
     path('api/v1/stores/', include('store.urls')),

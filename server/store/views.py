@@ -6,12 +6,12 @@ from django.db.models import Count, DecimalField, ExpressionWrapper, F, Prefetch
 from django.db.models.functions import TruncDate
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework import mixins, status, viewsets
+from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import LimitOffsetPagination
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
@@ -29,6 +29,79 @@ from store.serializers import (
 class MerchantPagination(LimitOffsetPagination):
     default_limit = 20
     max_limit = 100
+
+
+def invalidate_store_products(store):
+    for product in Product.objects.filter(store=store):
+        invalidate_catalog(product)
+
+
+class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
+    queryset = Store.objects.none()
+    serializer_class = StoreSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = MerchantPagination
+
+    def get_queryset(self):
+        stores = Store.objects.select_related('user', 'verified_by', 'blocked_by')
+        status_filter = self.request.query_params.get('status', Store.STATUS_PENDING)
+        if status_filter not in dict(Store.STATUS_CHOICES):
+            raise ValidationError({'status': 'Choose pending, active or blocked.'})
+        return stores.filter(status=status_filter).order_by('created', 'pk')
+
+    @transaction.atomic
+    def approve(self, request, pk=None):
+        store = get_object_or_404(Store.objects.select_for_update(), pk=pk)
+        store.status = Store.STATUS_ACTIVE
+        store.verified_at = timezone.now()
+        store.verified_by = request.user
+        store.blocked_reason = ''
+        store.blocked_at = None
+        store.blocked_by = None
+        store.save(update_fields=[
+            'status', 'verified_at', 'verified_by', 'blocked_reason',
+            'blocked_at', 'blocked_by', 'updated',
+        ])
+
+        from notification.views import create_notification
+
+        create_notification(
+            recipient=store.user,
+            actor=request.user,
+            target=store,
+            verb='store verified',
+            description=f'{store.name} has been verified and is now public.',
+            level='success',
+            data={'event': 'store_verified', 'store_id': store.pk},
+        )
+        transaction.on_commit(lambda: invalidate_store_products(store))
+        return Response(StoreSerializer(store).data)
+
+    @transaction.atomic
+    def block(self, request, pk=None):
+        reason = serializers.CharField(allow_blank=False, trim_whitespace=True).run_validation(
+            request.data.get('reason')
+        )
+        store = get_object_or_404(Store.objects.select_for_update(), pk=pk)
+        store.status = Store.STATUS_BLOCKED
+        store.blocked_reason = reason
+        store.blocked_at = timezone.now()
+        store.blocked_by = request.user
+        store.save(update_fields=['status', 'blocked_reason', 'blocked_at', 'blocked_by', 'updated'])
+
+        from notification.views import create_notification
+
+        create_notification(
+            recipient=store.user,
+            actor=request.user,
+            target=store,
+            verb='store blocked',
+            description=f'{store.name} is unavailable. Reason: {reason}',
+            level='warning',
+            data={'event': 'store_blocked', 'store_id': store.pk},
+        )
+        transaction.on_commit(lambda: invalidate_store_products(store))
+        return Response(StoreSerializer(store).data)
 
 
 def invalidate_catalog(product):

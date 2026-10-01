@@ -13,8 +13,14 @@ INSTALLED_APPS = [
     'notification.apps.EventNotificationConfig',
     'observability.apps.ObservabilityConfig',
     'affiliates',
-    'django_cleanup.apps.CleanupConfig',
+    'drf_spectacular',
+    'storefront',
 ]
+try:
+    import django_cleanup  # noqa: F401
+    INSTALLED_APPS.append('django_cleanup.apps.CleanupConfig')
+except ImportError:
+    pass
 MIDDLEWARE = []
 STORAGES = {
     'default': {'BACKEND': 'django.core.files.storage.InMemoryStorage'},
@@ -33,11 +39,11 @@ DATABASES = {
 PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
-QUEUE_EMAILS = False
 DEFAULT_FROM_EMAIL = 'Proace <hello@proace.test>'
 FRONTEND_URL = 'http://testserver'
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
     'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework_simplejwt.authentication.JWTAuthentication'],
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'utils.exceptions.custom_exception_handler',
 }

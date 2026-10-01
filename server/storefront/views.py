@@ -6,14 +6,13 @@ from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.core.mail import send_mail
 from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
-from django.conf import settings
+from notification.delivery import queue_email_delivery
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAdminUser
@@ -105,7 +104,12 @@ class AuthView(APIView):
                 reward_referral(referral_code, user)
             token = signing.dumps({'user': user.pk}, salt='proace-verify')
             url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
-            send_mail('Verify your Proace account', f'Welcome to Proace. Verify your email: {url}', settings.DEFAULT_FROM_EMAIL, [user.email])
+            queue_email_delivery(
+                user.email,
+                'Verify your Proace account',
+                f'Welcome to Proace. Verify your email: {url}',
+                recipient=user,
+            )
             return Response({'detail': 'Check your email to activate your account.'}, status=201)
         if action == 'verify':
             try:
@@ -123,7 +127,12 @@ class AuthView(APIView):
                 uid = urlsafe_base64_encode(force_bytes(user.pk))
                 token = default_token_generator.make_token(user)
                 url = f'{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}'
-                send_mail('Reset your Proace password', f'Reset your password: {url}', settings.DEFAULT_FROM_EMAIL, [user.email])
+                queue_email_delivery(
+                    user.email,
+                    'Reset your Proace password',
+                    f'Reset your password: {url}',
+                    recipient=user,
+                )
             return Response({'detail': 'If an active account exists, a reset link has been sent.'})
         if action == 'reset':
             try:
@@ -451,7 +460,7 @@ class CheckoutView(APIView):
             transaction.on_commit(lambda product=product: invalidate_catalog(product))
         shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
         delivery = DeliveryInfo.objects.create(user=request.user, address=address, method='home delivery',
-                                                delivery_type='priority', total=int(shipping))
+                                                delivery_type='standard', total=int(shipping))
         order = Order.objects.create(
             user=request.user, cart=cart, delivery=delivery, status='confirmed', ordered=True,
             coupon_code=code, total=subtotal - discount + shipping, subtotal=subtotal,
@@ -501,7 +510,11 @@ class WalletCheckoutSessionView(CheckoutView):
             discount = calculate_coupon_discount(coupon, request.user, coupon_lines, subtotal, reserve=False)
         shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
         total = subtotal - discount + shipping
-        methods = [item.strip() for item in getattr(settings, 'STRIPE_WALLET_PAYMENT_METHODS', 'paypal,cashapp').split(',') if item.strip()]
+        methods = [
+            configured_method.strip()
+            for configured_method in getattr(settings, 'STRIPE_WALLET_PAYMENT_METHODS', 'cashapp').split(',')
+            if configured_method.strip() and configured_method.strip().lower() != 'paypal'
+        ]
         if not methods:
             raise ValidationError({'detail': 'No Stripe wallet payment methods are configured.'})
         session = stripe.checkout.Session.create(

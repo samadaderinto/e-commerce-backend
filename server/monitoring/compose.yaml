@@ -14,14 +14,14 @@ services:
     image: apache/kafka:3.9.0
     profiles: ['messaging']
     restart: unless-stopped
-    ports: ['127.0.0.1:9092:9092']
+    ports: ['127.0.0.1:9092:9092', '127.0.0.1:29092:29092']
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://:9092,PLAINTEXT_HOST://:29092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://127.0.0.1:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
@@ -91,39 +91,31 @@ services:
     pid: host
     command: ['--path.rootfs=/host', '--path.procfs=/host/proc', '--path.sysfs=/host/sys']
     volumes: ['/:/host:ro']
-  cadvisor:
-    image: ghcr.io/google/cadvisor:0.55.1
+  docker-exporter:
+    image: python:3.12-alpine
     restart: unless-stopped
-    privileged: true
-    command:
-      - --docker_only=true
-      - --housekeeping_interval=15s
-      - --store_container_labels=false
-      - --whitelisted_container_labels=com.docker.compose.project,com.docker.compose.service
+    command: ['python', '/app/docker_metrics_exporter.py']
     volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker:/var/lib/docker:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./docker_metrics_exporter.py:/app/docker_metrics_exporter.py:ro
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:v0.17.1
     restart: unless-stopped
     environment:
-      DATA_SOURCE_URI: ${POSTGRES_EXPORTER_URI:-postgres:5432/postgres?sslmode=disable}
+      DATA_SOURCE_URI: postgres:5432/${POSTGRES_DB:-commerce}?sslmode=disable
       DATA_SOURCE_USER: ${POSTGRES_EXPORTER_USER:-${POSTGRES_USER:-commerce}}
       DATA_SOURCE_PASS: ${POSTGRES_EXPORTER_PASSWORD:-${POSTGRES_PASSWORD:-change-me-local}}
   redis-exporter:
     image: oliver006/redis_exporter:v1.74.0
     restart: unless-stopped
     environment:
-      REDIS_ADDR: ${REDIS_EXPORTER_ADDR:-redis://redis:6379}
+      REDIS_ADDR: redis://redis:6379
       REDIS_PASSWORD: ${REDIS_EXPORTER_PASSWORD:-}
   elasticsearch-exporter:
     image: prometheuscommunity/elasticsearch-exporter:v1.9.0
     restart: unless-stopped
-    extra_hosts: ['host.docker.internal:host-gateway']
     command:
-      - --es.uri=${ELASTICSEARCH_EXPORTER_URI:-http://elasticsearch:9200}
+      - --es.uri=http://elasticsearch:9200
       - --es.all
       - --es.indices
       - --es.shards

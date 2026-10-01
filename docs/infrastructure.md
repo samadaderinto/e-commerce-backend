@@ -4,6 +4,14 @@ This project supports local development through Docker Compose and has productio
 building blocks for Gunicorn, Nginx, PostgreSQL, Redis, object storage and
 observability.
 
+The repository contains two deployable apps:
+
+- `client/`: frontend, deployable to a frontend host or as `client/Dockerfile`.
+- `server/`: backend API, deployable to Render with service dependencies.
+
+The bridge between them is `API_URL` on the frontend and `FRONTEND_URL` on the
+backend.
+
 ## Environment files
 
 Local development uses exactly one server env file and one client env file:
@@ -39,6 +47,12 @@ From `server/`:
 docker compose -f compose.yaml up --build -d api redis postgres elasticsearch
 docker compose -f monitoring/compose.yaml up -d
 docker compose -f compose.yaml exec api python manage.py rebuild_product_index
+```
+
+Run the frontend container separately from the repository root:
+
+```sh
+docker compose -f client/compose.yaml up --build -d
 ```
 
 Application services:

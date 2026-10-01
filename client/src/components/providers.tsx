@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tan
 import { Check, X, AlertCircle } from 'lucide-react';
 import { api, ApiError } from '@/lib/api';
 import type { Cart, CartLine, Product, User } from '@/lib/types';
+import { unregisterPushDevice } from '@/lib/firebase-messaging';
 
 type Context = {
   user?: User; sessionLoading: boolean; cart: Cart; cartLoading: boolean; cartError: Error | null; saved: Product[];
@@ -92,11 +93,16 @@ function ShopProvider({ children }: { children: ReactNode }) {
     notify(remaining.length ? 'Signed in. Some guest items could not be added because they are unavailable or belong to your own store.' : `Welcome back, ${result.user.first_name}`);
   }
   async function logout() {
+    let pushCleanupFailed = false;
+    try { await unregisterPushDevice(); }
+    catch { pushCleanupFailed = true; }
     await api('auth/logout', 'POST', {});
     client.clear();
     client.setQueryData(['me'], null);
     setGuest([]); setGuestSaved([]);
-    notify('You have been signed out');
+    notify(pushCleanupFailed
+      ? 'You have been signed out, but browser push could not be disabled. The inbox will remain account-scoped.'
+      : 'You have been signed out');
   }
   return <ShopContext.Provider value={{ user, sessionLoading: session.isLoading, cart, cartLoading: session.isLoading || (!!user && cartQuery.isLoading), cartError: cartQuery.error, saved, notify, add, setQuantity, toggleSave, login, logout }}>
     {children}

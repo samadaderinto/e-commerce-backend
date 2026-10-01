@@ -2,7 +2,6 @@
 from datetime import timedelta
 from decimal import Decimal
 
-from django.conf import settings
 from django.db.models import Count, Q, Sum
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -52,9 +51,6 @@ from store.models import StoreAddress, Store
 from observability.models import LogEntry
 from observability.serializers import LogEntrySerializer
 
-from usps import USPSApi, Address as uspsAddress
-from usps import SERVICE_PRIORITY, LABEL_ZPL
-
 
 from django.utils.http import urlsafe_base64_encode
 from django.urls import reverse
@@ -68,9 +64,6 @@ from django.utils.encoding import (
 )
 
 # Create your views here.
-
-usps = USPSApi(settings.USPS_USERNAME, test=True)
-
 
 class BackofficePagination(LimitOffsetPagination):
     default_limit = 20
@@ -476,60 +469,6 @@ def get_users(request):
     if request.method == methods["get"]:
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-def create_shipment(request):
-    # will use actual addresses later for both
-    to_address = uspsAddress(
-        name="Tobin Brown",
-        address_1="1234 Test Ave.",
-        city="Test",
-        state="NE",
-        zipcode="55555",
-        phone="",
-    )
-
-    from_address = uspsAddress(
-        name="Tobin Brown",
-        address_1="1234 Test Ave.",
-        city="Test",
-        state="NE",
-        zipcode="55555",
-        phone="",
-    )
-    validate_to_address = usps.validate_address(to_address)
-    validate_from_address = usps.validate_address(from_address)
-    weight = 10
-    if validate_to_address.result and validate_from_address.result:
-        label = usps.create_label(
-            to_address, from_address, weight, SERVICE_PRIORITY, LABEL_ZPL
-        )
-        data = {}
-        send_mail("order-summary", "fake@email.com", data=data)
-        return Response(
-            {"success": "shipment created"}, label.result, status=status.HTTP_200_OK
-        )
-    return Response(
-        {"error": "wrong shipment information"},
-        label.result,
-        status=status.HTTP_400_BAD_REQUEST,
-    )
-
-
-
-def send_track_order_mail(request):
-    # tracking number provided by usps in place of the zero's
-    track = usps.track("00000000000000000000")
-
-    if track.result:
-        data = {}
-        send_mail("order-summary", "fake@email.com", data=data)
-        return Response(
-            {"success": "shipment created"}, track.result, status=status.HTTP_200_OK
-        )
-    return Response(
-        {"error": "wrong shipment information"}, status=status.HTTP_400_BAD_REQUEST)
 
 
 

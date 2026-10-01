@@ -45,6 +45,18 @@ Frontend configuration:
 | `E2E_BASE_URL` | Base URL for Playwright e2e tests |
 | `E2E_DEMO_PASSWORD` | Password used by e2e tests for seeded demo accounts |
 | `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` | Optional browser executable override |
+| `NEXT_PUBLIC_FIREBASE_*` | Public Firebase Web app config and VAPID key for optional browser push |
+
+## Notifications
+
+The notification center uses the authenticated `/api/v1/notifications/` inbox
+for in-app notifications. Optional FCM browser alerts supplement that inbox:
+configure the `NEXT_PUBLIC_FIREBASE_*` values from the Firebase Web app, enable
+messaging and a Web Push certificate in Firebase, then enable FCM on the backend.
+The browser opt-in control registers/removes the device through the authenticated
+`/api/v1/notifications/devices/` endpoint. The service worker checks the current
+session before showing a push notification, so a shared browser does not display
+an alert addressed to a different account.
 
 Frontend tools:
 
@@ -58,6 +70,32 @@ Frontend tools:
 
 Root npm commands are wired through the workspace in `package.json`; package-level
 scripts live in `client/package.json`.
+
+## Separate hosting
+
+The frontend is hostable separately from the backend. In production, set `API_URL`
+on the frontend host to the deployed backend URL ending in `/api/v1`.
+
+Production example:
+
+```env
+API_URL=https://your-render-backend.example.com/api/v1
+```
+
+Local frontend container example:
+
+```env
+API_URL=http://host.docker.internal:8000/api/v1
+```
+
+The backend must set `FRONTEND_URL` to the deployed frontend origin. That keeps
+email links and browser flows aligned after the apps are split across hosts.
+
+The frontend also has its own container setup:
+
+- `client/Dockerfile`: standalone Next.js image.
+- `client/compose.yaml`: local frontend container runner.
+- `client/.dockerignore`: keeps local artifacts and env files out of the image.
 
 ## UI conventions
 

@@ -1,6 +1,5 @@
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
-from django.core.mail import send_mail
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
@@ -8,10 +7,14 @@ from rest_framework.decorators import action
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 
 from core.models import User
 from notification.models import Notification
+from notification.models import PushDevice
 from notification.seralizers import NotificationCountSerializer, NotificationSerializer
+from notification.seralizers import PushDeviceTokenSerializer
 
 
 class NotificationPagination(LimitOffsetPagination):
@@ -26,25 +29,24 @@ def _content_type_for(obj):
 
 
 def _send_external_notification(notification):
-    """Deliver actionable notifications by email without blocking the request."""
+    """Persist external notification deliveries in the recovery outbox."""
     recipient = notification.recipient
     data = notification.data or {}
-    if not getattr(recipient, "email", None) or data.get("email") is False:
-        return
+    if getattr(recipient, "email", None) and data.get("email") is not False:
+        from notification.delivery import queue_email_delivery
 
-    subject = f"Proace: {notification.verb.capitalize()}"
-    body = notification.description or notification.verb.capitalize()
-    if getattr(settings, "QUEUE_EMAILS", True):
-        from notification.tasks import send_email_task
-        send_email_task.delay(subject, body, recipient.email)
-    else:
-        send_mail(
-            subject,
-            body,
-            getattr(settings, "DEFAULT_FROM_EMAIL", "no-reply@proace.com"),
-            [recipient.email],
-            fail_silently=True,
+        queue_email_delivery(
+            recipient.email,
+            f"Proace: {notification.verb.capitalize()}",
+            notification.description or notification.verb.capitalize(),
+            notification=notification,
+            recipient=recipient,
         )
+    if (
+        getattr(settings, "FCM_ENABLED", False)
+        and PushDevice.objects.filter(user=recipient).exists()
+    ):
+        _queue_push_notification(notification)
 
 
 def create_notification(recipient, verb, actor=None, target=None, action_object=None,
@@ -64,8 +66,14 @@ def create_notification(recipient, verb, actor=None, target=None, action_object=
         data=data or {},
         public=public,
     )
-    transaction.on_commit(lambda: _send_external_notification(notification))
+    transaction.on_commit(lambda: _send_external_notification(notification), robust=True)
     return notification
+
+
+def _queue_push_notification(notification):
+    from notification.delivery import queue_push_delivery
+
+    queue_push_delivery(notification)
 
 
 def notify_users(recipients, verb, actor=None, target=None, action_object=None,
@@ -199,14 +207,40 @@ class NotificationViewSet(
 
         event = self.request.query_params.get("event")
         if event:
-            matching_ids = [
-                notification.pk
-                for notification in queryset
-                if (notification.data or {}).get("event") == event
-            ]
-            queryset = Notification.objects.filter(pk__in=matching_ids)
+            queryset = queryset.filter(data__event=event)
 
         return queryset.order_by("-timestamp", "-pk")
+
+    @extend_schema(
+        request=PushDeviceTokenSerializer,
+        responses={status.HTTP_200_OK: OpenApiTypes.OBJECT},
+    )
+    @action(detail=False, methods=["post", "delete"], url_path="devices")
+    def devices(self, request):
+        if request.method == "POST" and not getattr(settings, "FCM_ENABLED", False):
+            return Response(
+                {"detail": "Browser push notifications are not enabled."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        serializer = PushDeviceTokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = serializer.validated_data["token"]
+        if not token:
+            return Response(
+                {"token": ["This field may not be blank."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if request.method == "POST":
+            PushDevice.objects.update_or_create(
+                token=token,
+                defaults={"user": request.user},
+            )
+            return Response({"registered": True}, status=status.HTTP_200_OK)
+
+        removed, _ = PushDevice.objects.filter(user=request.user, token=token).delete()
+        return Response({"unregistered": removed > 0})
 
     @action(detail=False, methods=["get"])
     def unread(self, request):

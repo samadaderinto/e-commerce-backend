@@ -58,7 +58,7 @@ class MerchantTests(TestCase):
         address = Address.objects.create(user=self.other, address='1 Test Road',
                                          zip='100001', country='Nigeria', state='Lagos', city='Ikeja')
         delivery = DeliveryInfo.objects.create(user=self.other, address=address,
-                                               method='home delivery', delivery_type='priority')
+                                               method='home delivery', delivery_type='standard')
         return Order.objects.create(user=self.other, cart=cart, delivery=delivery,
                                     status=status, ordered=ordered)
 

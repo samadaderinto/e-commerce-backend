@@ -24,8 +24,8 @@ def test_create_user():
 
     user = User.objects.create_user(**payload)
 
-    assert user['first_name'] == payload["first_name"]
-    assert user['last_name'] == payload["last_name"]
-    assert user['email'] == payload["email"]
-    assert user['gender'] == payload["gender"]
-    assert user['phone1'] == payload["phone1"]
+    assert user.first_name == payload["first_name"]
+    assert user.last_name == payload["last_name"]
+    assert user.email == payload["email"]
+    assert user.gender == payload["gender"]
+    assert user.phone1 == payload["phone1"]

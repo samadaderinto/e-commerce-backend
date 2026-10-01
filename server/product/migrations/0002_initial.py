@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('product', '0001_initial'),
         ('store', '0001_initial'),
-        ('taggit', '0006_rename_taggeditem_content_type_object_id_taggit_tagg_content_8fc721_idx'),
+        ('taggit', '0005_auto_20220424_2025'),
     ]
 
     operations = [

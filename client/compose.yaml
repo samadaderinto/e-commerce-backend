@@ -1,0 +1,14 @@
+services:
+  client:
+    build:
+      context: ..
+      dockerfile: client/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - '${CLIENT_BIND_ADDRESS:-127.0.0.1}:${CLIENT_PORT:-3000}:3000'
+    environment:
+      API_URL: ${API_URL:-http://host.docker.internal:8000/api/v1}
+    extra_hosts:
+      - host.docker.internal:host-gateway

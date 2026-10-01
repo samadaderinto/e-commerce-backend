@@ -2,7 +2,6 @@ from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 from cart.models import Cart
-from store.models import StoreAddress
 from utils.mixins import DatesMixin
 from nanoid import generate
 
@@ -72,11 +71,11 @@ class CouponRedemption(DatesMixin):
 
 
 class DeliveryInfo(DatesMixin):
-    USPS_SERVICE_CHOICE = (
-    ("priority", "new"),
-    ("express", "none"),
-    ("firstclass", "bestseller"))
-    
+    DELIVERY_TYPE_CHOICES = (
+        ("standard", "Standard"),
+        ("express", "Express"),
+    )
+
     DELIVERY_METHOD_CHOICE = (
     ("pick up", "pick up"),
     ("home delivery", "home delivery"))
@@ -85,7 +84,7 @@ class DeliveryInfo(DatesMixin):
     method = models.CharField(choices=DELIVERY_METHOD_CHOICE, max_length=150)
     address = models.ForeignKey('core.Address', on_delete=models.CASCADE)
     total = models.IntegerField(default=0, blank=False, null=False)
-    delivery_type = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=150)
+    delivery_type = models.CharField(choices=DELIVERY_TYPE_CHOICES, max_length=150)
 
     def get_delivery_info(self):
         full_delivery_address = '%s, %s %s, %s' % (
@@ -142,23 +141,3 @@ class Order(DatesMixin):
         while Order.objects.filter(orderId=order_id).exists():
             order_id = generate(size=size)
         return order_id
-
-
-class DeliveryEstimates(DatesMixin):
-    USPS_SERVICE_CHOICE = (
-    ("priority", "new"),
-    ("express", "none"),
-    ("firstclass", "bestseller"),
-)
-    
-    usps_service = models.CharField(choices=USPS_SERVICE_CHOICE, max_length=20)
-    usps_delivery_date = models.IntegerField(default=0, blank=False, null=False)
-    destination_zip = models.ForeignKey('core.Address', on_delete=models.CASCADE)
-    origin_zip = models.ForeignKey(StoreAddress, on_delete=models.CASCADE)
-    pick_up = models.IntegerField(default=25, blank=False, null=False)
-    standard_delivery = models.DecimalField(
-        max_digits=15, decimal_places=2, default=0, blank=False, null=False
-    )
-    express_delivery = models.DecimalField(
-        max_digits=15, decimal_places=2, default=0, blank=False, null=False
-    )

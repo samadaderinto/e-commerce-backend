@@ -4,7 +4,6 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
-usps-api = "*"
 djangorestframework = "*"
 pyyaml = "*"
 django-cors-headers = "*"
@@ -12,6 +11,7 @@ pillow = "*"
 pytest-django = "*"
 django-taggit = "*"
 djangorestframework-simplejwt = "*"
+psycopg = {extras = ["binary"], version = ">=3.2,<4"}
 markdown = "*"
 django = "*"
 gunicorn = "*"
@@ -42,6 +42,7 @@ django-redis = "*"
 django-filter = "*"
 django-user-agents = "*"
 django-push-notifications = "*"
+firebase-admin = ">=6.4,<8"
 stripe = "*"
 djangorestframework-word-filter = "*"
 django-notifications-hq = "*"
