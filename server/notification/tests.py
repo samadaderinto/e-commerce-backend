@@ -218,7 +218,10 @@ class NotificationApiTests(TestCase):
         self.assertEqual(delivery.status, NotificationDelivery.STATUS_QUEUED)
         enqueue.assert_called_once()
 
-    @override_settings(NOTIFICATION_DELIVERY_STALE_SECONDS=1)
+    @override_settings(
+        NOTIFICATION_DELIVERY_MAX_ATTEMPTS=8,
+        NOTIFICATION_DELIVERY_STALE_SECONDS=1,
+    )
     def test_recovery_fails_stale_delivery_after_final_attempt(self):
         delivery = NotificationDelivery.objects.create(
             channel=NotificationDelivery.CHANNEL_EMAIL,
