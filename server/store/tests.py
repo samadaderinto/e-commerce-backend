@@ -29,8 +29,19 @@ class MerchantTests(TestCase):
             helper.cache_clear()
         self.owner = User.objects.create_user(email='owner@example.com', password='test-password')
         self.other = User.objects.create_user(email='other@example.com', password='test-password')
-        self.store = Store.objects.create(user=self.owner, name='My shop')
-        self.other_store = Store.objects.create(user=self.other, name='Other shop')
+        verified_at = timezone.now()
+        self.store = Store.objects.create(
+            user=self.owner,
+            name='My shop',
+            status=Store.STATUS_ACTIVE,
+            verified_at=verified_at,
+        )
+        self.other_store = Store.objects.create(
+            user=self.other,
+            name='Other shop',
+            status=Store.STATUS_ACTIVE,
+            verified_at=verified_at,
+        )
         self.client = APIClient()
         self.client.force_authenticate(self.owner)
         self.url = f'/stores/{self.store.pk}/'
