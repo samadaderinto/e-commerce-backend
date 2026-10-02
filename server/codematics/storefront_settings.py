@@ -38,9 +38,9 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
 }
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Proace Commerce API',
+    'TITLE': 'ProAce Commerce API',
     'DESCRIPTION': (
-        'OpenAPI documentation for the Proace customer storefront and merchant API. '
+        'OpenAPI documentation for the ProAce customer storefront and merchant API. '
         'Authenticated endpoints use a JWT bearer access token.'
     ),
     'VERSION': '1.0.0',
@@ -59,7 +59,7 @@ EMAIL_BACKEND = 'notification.email_backend.ResendEmailBackend'
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 RESEND_FROM_EMAIL = os.environ.get(
     'RESEND_FROM_EMAIL',
-    'Proace <notifications@example.com>',
+    'ProAce <notifications@example.com>',
 )
 DEFAULT_FROM_EMAIL = RESEND_FROM_EMAIL
 APPLICATION_EMAIL = RESEND_FROM_EMAIL
@@ -74,7 +74,7 @@ if FCM_ENABLED and not (FIREBASE_PROJECT_ID and (
         'Set FIREBASE_PROJECT_ID and Firebase credentials when FCM_ENABLED=true.'
     )
 STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'cashapp')
-STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'ngn')
+STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'usd')
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_CONTENT_TYPE_NOSNIFF = True

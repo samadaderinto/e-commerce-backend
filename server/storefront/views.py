@@ -106,8 +106,8 @@ class AuthView(APIView):
             url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
             queue_email_delivery(
                 user.email,
-                'Verify your Proace account',
-                f'Welcome to Proace. Verify your email: {url}',
+                'Verify your ProAce account',
+                f'Welcome to ProAce. Verify your email: {url}',
                 recipient=user,
             )
             return Response({'detail': 'Check your email to activate your account.'}, status=201)
@@ -129,7 +129,7 @@ class AuthView(APIView):
                 url = f'{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}'
                 queue_email_delivery(
                     user.email,
-                    'Reset your Proace password',
+                    'Reset your ProAce password',
                     f'Reset your password: {url}',
                     recipient=user,
                 )
@@ -519,8 +519,8 @@ class WalletCheckoutSessionView(CheckoutView):
             raise ValidationError({'detail': 'No Stripe wallet payment methods are configured.'})
         session = stripe.checkout.Session.create(
             mode='payment', payment_method_types=methods,
-            line_items=[{'price_data': {'currency': getattr(settings, 'STRIPE_CURRENCY', 'ngn'),
-                                        'product_data': {'name': 'Proace order'},
+            line_items=[{'price_data': {'currency': getattr(settings, 'STRIPE_CURRENCY', 'usd'),
+                                        'product_data': {'name': 'ProAce order'},
                                         'unit_amount': int(total * 100)}, 'quantity': 1}],
             client_reference_id=str(request.user.pk),
             metadata={'checkout_key': str(key), 'address': str(address.pk), 'coupon': code},

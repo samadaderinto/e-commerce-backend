@@ -73,7 +73,7 @@ test('merchant dashboard and real product onboarding', async ({ page }, testInfo
   await page.getByLabel('Product title').fill(title);
   await page.getByLabel('Description', {exact: true}).fill('Created by the end-to-end merchant workflow test.');
   await page.getByRole('combobox', {name: 'Category', exact: true}).selectOption('electronics');
-  await page.getByLabel('Price (NGN)').fill('9500');
+  await page.getByLabel('Price (USD)').fill('9500');
   await page.getByLabel('Stock quantity').fill('8');
   await page.getByRole('button', {name: 'Create product'}).click();
   await expect(page).toHaveURL(/\/merchant\/products\/\d+/);

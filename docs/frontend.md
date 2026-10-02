@@ -105,7 +105,7 @@ The frontend also has its own container setup:
   one-off controls.
 - Keep loading, empty and error states close to the feature that owns them.
 - Keep forms explicit about validation and server errors.
-- Use `money()` for NGN formatting so catalog, cart and order totals stay
+- Use `money()` for USD formatting so catalog, cart and order totals stay
   consistent.
 
 ## Local commands

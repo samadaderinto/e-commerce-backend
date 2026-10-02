@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { ApiError, api, categories, money } from '../../src/lib/api.ts';
 
-test('formats NGN amounts without fractional digits', () => {
+test('formats USD amounts with cents when needed', () => {
   assert.match(money(1500), /1,500/);
-  assert.match(money('25000.75'), /25,001/);
+  assert.match(money('25000.75'), /25,000\.75/);
 });
 
 test('exposes the supported storefront categories', () => {

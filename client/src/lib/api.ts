@@ -12,7 +12,7 @@ export async function api<T>(path: string, method = 'GET', data?: unknown): Prom
   if (!response.ok) throw new ApiError(message(result), response.status);
   return result as T;
 }
-export const money = (value: string | number) => new Intl.NumberFormat('en-NG', { style: 'currency', currency: 'NGN', maximumFractionDigits: 0 }).format(Number(value));
+export const money = (value: string | number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(Number(value));
 export const categories = [
   { key: 'electronics', name: 'Electronics' }, { key: 'outwear', name: 'Fashion' },
   { key: 'phones', name: 'Phones & tablets' }, { key: 'computing', name: 'Computing' },
