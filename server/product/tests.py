@@ -46,7 +46,7 @@ class ProductInteractionTests(TestCase):
         )
 
     def test_wishlist_uniqueness_and_product_like_metadata(self):
-        request = self.factory.post("/users/wishlist/add/", {}, format="json")
+        request = self.factory.post("/api/v1/wishlist/", {}, format="json")
         request.user = self.user
 
         Wishlist.objects.create(user=self.user, product=self.product)

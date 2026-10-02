@@ -25,6 +25,11 @@ its own docs:
 - client docs: [`client/Documentation/`](client/Documentation/README.md)
 - server docs: [`server/Documentation/`](server/Documentation/README.md)
 
+New contributors should start with the
+[getting-started guide](docs/getting-started.md), then read the
+[architecture and API map](docs/architecture.md). The `docs/` pages are the
+canonical cross-project guides; app-local docs point to additional app details.
+
 When changing code, update the matching doc in the same pass:
 
 - frontend routes/components/API behavior: [`docs/frontend.md`](docs/frontend.md);

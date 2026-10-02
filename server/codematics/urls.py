@@ -39,7 +39,6 @@ schema_view = get_schema_view(
 
 urlpatterns = [
     path('', include('observability.urls')),
-    path('', include('core.urls')),
     path('admin/', admin.site.urls),
     path('stores/', include('store.urls')),
     path('products/', include('product.urls')),

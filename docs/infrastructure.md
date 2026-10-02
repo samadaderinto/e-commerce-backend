@@ -28,15 +28,18 @@ deployment platform should receive values as environment variables or managed
 secrets. Do not recreate `server/.env.prod`, `server/monitoring/.env`, or
 `server/monitoring/secrets/metrics-token`.
 
-For Render, the deploy workflow uses three control secrets:
+For Render, the deploy workflow uses these control secrets:
 
 - `RENDER_API_KEY`;
 - `RENDER_SERVICE_ID`;
+- `RENDER_WORKER_SERVICE_ID`;
 - `RENDER_DEPLOY_HOOK_URL`.
 
 The workflow syncs production `PROD_*` GitHub Actions secrets into the Render
 service environment variables before triggering the deploy hook. The sync script
-is `.github/scripts/render-sync-env.py`.
+is `.github/scripts/render-sync-env.py`. For the complete required and optional
+secret inventory and deployment sequence, see
+[`server/deployment.md`](../server/deployment.md).
 
 ## Local containers
 

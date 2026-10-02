@@ -4,12 +4,18 @@ The backend lives in `server/`. It is a Django project whose Python settings
 package is still named `codematics`. The integrated marketplace runtime uses
 `codematics.storefront_settings`.
 
+For the newcomer setup flow and the full route-group overview, see
+[Getting started](getting-started.md) and
+[Architecture and API map](architecture.md). The route declarations in
+`server/storefront/urls.py` are authoritative for the integrated API.
+
 ## Code map
 
 - `server/manage.py`: Django management entrypoint.
 - `server/codematics/settings.py`: base legacy settings.
 - `server/codematics/storefront_settings.py`: integrated commerce runtime.
-- `server/codematics/urls.py`: legacy URL tree.
+- `server/codematics/urls.py`: legacy URL tree; the duplicate core API is not mounted.
+- `server/core/`: shared identity and customer-domain models, migrations and serializers used across apps.
 - `server/storefront/`: integrated `/api/v1/` storefront API, serializers,
   customer views and seed command.
 - `server/product/`: product models, catalog presentation, product policies,
@@ -153,6 +159,10 @@ OpenAPI is available locally at:
 - ReDoc: `http://127.0.0.1:8000/api/redoc/`
 
 Legacy schema routes also exist under `server/codematics/urls.py`.
+
+Use the generated schema for exact HTTP methods, payloads and per-operation
+permissions. The grouped endpoint map is in
+[Architecture and API map](architecture.md).
 
 ## Documentation maintenance
 
