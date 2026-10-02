@@ -75,16 +75,16 @@ Required when Elasticsearch is enabled:
 
 `PROD_CELERY_BROKER_URL` must point to the production Redis broker and is
 synced to both the API and worker. Configure the worker service to run
-`celery -A codematics worker --beat --loglevel=INFO`. Email is sent using SMTP
-values supplied as `PROD_EMAIL_HOST`, `PROD_EMAIL_HOST_USER`,
-`PROD_EMAIL_HOST_PASSWORD`, and `PROD_DEFAULT_FROM_EMAIL`; FCM credentials are
-required as `PROD_FIREBASE_PROJECT_ID` and `PROD_FIREBASE_CREDENTIALS_JSON`
-only when `PROD_FCM_ENABLED=true`. Production app configuration is sourced
-from GitHub Actions secrets and synchronized to both Render services.
+`celery -A codematics worker --beat --loglevel=INFO`. Email uses Resend; set
+`PROD_RESEND_API_KEY` and `PROD_RESEND_FROM_EMAIL` to a Resend API key and a
+sender address verified with Resend. FCM credentials are required as
+`PROD_FIREBASE_PROJECT_ID` and `PROD_FIREBASE_CREDENTIALS_JSON` only when
+`PROD_FCM_ENABLED=true`. Production app configuration is sourced from GitHub
+Actions secrets and synchronized to both Render services.
 
 Optional production secrets such as `PROD_POSTGRES_PORT`,
 `PROD_DB_REQUIRE_SSL`, `PROD_OBJECT_STORAGE_ENABLED`, `PROD_S3_ENDPOINT_URL`,
-`PROD_S3_PUBLIC_URL`, `PROD_S3_REGION`, OpenTelemetry, Kafka, Celery and SMTP
+`PROD_S3_PUBLIC_URL`, `PROD_S3_REGION`, OpenTelemetry, Kafka and Celery
 settings are also synced when present.
 
 The local image does not install AWS SDK packages because local uploads use the

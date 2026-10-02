@@ -40,6 +40,8 @@ PASSWORD_HASHERS = ['django.contrib.auth.hashers.MD5PasswordHasher']
 CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
 EMAIL_BACKEND = 'django.core.mail.backends.locmem.EmailBackend'
 DEFAULT_FROM_EMAIL = 'Proace <hello@proace.test>'
+RESEND_API_KEY = 're_test_key'
+RESEND_FROM_EMAIL = DEFAULT_FROM_EMAIL
 FRONTEND_URL = 'http://testserver'
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],

@@ -45,8 +45,10 @@ Open <http://127.0.0.1:3000>. The client calls the Django API at
 
 The demo password above is for local seeded accounts only. `seed_demo` is
 refused when `DJANGO_DEBUG=false`; do not use demo credentials or template
-secrets in deployed environments. Local verification and password-reset
-messages are printed by Django's console email backend.
+secrets in deployed environments. Email delivery uses Resend: set
+`RESEND_API_KEY` and a Resend-verified `RESEND_FROM_EMAIL` in `server/.env` when
+you want local flows to send real messages. Tests use an in-memory backend and
+do not send email.
 
 ## Run with containers
 

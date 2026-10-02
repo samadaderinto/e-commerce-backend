@@ -198,14 +198,8 @@ jobs:
       CELERY_BROKER_URL: ${{ secrets.PROD_CELERY_BROKER_URL }}
       NOTIFICATION_DELIVERY_MAX_ATTEMPTS: ${{ secrets.PROD_NOTIFICATION_DELIVERY_MAX_ATTEMPTS || '8' }}
       NOTIFICATION_DELIVERY_STALE_SECONDS: ${{ secrets.PROD_NOTIFICATION_DELIVERY_STALE_SECONDS || '300' }}
-      EMAIL_BACKEND: ${{ secrets.PROD_EMAIL_BACKEND || 'django.core.mail.backends.smtp.EmailBackend' }}
-      EMAIL_HOST: ${{ secrets.PROD_EMAIL_HOST }}
-      EMAIL_HOST_USER: ${{ secrets.PROD_EMAIL_HOST_USER }}
-      EMAIL_HOST_PASSWORD: ${{ secrets.PROD_EMAIL_HOST_PASSWORD }}
-      EMAIL_PORT: ${{ secrets.PROD_EMAIL_PORT || '587' }}
-      EMAIL_USE_TLS: ${{ secrets.PROD_EMAIL_USE_TLS || 'true' }}
-      DEFAULT_FROM_EMAIL: ${{ secrets.PROD_DEFAULT_FROM_EMAIL }}
-      APPLICATION_EMAIL: ${{ secrets.PROD_APPLICATION_EMAIL }}
+      RESEND_API_KEY: ${{ secrets.PROD_RESEND_API_KEY }}
+      RESEND_FROM_EMAIL: ${{ secrets.PROD_RESEND_FROM_EMAIL }}
       FCM_ENABLED: ${{ secrets.PROD_FCM_ENABLED || 'false' }}
       FIREBASE_PROJECT_ID: ${{ secrets.PROD_FIREBASE_PROJECT_ID }}
       FIREBASE_CREDENTIALS_JSON: ${{ secrets.PROD_FIREBASE_CREDENTIALS_JSON }}
@@ -248,15 +242,14 @@ jobs:
             MINIO_BUCKET_NAME
             MINIO_ACCESS_KEY
             MINIO_SECRET_KEY
+            RESEND_API_KEY
+            RESEND_FROM_EMAIL
           )
           if [ "${ELASTICSEARCH_ENABLED}" != "false" ]; then
             required+=(ELASTICSEARCH_URL)
           fi
           if [ "${FCM_ENABLED}" = "true" ]; then
             required+=(FIREBASE_PROJECT_ID FIREBASE_CREDENTIALS_JSON)
-          fi
-          if [ "${EMAIL_BACKEND}" = "django.core.mail.backends.smtp.EmailBackend" ]; then
-            required+=(EMAIL_HOST EMAIL_HOST_USER EMAIL_HOST_PASSWORD DEFAULT_FROM_EMAIL)
           fi
           missing=0
           for name in "${required[@]}"; do

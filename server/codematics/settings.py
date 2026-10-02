@@ -402,20 +402,14 @@ SIMPLE_JWT = {
 }
 
 
-EMAIL_BACKEND = os.environ.get(
-    "EMAIL_BACKEND",
-    "django.core.mail.backends.smtp.EmailBackend",
+EMAIL_BACKEND = "notification.email_backend.ResendEmailBackend"
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.environ.get(
+    "RESEND_FROM_EMAIL",
+    "Proace <notifications@example.com>",
 )
-EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() == "true"
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
-EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
-EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
-DEFAULT_FROM_EMAIL = os.environ.get(
-    "DEFAULT_FROM_EMAIL",
-    "Proace <hello@proace.example>",
-)
-APPLICATION_EMAIL = os.environ.get("APPLICATION_EMAIL", DEFAULT_FROM_EMAIL)
+DEFAULT_FROM_EMAIL = RESEND_FROM_EMAIL
+APPLICATION_EMAIL = RESEND_FROM_EMAIL
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "amqp://guest:guest@127.0.0.1:5672//")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "rpc://")
 CELERY_TASK_DEFAULT_QUEUE = "commerce.notifications"

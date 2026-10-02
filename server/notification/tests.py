@@ -1,7 +1,6 @@
 from datetime import timedelta
 
 from django.test import TestCase, override_settings
-from django.core import mail
 from django.urls import include, path
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -145,30 +144,37 @@ class NotificationApiTests(TestCase):
         self.assertFalse(Notification.objects.filter(recipient=self.user).exists())
         self.assertFalse(Notification.objects.filter(recipient=inactive_staff).exists())
 
+    @override_settings(
+        EMAIL_BACKEND="notification.email_backend.ResendEmailBackend",
+        RESEND_API_KEY="re_test_key",
+    )
     def test_actionable_notifications_email_and_can_opt_out(self):
-        with patch("notification.tasks.deliver_notification_task.apply_async") as enqueue:
-            with self.captureOnCommitCallbacks(execute=True):
-                notification = create_notification(
-                    recipient=self.user,
-                    verb="wallet credited",
-                    description="Your wallet was credited.",
-                    data={"event": "wallet_credited"},
-                )
-                create_notification(
-                    recipient=self.user,
-                    verb="quiet update",
-                    data={"email": False},
-                )
+        with patch("notification.email_backend.resend.Emails.send") as send_email:
+            with patch("notification.tasks.deliver_notification_task.apply_async") as enqueue:
+                with self.captureOnCommitCallbacks(execute=True):
+                    notification = create_notification(
+                        recipient=self.user,
+                        verb="wallet credited",
+                        description="Your wallet was credited.",
+                        data={"event": "wallet_credited"},
+                    )
+                    create_notification(
+                        recipient=self.user,
+                        verb="quiet update",
+                        data={"email": False},
+                    )
 
-        delivery = NotificationDelivery.objects.get(notification=notification)
-        self.assertEqual(delivery.status, NotificationDelivery.STATUS_QUEUED)
-        self.assertEqual(enqueue.call_count, 1)
-        self.assertEqual(mail.outbox, [])
-        result = deliver_notification_task.run(delivery.pk)
+            delivery = NotificationDelivery.objects.get(notification=notification)
+            self.assertEqual(delivery.status, NotificationDelivery.STATUS_QUEUED)
+            self.assertEqual(enqueue.call_count, 1)
+            send_email.assert_not_called()
+            result = deliver_notification_task.run(delivery.pk)
+
         self.assertEqual(result["status"], NotificationDelivery.STATUS_SENT)
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, [self.user.email])
-        self.assertIn("wallet was credited", mail.outbox[0].body)
+        send_email.assert_called_once()
+        payload = send_email.call_args.args[0]
+        self.assertEqual(payload["to"], [self.user.email])
+        self.assertIn("wallet was credited", payload["text"])
         notification.refresh_from_db()
         self.assertTrue(notification.emailed)
 
@@ -183,14 +189,14 @@ class NotificationApiTests(TestCase):
 
         with patch(
             "notification.tasks._deliver_email",
-            side_effect=RuntimeError("SMTP unavailable"),
+            side_effect=RuntimeError("Resend unavailable"),
         ):
             result = deliver_notification_task.run(delivery.pk)
 
         delivery.refresh_from_db()
         self.assertEqual(result["status"], NotificationDelivery.STATUS_PENDING)
         self.assertEqual(delivery.attempts, 1)
-        self.assertEqual(delivery.last_error, "SMTP unavailable")
+        self.assertEqual(delivery.last_error, "Resend unavailable")
         self.assertGreater(delivery.available_at, timezone.now())
 
     @override_settings(

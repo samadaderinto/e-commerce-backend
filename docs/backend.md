@@ -124,13 +124,15 @@ Backend tools added or wired:
   Application Default Credentials and never stores service-account credentials.
 
 The notification outbox persists email and push deliveries before placing
-them on the Celery queue. The worker sends email through the configured email
-backend and push through FCM, retries transient failures, and periodically
-re-enqueues stale work. Set `CELERY_BROKER_URL` identically for the API and
-worker; local Compose uses Redis DB 1. Email should use the console backend
-locally and SMTP in production. To enable push, set `FCM_ENABLED=true`,
-`FIREBASE_PROJECT_ID`, and Firebase credentials. Apply migrations before
-deploying and run the `notification-worker` service alongside the API.
+them on the Celery queue. The worker sends email through the custom Resend
+Django email backend and push through FCM, retries transient failures, and
+periodically re-enqueues stale work. Set `RESEND_API_KEY` and a
+Resend-verified `RESEND_FROM_EMAIL` to send email. Keep
+`CELERY_BROKER_URL` identical for the API and worker; local Compose uses Redis
+DB 1. Tests explicitly use Django's in-memory email backend and never send
+real mail. To enable push, set `FCM_ENABLED=true`, `FIREBASE_PROJECT_ID`, and
+Firebase credentials. Apply migrations before deploying and run the
+`notification-worker` service alongside the API.
 
 ## Local commands
 

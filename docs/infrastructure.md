@@ -194,8 +194,10 @@ email and FCM push deliveries before enqueueing them; the Compose
 `notification-worker` processes them and runs periodic recovery for stale
 deliveries. Configure `CELERY_BROKER_URL` to the same Redis broker for the API
 and worker. In Compose, Redis DB 1 is reserved for Celery and DB 0 backs Django
-cache. Email delivery uses the configured email backend (console locally, SMTP
-in production); push delivery uses Firebase Cloud Messaging.
+cache. Email delivery uses the custom Resend Django email backend; configure
+`RESEND_API_KEY` and a Resend-verified `RESEND_FROM_EMAIL` in local and
+production environments. Tests use the isolated in-memory backend. Push
+delivery uses Firebase Cloud Messaging.
 
 Kafka and RabbitMQ remain optional development services for Kafka log
 publishing and other explicitly configured consumers. Start them only when
@@ -226,7 +228,8 @@ Messaging config:
 | `CELERY_BROKER_URL` | Celery broker used by both API and worker | `redis://127.0.0.1:6379/1` on host; Compose uses `redis://redis:6379/1` |
 | `NOTIFICATION_DELIVERY_MAX_ATTEMPTS` | Maximum attempts before a delivery is marked failed | `8` |
 | `NOTIFICATION_DELIVERY_STALE_SECONDS` | Age after which an in-flight delivery is recovered | `300` |
-| `EMAIL_BACKEND` | Email sender backend | Console locally; SMTP in production |
+| `RESEND_API_KEY` | Resend API key used by the custom Django email backend | unset; required to send |
+| `RESEND_FROM_EMAIL` | Verified sender name/address used for outgoing email | `Proace <notifications@example.com>` |
 | `FCM_ENABLED` | Enables Firebase Cloud Messaging push delivery | `false` locally |
 
 ## Nginx

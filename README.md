@@ -221,8 +221,9 @@ Screenshots and failure traces go in `artifacts/` (ignored by Git).
 ## Deployment Boundaries
 
 - Set `DJANGO_DEBUG=false`, a strong `SECRET_KEY`, `ALLOWED_HOSTS`, `FRONTEND_URL`,
-  SMTP configuration and persistent media/database storage. Build the client with
-  `npm run build` and run `npm run start --workspace=client` behind HTTPS.
+  Resend API/sender configuration and persistent media/database storage. Build
+  the client with `npm run build` and run `npm run start --workspace=client`
+  behind HTTPS.
 - The included API is ready for local integration, not a claim of production
   marketplace certification. Review operator-specific privacy, returns and support
   policies before launch; no legal policy or merchant identity verification service
