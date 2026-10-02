@@ -243,6 +243,7 @@ jobs:
             POSTGRES_USER
             POSTGRES_PASSWORD
             CACHE_URL
+            CELERY_BROKER_URL
             OBSERVABILITY_TOKEN
             MINIO_BUCKET_NAME
             MINIO_ACCESS_KEY

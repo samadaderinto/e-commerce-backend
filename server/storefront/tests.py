@@ -12,6 +12,8 @@ from rest_framework.test import APIClient
 
 from cart.models import CartItem
 from core.models import Address, User
+from notification.models import NotificationDelivery
+from notification.tasks import deliver_notification_task
 from payment.models import Coupon, CouponRedemption, Order
 from product.models import Product
 from store.models import Schedule, Store
@@ -329,6 +331,14 @@ class StorefrontTests(TestCase):
         user = User.objects.get(email='new@test.com')
         self.assertFalse(user.is_active)
         self.assertTrue(user.check_password('Strong-new-password-123'))
+        delivery = NotificationDelivery.objects.get(
+            channel=NotificationDelivery.CHANNEL_EMAIL,
+            recipient_email=user.email,
+        )
+        self.assertEqual(delivery.status, NotificationDelivery.STATUS_PENDING)
+        self.assertEqual(len(mail.outbox), 0)
+        result = deliver_notification_task.run(delivery.pk)
+        self.assertEqual(result['status'], NotificationDelivery.STATUS_SENT)
         self.assertEqual(len(mail.outbox), 1)
         token = signing.dumps({'user': user.pk}, salt='proace-verify')
         response = self.client.post('/api/v1/auth/verify/', {'token': token}, format='json')

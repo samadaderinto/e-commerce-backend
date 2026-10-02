@@ -9,7 +9,7 @@ services:
     init: true
     ports:
       - '${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000'
-    environment:
+    environment: &app_environment
       DJANGO_SETTINGS_MODULE: codematics.storefront_settings
       DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
       SECRET_KEY: ${SECRET_KEY:-local-container-secret-change-me}
@@ -34,7 +34,7 @@ services:
       OTEL_TRACING_ENABLED: ${OTEL_TRACING_ENABLED:-false}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-commerce-api}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/1}
+      CELERY_BROKER_URL: redis://redis:6379/1
       NOTIFICATION_DELIVERY_MAX_ATTEMPTS: ${NOTIFICATION_DELIVERY_MAX_ATTEMPTS:-8}
       NOTIFICATION_DELIVERY_STALE_SECONDS: ${NOTIFICATION_DELIVERY_STALE_SECONDS:-300}
       EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}
@@ -70,6 +70,7 @@ services:
     <<: *app
     ports: []
     environment:
+      <<: *app_environment
       RUN_MIGRATIONS: 'false'
       RUN_COLLECTSTATIC: 'false'
     command: ['celery', '-A', 'codematics', 'worker', '--beat', '--loglevel=INFO']

@@ -117,10 +117,14 @@ Backend tools added or wired:
 - `firebase-admin`: optional Firebase Cloud Messaging delivery; the server uses
   Application Default Credentials and never stores service-account credentials.
 
-When enabling FCM, set `FCM_ENABLED=true`, set `FIREBASE_PROJECT_ID`, configure
-Google Application Default Credentials, and run the Celery worker. Apply
-migrations before deployment. FCM supplements the in-app inbox; it does not
-replace persisted notifications or email delivery.
+The notification outbox persists email and push deliveries before placing
+them on the Celery queue. The worker sends email through the configured email
+backend and push through FCM, retries transient failures, and periodically
+re-enqueues stale work. Set `CELERY_BROKER_URL` identically for the API and
+worker; local Compose uses Redis DB 1. Email should use the console backend
+locally and SMTP in production. To enable push, set `FCM_ENABLED=true`,
+`FIREBASE_PROJECT_ID`, and Firebase credentials. Apply migrations before
+deploying and run the `notification-worker` service alongside the API.
 
 ## Local commands
 

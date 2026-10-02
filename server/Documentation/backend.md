@@ -34,9 +34,11 @@ docker compose -f compose.yaml exec api python manage.py rebuild_product_index
 ## Notifications and FCM
 
 The authenticated `/api/v1/notifications/` endpoints back the in-app inbox.
-Optional browser push delivery uses Firebase Cloud Messaging and the
-authenticated `/api/v1/notifications/devices/` endpoint. Set `FCM_ENABLED=true`
-and `FIREBASE_PROJECT_ID`, provide Google Application Default Credentials outside
-the repository, configure the Firebase Web app and VAPID key in the client, and
-run the Celery worker. Apply database migrations before deploying. Push delivery
-supplements, and does not replace, persisted inbox or email notifications.
+Email and push deliveries are persisted to the outbox and sent asynchronously
+by the Celery worker. The worker retries transient errors and periodically
+recovers stale deliveries. Set `CELERY_BROKER_URL` identically for the API and
+worker; local Compose uses Redis DB 1. Email uses the console backend locally
+and SMTP in production. To enable browser push, set `FCM_ENABLED=true` and
+`FIREBASE_PROJECT_ID`, provide Firebase credentials outside the repository,
+and configure the Firebase Web app and VAPID key in the client. Apply database
+migrations before deploying and run the worker alongside the API.

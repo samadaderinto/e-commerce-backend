@@ -184,11 +184,19 @@ or a secured self-hosted cluster. Set `ELASTICSEARCH_URL` through GitHub Actions
 secrets or the deployment platform secret manager. Keep local `xpack.security`
 settings out of production.
 
-## Kafka and RabbitMQ in development
+## Messaging and notification delivery
 
-Kafka and RabbitMQ are optional and disabled by default through the Compose
-`messaging` profile. Start them only when testing queue consumers or Kafka log
-publishing:
+The notification outbox uses Celery with Redis as its broker. The API persists
+email and FCM push deliveries before enqueueing them; the Compose
+`notification-worker` processes them and runs periodic recovery for stale
+deliveries. Configure `CELERY_BROKER_URL` to the same Redis broker for the API
+and worker. In Compose, Redis DB 1 is reserved for Celery and DB 0 backs Django
+cache. Email delivery uses the configured email backend (console locally, SMTP
+in production); push delivery uses Firebase Cloud Messaging.
+
+Kafka and RabbitMQ remain optional development services for Kafka log
+publishing and other explicitly configured consumers. Start them only when
+needed:
 
 ```sh
 docker compose -f monitoring/compose.yaml --profile messaging up -d kafka rabbitmq
@@ -212,10 +220,11 @@ Messaging config:
 | `KAFKA_LOG_TOPIC` | Kafka topic for app logs | `commerce.logs` |
 | `KAFKA_LOG_GROUP` | Consumer group for log indexing helpers | `commerce-log-indexer` |
 | `KAFKA_CLUSTER_ID` | Local KRaft cluster ID for the Kafka container | generated default |
-| `RABBITMQ_DEFAULT_USER` | RabbitMQ dev username | `commerce` |
-| `RABBITMQ_DEFAULT_PASS` | RabbitMQ dev password | `change-me-local` |
-| `CELERY_BROKER_URL` | Celery broker URL when queueing is enabled | RabbitMQ URL |
-| `QUEUE_EMAILS` | Enables queue-backed email behavior where supported | `true` |
+| `CELERY_BROKER_URL` | Celery broker used by both API and worker | `redis://127.0.0.1:6379/1` on host; Compose uses `redis://redis:6379/1` |
+| `NOTIFICATION_DELIVERY_MAX_ATTEMPTS` | Maximum attempts before a delivery is marked failed | `8` |
+| `NOTIFICATION_DELIVERY_STALE_SECONDS` | Age after which an in-flight delivery is recovered | `300` |
+| `EMAIL_BACKEND` | Email sender backend | Console locally; SMTP in production |
+| `FCM_ENABLED` | Enables Firebase Cloud Messaging push delivery | `false` locally |
 
 ## Nginx
 

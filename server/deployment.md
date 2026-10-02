@@ -45,6 +45,7 @@ Required Render control secrets:
 | --- | --- |
 | `RENDER_API_KEY` | Render API token used to update service environment variables |
 | `RENDER_SERVICE_ID` | Render service ID for the backend service |
+| `RENDER_WORKER_SERVICE_ID` | Render service ID for the notification worker |
 | `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL for that service |
 
 Required production app secrets:
@@ -60,6 +61,7 @@ Required production app secrets:
 | `PROD_POSTGRES_USER` | `POSTGRES_USER` |
 | `PROD_POSTGRES_PASSWORD` | `POSTGRES_PASSWORD` |
 | `PROD_CACHE_URL` | `CACHE_URL` |
+| `PROD_CELERY_BROKER_URL` | `CELERY_BROKER_URL` |
 | `PROD_OBSERVABILITY_TOKEN` | `OBSERVABILITY_TOKEN` |
 | `PROD_S3_BUCKET_NAME` | `MINIO_BUCKET_NAME` |
 | `PROD_S3_ACCESS_KEY` | `MINIO_ACCESS_KEY` |
@@ -70,6 +72,15 @@ Required when Elasticsearch is enabled:
 | Secret | Render env var |
 | --- | --- |
 | `PROD_ELASTICSEARCH_URL` | `ELASTICSEARCH_URL` |
+
+`PROD_CELERY_BROKER_URL` must point to the production Redis broker and is
+synced to both the API and worker. Configure the worker service to run
+`celery -A codematics worker --beat --loglevel=INFO`. Email is sent using SMTP
+values supplied as `PROD_EMAIL_HOST`, `PROD_EMAIL_HOST_USER`,
+`PROD_EMAIL_HOST_PASSWORD`, and `PROD_DEFAULT_FROM_EMAIL`; FCM credentials are
+required as `PROD_FIREBASE_PROJECT_ID` and `PROD_FIREBASE_CREDENTIALS_JSON`
+only when `PROD_FCM_ENABLED=true`. Production app configuration is sourced
+from GitHub Actions secrets and synchronized to both Render services.
 
 Optional production secrets such as `PROD_POSTGRES_PORT`,
 `PROD_DB_REQUIRE_SSL`, `PROD_OBJECT_STORAGE_ENABLED`, `PROD_S3_ENDPOINT_URL`,

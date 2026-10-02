@@ -3,6 +3,7 @@ from datetime import timedelta
 from django.test import TestCase, override_settings
 from django.core import mail
 from django.urls import include, path
+from django.utils import timezone
 from rest_framework.test import APIClient
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -192,7 +193,10 @@ class NotificationApiTests(TestCase):
         self.assertEqual(delivery.last_error, "SMTP unavailable")
         self.assertGreater(delivery.available_at, timezone.now())
 
-    @override_settings(NOTIFICATION_DELIVERY_STALE_SECONDS=1)
+    @override_settings(
+        NOTIFICATION_DELIVERY_MAX_ATTEMPTS=8,
+        NOTIFICATION_DELIVERY_STALE_SECONDS=1,
+    )
     def test_recovery_requeues_stale_deliveries(self):
         delivery = NotificationDelivery.objects.create(
             channel=NotificationDelivery.CHANNEL_EMAIL,
@@ -213,6 +217,33 @@ class NotificationApiTests(TestCase):
         self.assertEqual(result["queued"], 1)
         self.assertEqual(delivery.status, NotificationDelivery.STATUS_QUEUED)
         enqueue.assert_called_once()
+
+    @override_settings(NOTIFICATION_DELIVERY_STALE_SECONDS=1)
+    def test_recovery_fails_stale_delivery_after_final_attempt(self):
+        delivery = NotificationDelivery.objects.create(
+            channel=NotificationDelivery.CHANNEL_EMAIL,
+            recipient=self.user,
+            recipient_email=self.user.email,
+            subject="Test",
+            body="Message",
+            status=NotificationDelivery.STATUS_PROCESSING,
+            attempts=8,
+        )
+        NotificationDelivery.objects.filter(pk=delivery.pk).update(
+            updated_at=timezone.now() - timedelta(minutes=1)
+        )
+
+        with patch("notification.tasks.deliver_notification_task.apply_async") as enqueue:
+            result = recover_notification_deliveries.run()
+
+        delivery.refresh_from_db()
+        self.assertEqual(result["queued"], 0)
+        self.assertEqual(delivery.status, NotificationDelivery.STATUS_FAILED)
+        self.assertEqual(
+            delivery.last_error,
+            "Worker stopped during the final delivery attempt.",
+        )
+        enqueue.assert_not_called()
 
     @override_settings(FCM_ENABLED=True)
     def test_user_can_register_and_unregister_only_their_push_device(self):
