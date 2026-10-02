@@ -24,15 +24,13 @@ For feature-specific behavior and safeguards, also see the
 [root README](../README.md). It describes the implemented customer and seller
 workflows and calls out what is not production-ready.
 
-App-local docs:
+Frontend-local documentation:
 
 - [Client docs](../client/Documentation/README.md): frontend bridge, frontend container and client hosting.
-- [Server docs](../server/Documentation/README.md): Django API, Render deployment and backend observability.
 
-The pages in this `docs/` directory are the canonical cross-project guides.
-App-local documentation is an additional entry point for app-specific details;
-avoid maintaining a second, conflicting copy of the same setup or architecture
-instructions.
+The pages in this `docs/` directory are the canonical backend and cross-project
+guides. Avoid maintaining a second, conflicting copy of the same setup or
+architecture instructions.
 
 ## Monorepo shape
 

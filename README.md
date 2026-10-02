@@ -5,8 +5,7 @@ A Next.js marketplace and Django API in one base repository.
 ```text
 client/                 Next.js frontend app, client docs and client container
 client/Documentation/   Frontend-local docs
-server/                 Django API, server docs and backend containers
-server/Documentation/   Backend-local docs
+server/                 Django API and backend containers
 docs/                   Root architecture and cross-project docs
 .github/                CI/CD, Render env sync and deploy workflow
 package.json            npm workspace and root frontend commands
@@ -19,16 +18,15 @@ not replaced. The runnable commerce configuration is
 
 ## Code Documentation
 
-Project documentation starts in [`docs/`](docs/README.md). Each app also carries
-its own docs:
+Backend and cross-project documentation is centralized in [`docs/`](docs/README.md).
+The client also has frontend-local docs:
 
 - client docs: [`client/Documentation/`](client/Documentation/README.md)
-- server docs: [`server/Documentation/`](server/Documentation/README.md)
 
 New contributors should start with the
 [getting-started guide](docs/getting-started.md), then read the
 [architecture and API map](docs/architecture.md). The `docs/` pages are the
-canonical cross-project guides; app-local docs point to additional app details.
+canonical guides for the backend and cross-project details.
 
 When changing code, update the matching doc in the same pass:
 
@@ -39,7 +37,6 @@ When changing code, update the matching doc in the same pass:
 - health, metrics, logs, traces, profiling, Grafana, Loki, Prometheus, Tempo or
   Alloy: [`docs/observability.md`](docs/observability.md).
 - client-specific changes should also update `client/Documentation/`;
-- server-specific changes should also update `server/Documentation/`.
 
 ## App Boundary
 
