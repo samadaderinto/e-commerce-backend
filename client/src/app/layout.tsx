@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Providers } from '@/components/providers';
 import { Shell } from '@/components/shell';
 import './globals.css';
+import './admin.css';
 
 export const metadata: Metadata = { title: { default: 'Proace — Your everyday marketplace', template: '%s | Proace' }, description: 'Discover considered essentials, everyday finds and independent sellers. Shop fashion, electronics and more at Proace.' };
 

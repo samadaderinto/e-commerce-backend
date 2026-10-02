@@ -9,6 +9,7 @@ from .views import (
     OrdersView, ProductDetailView, ProductsView, ReviewsView, WishlistView,
 )
 from store.views import StoreReviewViewSet
+from staff.views import StaffViewSet
 
 urlpatterns = [
     path('', include('observability.urls')),
@@ -30,6 +31,10 @@ urlpatterns = [
     path('api/v1/admin/stores/', StoreReviewViewSet.as_view({'get': 'list'})),
     path('api/v1/admin/stores/<int:pk>/approve/', StoreReviewViewSet.as_view({'post': 'approve'})),
     path('api/v1/admin/stores/<int:pk>/block/', StoreReviewViewSet.as_view({'post': 'block'})),
+    path('api/v1/admin/staff/', StaffViewSet.as_view({'get': 'staffs', 'post': 'staffs'})),
+    path('api/v1/admin/staff/<int:staff_pk>/', StaffViewSet.as_view({'get': 'staff_detail'})),
+    path('api/v1/admin/staff/<int:staff_pk>/block/', StaffViewSet.as_view({'post': 'block_staff'})),
+    path('api/v1/admin/staff/<int:staff_pk>/unblock/', StaffViewSet.as_view({'post': 'unblock_staff'})),
     path('api/v1/notifications/', include('notification.urls')),
     path('api/v1/orders/', OrdersView.as_view()),
     path('api/v1/orders/<int:pk>/', OrderDetailView.as_view()),

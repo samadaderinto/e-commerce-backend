@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 
 from core.models import User
@@ -76,9 +77,46 @@ class StoreModerationSerializer(serializers.Serializer):
 
 
 class StaffUserSerializer(UserSerializer):
-    class Meta(UserSerializer.Meta):
-        fields = UserSerializer.Meta.fields + ["is_staff", "is_superuser", "is_active"]
-        read_only_fields = ["id", "created", "updated", "is_superuser"]
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "phone1",
+            "phone2",
+            "gender",
+            "is_staff",
+            "is_superuser",
+            "is_active",
+            "date_joined",
+        ]
+        read_only_fields = fields
+
+
+class StaffCreateSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, validators=[validate_password])
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "phone1",
+            "phone2",
+            "gender",
+            "password",
+            "is_staff",
+            "is_active",
+            "date_joined",
+        ]
+        read_only_fields = ["id", "is_staff", "is_active", "date_joined"]
+
+    def create(self, validated_data):
+        return User.objects.create_staffuser(**validated_data)
 
 
 class StaffPermissionSerializer(serializers.Serializer):

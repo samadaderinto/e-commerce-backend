@@ -17,8 +17,8 @@ def unit_price(product):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'phone1']
-        read_only_fields = ['id', 'email']
+        fields = ['id', 'email', 'first_name', 'last_name', 'phone1', 'is_staff', 'is_superuser']
+        read_only_fields = ['id', 'email', 'is_staff', 'is_superuser']
 
 
 class RegisterSerializer(UserSerializer):
@@ -27,7 +27,7 @@ class RegisterSerializer(UserSerializer):
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + ['password', 'referral_code']
-        read_only_fields = ['id']
+        read_only_fields = ['id', 'is_staff', 'is_superuser']
 
     def validate(self, data):
         validate_password(

@@ -9,7 +9,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.parsers import JSONParser
-from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import BasePermission, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.generics import ListAPIView
@@ -18,7 +18,11 @@ from rest_framework.pagination import LimitOffsetPagination
 
 from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
-from notification.views import refund_requested_nofication, store_moderation_notification
+from notification.views import (
+    refund_requested_nofication,
+    staff_created_nofication,
+    store_moderation_notification,
+)
 from store.serializers import StoreAddressSerializer
 
 from staff.serilalizers import (
@@ -27,6 +31,7 @@ from staff.serilalizers import (
     BackofficeStoreSerializer,
     CommentSerializer,
     DashboardQuerySerializer,
+    StaffCreateSerializer,
     StaffPermissionSerializer,
     StaffUserSerializer,
     StoreModerationSerializer,
@@ -70,10 +75,25 @@ class BackofficePagination(LimitOffsetPagination):
     max_limit = 100
 
 
+class IsSuperuser(BasePermission):
+    """Restrict staff-account administration to platform administrators."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_active and request.user.is_superuser)
+
+
 class StaffViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAdminUser]
     pagination_class = BackofficePagination
     filter_backends = [SearchFilter, OrderingFilter]
+
+    admin_only_actions = {"staffs", "staff_detail", "block_staff", "unblock_staff"}
+
+    def get_permissions(self):
+        permission_classes = (
+            [IsSuperuser] if self.action in self.admin_only_actions else self.permission_classes
+        )
+        return [permission() for permission in permission_classes]
 
     @action(detail=False, methods=["get"], url_path="logs")
     def logs(self, request):
@@ -192,11 +212,67 @@ class StaffViewSet(viewsets.GenericViewSet):
             )
         return self.paginate_response(users, StaffUserSerializer)
 
+    @action(detail=False, methods=["get", "post"], url_path="staffs")
+    def staffs(self, request):
+        """List staff accounts or create one. Superuser/admin only."""
+        if request.method == "GET":
+            staff_users = User.objects.filter(
+                is_staff=True,
+                is_superuser=False,
+            ).order_by("-date_joined", "-pk")
+            search = request.query_params.get("search")
+            if search:
+                staff_users = staff_users.filter(
+                    Q(email__icontains=search)
+                    | Q(first_name__icontains=search)
+                    | Q(last_name__icontains=search)
+                )
+            return self.paginate_response(staff_users, StaffUserSerializer)
+
+        serializer = StaffCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        staff_user = serializer.save()
+        staff_created_nofication(staff_user, actor=request.user)
+        return Response(StaffUserSerializer(staff_user).data, status=status.HTTP_201_CREATED)
+
+    def get_managed_staff(self, staff_pk):
+        return get_object_or_404(
+            User,
+            pk=staff_pk,
+            is_staff=True,
+            is_superuser=False,
+        )
+
+    @action(detail=False, methods=["get"], url_path=r"staffs/(?P<staff_pk>\d+)")
+    def staff_detail(self, request, staff_pk=None):
+        return Response(StaffUserSerializer(self.get_managed_staff(staff_pk)).data)
+
+    @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/block")
+    def block_staff(self, request, staff_pk=None):
+        staff_user = self.get_managed_staff(staff_pk)
+        if staff_user.is_active:
+            staff_user.is_active = False
+            staff_user.save(update_fields=["is_active"])
+        return Response(StaffUserSerializer(staff_user).data)
+
+    @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/unblock")
+    def unblock_staff(self, request, staff_pk=None):
+        staff_user = self.get_managed_staff(staff_pk)
+        if not staff_user.is_active:
+            staff_user.is_active = True
+            staff_user.save(update_fields=["is_active"])
+        return Response(StaffUserSerializer(staff_user).data)
+
     @action(detail=False, methods=["get", "patch"], url_path=r"users/(?P<user_pk>\d+)")
     def user_detail(self, request, user_pk=None):
         user = get_object_or_404(User, pk=user_pk)
         if request.method == "GET":
             return Response(StaffUserSerializer(user).data)
+        if not request.user.is_superuser:
+            return Response(
+                {"detail": "Only an admin can change account permissions."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         serializer = StaffPermissionSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.update(user)

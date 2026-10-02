@@ -1,5 +1,6 @@
 export type Product = { is_own_store: boolean; id: number; title: string; description: string; category: string; brand: string; price: string; sale_price: string; discount: number; available: number; average_rating: string; rating_count: number; store: number; store_name: string; store_username: string; image: string; images: string[]; tags: string[]; created: string };
-export type User = { id: number; email: string; first_name: string; last_name: string; phone1: string };
+export type User = { id: number; email: string; first_name: string; last_name: string; phone1: string; is_staff: boolean; is_superuser: boolean };
+export type StaffUser = User & { phone2?: string | null; gender: 'male' | 'female'; is_active: boolean; date_joined: string };
 export type Address = { id: number; address: string; city: string; state: string; country: string; zip: string; is_default: boolean };
 export type CartLine = { product: Product; quantity: number; total: string; purchasable: boolean };
 export type Cart = { id?: number; items: CartLine[]; subtotal: string; shipping: string; total: string };

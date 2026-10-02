@@ -13,6 +13,7 @@ INSTALLED_APPS = [
     'notification.apps.EventNotificationConfig',
     'observability.apps.ObservabilityConfig',
     'affiliates',
+    'staff',
     'drf_spectacular',
     'storefront',
 ]

@@ -326,10 +326,12 @@ class StorefrontTests(TestCase):
 
     def test_registration_requires_verification_and_hashes_password(self):
         self.client.force_authenticate(None)
-        response = self.client.post('/api/v1/auth/register/', {'email': 'new@test.com', 'first_name': 'New', 'last_name': 'Customer', 'phone1': '+2348012345678', 'password': 'Strong-new-password-123'}, format='json')
+        response = self.client.post('/api/v1/auth/register/', {'email': 'new@test.com', 'first_name': 'New', 'last_name': 'Customer', 'phone1': '+2348012345678', 'password': 'Strong-new-password-123', 'is_staff': True, 'is_superuser': True}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         user = User.objects.get(email='new@test.com')
         self.assertFalse(user.is_active)
+        self.assertFalse(user.is_staff)
+        self.assertFalse(user.is_superuser)
         self.assertTrue(user.check_password('Strong-new-password-123'))
         delivery = NotificationDelivery.objects.get(
             channel=NotificationDelivery.CHANNEL_EMAIL,

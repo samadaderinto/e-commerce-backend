@@ -1,0 +1,37 @@
+.admin-staff-page { min-height: 580px; }
+.admin-staff-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 30px; margin-bottom: 35px; }
+.admin-staff-heading h1 { margin-bottom: 6px; }
+.admin-staff-heading p { margin: 0; }
+.admin-staff-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 16px 0; border-block: 1px solid var(--line); margin-bottom: 20px; }
+.admin-staff-toolbar .search-box { width: 340px; }
+.admin-staff-toolbar > span { font-size: 11px; color: var(--muted); }
+.admin-staff-table { border: 1px solid var(--line); border-radius: 5px; overflow: auto; }
+.admin-staff-table td:last-child, .admin-staff-table th:last-child { text-align: right; }
+.admin-staff-table .button { min-height: 34px; padding: 7px 12px; font-size: 10px; }
+.button.danger { color: var(--red); border-color: #e7c6c3; }
+.button.danger:hover:not(:disabled) { background: #fff5f3; }
+.admin-staff-person { display: flex; align-items: center; gap: 12px; }
+.admin-staff-person > span { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--green-light); color: var(--green); font-weight: 700; text-transform: uppercase; }
+.admin-staff-person strong, .admin-staff-person small { display: block; }
+.admin-staff-person small { font-size: 10px; color: var(--muted); }
+.admin-staff-empty { min-height: 310px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 9px; }
+.admin-staff-empty > svg { color: var(--green); }
+.admin-staff-empty h2, .admin-staff-empty p { margin: 0; }
+.admin-staff-empty p { font-size: 12px; margin-bottom: 10px; }
+.admin-dialog-backdrop { position: fixed; z-index: 120; inset: 0; background: #17221b80; display: grid; place-items: center; padding: 20px; }
+.admin-dialog { width: 560px; max-width: 100%; max-height: calc(100vh - 40px); overflow: auto; background: white; border-radius: 7px; padding: 28px; box-shadow: 0 25px 80px #101b1460; }
+.admin-dialog-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 24px; }
+.admin-dialog-head h2 { margin: 0; }
+.admin-dialog .form-actions { justify-content: flex-end; margin-top: 5px; }
+
+@media (max-width: 640px) {
+  .admin-staff-heading { align-items: flex-start; flex-direction: column; margin-bottom: 25px; }
+  .admin-staff-heading .button { width: 100%; }
+  .admin-staff-toolbar { align-items: stretch; flex-direction: column; }
+  .admin-staff-toolbar .search-box { width: 100%; }
+  .admin-staff-table table { min-width: 600px; }
+  .admin-dialog { padding: 20px; }
+  .admin-dialog .form-row { flex-direction: column; }
+  .admin-dialog .form-actions { flex-direction: column-reverse; }
+  .admin-dialog .form-actions .button { width: 100%; }
+}
