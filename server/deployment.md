@@ -56,6 +56,12 @@ Required production app secrets:
 | `PROD_SECRET_KEY` | `SECRET_KEY` |
 | `PROD_ALLOWED_HOSTS` | `ALLOWED_HOSTS` |
 | `PROD_FRONTEND_URL` | `FRONTEND_URL` |
+| `PROD_DEFAULT_ADMIN_EMAIL` | `DEFAULT_ADMIN_EMAIL` |
+| `PROD_DEFAULT_ADMIN_PASSWORD` | `DEFAULT_ADMIN_PASSWORD` |
+| `PROD_DEFAULT_ADMIN_FIRST_NAME` | `DEFAULT_ADMIN_FIRST_NAME` |
+| `PROD_DEFAULT_ADMIN_LAST_NAME` | `DEFAULT_ADMIN_LAST_NAME` |
+| `PROD_DEFAULT_ADMIN_GENDER` | `DEFAULT_ADMIN_GENDER` |
+| `PROD_DEFAULT_ADMIN_PHONE` | `DEFAULT_ADMIN_PHONE` |
 | `PROD_POSTGRES_HOST` | `POSTGRES_HOST` |
 | `PROD_POSTGRES_DB` | `POSTGRES_DB` |
 | `PROD_POSTGRES_USER` | `POSTGRES_USER` |
@@ -80,7 +86,16 @@ synced to both the API and worker. Configure the worker service to run
 sender address verified with Resend. FCM credentials are required as
 `PROD_FIREBASE_PROJECT_ID` and `PROD_FIREBASE_CREDENTIALS_JSON` only when
 `PROD_FCM_ENABLED=true`. Production app configuration is sourced from GitHub
-Actions secrets and synchronized to both Render services.
+Actions secrets and synchronized to Render. The default admin fields are sent
+only to the API service; the API creates that active superuser after migrations
+if the email does not already exist. Choose a strong password. Re-deploying does
+not reset an existing admin password, and a configured email already owned by a
+non-superuser stops startup rather than promoting that account.
+
+For local setup, copy `server/.env.example` to `server/.env` and fill in all six
+`DEFAULT_ADMIN_*` fields. The API creates the superuser at startup. Leave all
+six empty to skip provisioning. Grafana has a separate login configured with
+`GRAFANA_ADMIN_PASSWORD`; it is independent of the application superuser.
 
 Optional production secrets such as `PROD_POSTGRES_PORT`,
 `PROD_DB_REQUIRE_SSL`, `PROD_OBJECT_STORAGE_ENABLED`, `PROD_S3_ENDPOINT_URL`,

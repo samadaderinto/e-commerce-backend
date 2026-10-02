@@ -15,6 +15,12 @@ services:
       SECRET_KEY: ${SECRET_KEY:-local-container-secret-change-me}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost},api
       FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3000}
+      DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
+      DEFAULT_ADMIN_FIRST_NAME: ${DEFAULT_ADMIN_FIRST_NAME:-}
+      DEFAULT_ADMIN_LAST_NAME: ${DEFAULT_ADMIN_LAST_NAME:-}
+      DEFAULT_ADMIN_GENDER: ${DEFAULT_ADMIN_GENDER:-}
+      DEFAULT_ADMIN_PHONE: ${DEFAULT_ADMIN_PHONE:-}
       DATABASE_ENGINE: postgres
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -67,6 +73,12 @@ services:
       <<: *app_environment
       RUN_MIGRATIONS: 'false'
       RUN_COLLECTSTATIC: 'false'
+      DEFAULT_ADMIN_EMAIL: ''
+      DEFAULT_ADMIN_PASSWORD: ''
+      DEFAULT_ADMIN_FIRST_NAME: ''
+      DEFAULT_ADMIN_LAST_NAME: ''
+      DEFAULT_ADMIN_GENDER: ''
+      DEFAULT_ADMIN_PHONE: ''
     command: ['celery', '-A', 'codematics', 'worker', '--beat', '--loglevel=INFO']
 
   redis:

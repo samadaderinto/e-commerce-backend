@@ -14,6 +14,12 @@ RENDER_ENV_KEYS = [
     "SECRET_KEY",
     "ALLOWED_HOSTS",
     "FRONTEND_URL",
+    "DEFAULT_ADMIN_EMAIL",
+    "DEFAULT_ADMIN_PASSWORD",
+    "DEFAULT_ADMIN_FIRST_NAME",
+    "DEFAULT_ADMIN_LAST_NAME",
+    "DEFAULT_ADMIN_GENDER",
+    "DEFAULT_ADMIN_PHONE",
     "DATABASE_ENGINE",
     "POSTGRES_HOST",
     "POSTGRES_PORT",
@@ -74,13 +80,16 @@ def render_request(method, path, payload=None):
 
 def main():
     services = {
-        "API": os.environ["RENDER_SERVICE_ID"],
-        "notification worker": os.environ["RENDER_WORKER_SERVICE_ID"],
+        "API": (os.environ["RENDER_SERVICE_ID"], RENDER_ENV_KEYS),
+        "notification worker": (
+            os.environ["RENDER_WORKER_SERVICE_ID"],
+            [key for key in RENDER_ENV_KEYS if not key.startswith("DEFAULT_ADMIN_")],
+        ),
     }
     total_synced = 0
-    for service_name, service_id in services.items():
+    for service_name, (service_id, env_keys) in services.items():
         synced = 0
-        for key in RENDER_ENV_KEYS:
+        for key in env_keys:
             value = os.environ.get(key)
             if value is None or value == "":
                 continue

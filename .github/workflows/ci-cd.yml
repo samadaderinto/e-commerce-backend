@@ -162,6 +162,7 @@ jobs:
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
       RENDER_WORKER_SERVICE_ID: ${{ secrets.RENDER_WORKER_SERVICE_ID }}
+      RENDER_GRAFANA_SERVICE_ID: ${{ secrets.RENDER_GRAFANA_SERVICE_ID }}
       RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
       API_URL: ${{ secrets.PROD_API_URL }}
       DJANGO_SETTINGS_MODULE: codematics.storefront_settings
@@ -169,6 +170,18 @@ jobs:
       SECRET_KEY: ${{ secrets.PROD_SECRET_KEY }}
       ALLOWED_HOSTS: ${{ secrets.PROD_ALLOWED_HOSTS }}
       FRONTEND_URL: ${{ secrets.PROD_FRONTEND_URL }}
+      DEFAULT_ADMIN_EMAIL: ${{ secrets.PROD_DEFAULT_ADMIN_EMAIL }}
+      DEFAULT_ADMIN_PASSWORD: ${{ secrets.PROD_DEFAULT_ADMIN_PASSWORD }}
+      DEFAULT_ADMIN_FIRST_NAME: ${{ secrets.PROD_DEFAULT_ADMIN_FIRST_NAME }}
+      DEFAULT_ADMIN_LAST_NAME: ${{ secrets.PROD_DEFAULT_ADMIN_LAST_NAME }}
+      DEFAULT_ADMIN_GENDER: ${{ secrets.PROD_DEFAULT_ADMIN_GENDER }}
+      DEFAULT_ADMIN_PHONE: ${{ secrets.PROD_DEFAULT_ADMIN_PHONE }}
+      GF_SECURITY_ADMIN_USER: ${{ secrets.PROD_DEFAULT_ADMIN_EMAIL }}
+      GF_SECURITY_ADMIN_EMAIL: ${{ secrets.PROD_DEFAULT_ADMIN_EMAIL }}
+      GF_SECURITY_ADMIN_PASSWORD: ${{ secrets.PROD_DEFAULT_ADMIN_PASSWORD }}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
       DATABASE_ENGINE: postgres
       POSTGRES_HOST: ${{ secrets.PROD_POSTGRES_HOST }}
       POSTGRES_PORT: ${{ secrets.PROD_POSTGRES_PORT }}
@@ -214,6 +227,7 @@ jobs:
             RENDER_API_KEY
             RENDER_SERVICE_ID
             RENDER_WORKER_SERVICE_ID
+            RENDER_GRAFANA_SERVICE_ID
             RENDER_DEPLOY_HOOK_URL
           )
           missing=0
@@ -232,6 +246,12 @@ jobs:
             SECRET_KEY
             ALLOWED_HOSTS
             FRONTEND_URL
+            DEFAULT_ADMIN_EMAIL
+            DEFAULT_ADMIN_PASSWORD
+            DEFAULT_ADMIN_FIRST_NAME
+            DEFAULT_ADMIN_LAST_NAME
+            DEFAULT_ADMIN_GENDER
+            DEFAULT_ADMIN_PHONE
             POSTGRES_HOST
             POSTGRES_DB
             POSTGRES_USER
@@ -273,3 +293,7 @@ jobs:
             --header "Authorization: Bearer $RENDER_API_KEY" \
             --header "Accept: application/json" \
             "https://api.render.com/v1/services/$RENDER_WORKER_SERVICE_ID/deploys"
+          curl --fail --show-error --silent \
+            --header "Authorization: $RENDER_API_KEY" \
+            --header "Accept: application/json" \
+            "https://api.render.com/v1/services/$RENDER_GRAFANA_SERVICE_ID/deploys"

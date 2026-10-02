@@ -41,6 +41,12 @@ is `.github/scripts/render-sync-env.py`. For the complete required and optional
 secret inventory and deployment sequence, see
 [`server/deployment.md`](../server/deployment.md).
 
+The API superuser is provisioned from the six `DEFAULT_ADMIN_*` environment
+fields on startup after database migrations. Locally, set them in `server/.env`;
+in production, configure the corresponding `PROD_DEFAULT_ADMIN_*` secrets in
+the GitHub Actions `production` environment. These credentials are sent only to
+the API service, not the notification worker. Grafana uses a separate login.
+
 ## Local containers
 
 From `server/`:
