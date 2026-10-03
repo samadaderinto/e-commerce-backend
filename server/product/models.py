@@ -82,14 +82,17 @@ class Product(DatesMixin):
     )
 
     @property
-    def sale_price(self):
-        return '%.2f' % (float(self.price) * (100 - self.discount) / 100)
+    def sale_price(self) -> str:
+        from decimal import Decimal, ROUND_HALF_UP
+        discounted = self.price * (100 - self.discount) / Decimal('100')
+        return str(discounted.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
-    def set_availability(self, quantity_bought: int):
+    def set_availability(self, quantity_bought: int) -> None:
         self.available -= quantity_bought
 
-    def set_sponsorship(self, switch_to: bool):
+    def set_sponsorship(self, switch_to: bool) -> None:
         self.sponsored = switch_to
+
 
 
 class ProductImg(DatesMixin):

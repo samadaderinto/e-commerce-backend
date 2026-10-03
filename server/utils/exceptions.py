@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 from django.http import Http404
 from rest_framework import status
@@ -10,7 +13,7 @@ from rest_framework.views import exception_handler
 logger = logging.getLogger("codematics.api")
 
 
-def _stringify_details(detail):
+def _stringify_details(detail: Any) -> Any:
     if isinstance(detail, ErrorDetail):
         return str(detail)
     if isinstance(detail, list):
@@ -20,7 +23,7 @@ def _stringify_details(detail):
     return detail
 
 
-def _default_message(details):
+def _default_message(details: Any) -> str:
     if isinstance(details, dict):
         detail = details.get("detail")
         if detail:
@@ -31,7 +34,8 @@ def _default_message(details):
     return str(details)
 
 
-def custom_exception_handler(exc, context):
+def custom_exception_handler(exc: Exception, context: dict[str, Any]) -> Response:
+
     response = exception_handler(exc, context)
     request = context.get("request")
     view = context.get("view")

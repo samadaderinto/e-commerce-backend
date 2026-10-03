@@ -235,3 +235,13 @@ class CartMutationRequestSerializer(ProductIdRequestSerializer):
 
 class RefundRequestSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=500, required=False, default='Customer requested return')
+    refund_type = serializers.ChoiceField(
+        choices=['store_credit', 'original_payment'],
+        default='store_credit',
+        required=False,
+    )
+
+
+class UserWalletPaymentSerializer(CheckoutRequestSerializer):
+    pass
+

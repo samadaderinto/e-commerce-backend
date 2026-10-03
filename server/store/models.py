@@ -41,16 +41,17 @@ class Store(DatesMixin):
         related_name="blocked_stores",
     )
     
-    def save(self, *args, **kwargs):
+    def save(self, *args, **kwargs) -> None:
         if not self.username:
             self.username = self._generate_unique_username()
         super().save(*args, **kwargs)
 
-    def _generate_unique_username(self, size=15):
+    def _generate_unique_username(self, size: int = 15) -> str:
         username = generate(size=size)
         while Store.objects.filter(username=username).exists():
             username = generate(size=size)
         return username
+
 
 
 
@@ -104,3 +105,41 @@ class Budget(DatesMixin):
 class Wallet(DatesMixin):
     store = models.ForeignKey('Store', on_delete=models.CASCADE)
     amount = models.DecimalField(max_digits=15, decimal_places=2)
+
+
+class StorePayout(DatesMixin):
+    STATUS_PENDING = "pending"
+    STATUS_COMPLETED = "completed"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, "Pending"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_REJECTED, "Rejected"),
+    )
+
+    METHOD_BANK_TRANSFER = "bank_transfer"
+    METHOD_STRIPE_CONNECT = "stripe_connect"
+    METHOD_CHOICES = (
+        (METHOD_BANK_TRANSFER, "Bank Transfer"),
+        (METHOD_STRIPE_CONNECT, "Stripe Connect"),
+    )
+
+    store = models.ForeignKey('Store', on_delete=models.CASCADE, related_name='payouts')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    payout_method = models.CharField(max_length=50, choices=METHOD_CHOICES, default=METHOD_BANK_TRANSFER)
+    account_details = models.JSONField(default=dict, blank=True)
+    reference = models.CharField(max_length=100, blank=True, default="")
+    processed_at = models.DateTimeField(null=True, blank=True)
+    processed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="processed_store_payouts",
+    )
+    notes = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created"]
+

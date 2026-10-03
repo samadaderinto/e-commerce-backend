@@ -6,7 +6,7 @@ import { FormEvent, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, ChartNoAxesCombined, Check, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, LayoutDashboard, Package, Plus, Search, Settings, ShoppingBag, Store as StoreIcon, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
-import type { Dashboard, MerchantProduct, Page, Store } from '@/lib/types';
+import type { Dashboard, MerchantProduct, Page, Store, StorePayout } from '@/lib/types';
 import { useShop } from './providers';
 import { Gate } from './account';
 import { Empty, ErrorState, Field, Loading, ProductImage, Status } from './ui';
@@ -34,17 +34,47 @@ function OnboardStore() {
 }
 
 function MerchantDashboard({ store }: { store: Store }) {
-  const [days, setDays] = useState('30'); const { user } = useShop();
+  const [days, setDays] = useState('30'); const { user, notify } = useShop(); const client = useQueryClient();
   const stats = useQuery({ queryKey: ['dashboard', store.id, days], queryFn: () => api<Dashboard>(`stores/${store.id}/dashboard?days=${days}`) });
   const orders = useQuery({ queryKey: ['merchant-recent', store.id], queryFn: () => api<Page<MerchantOrder>>(`stores/${store.id}/orders?limit=5`) });
+  const payouts = useQuery({ queryKey: ['merchant-payouts', store.id], queryFn: () => api<StorePayout[]>(`stores/${store.id}/payouts`) });
   const checklist = useQuery({ queryKey: ['onboarding', store.id], queryFn: () => api<{complete: boolean; steps: Record<string, boolean>}>(`stores/${store.id}/onboarding`) });
+  const [requestingPayout, setRequestingPayout] = useState(false);
+  const [payoutAmount, setPayoutAmount] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [payoutBusy, setPayoutBusy] = useState(false);
   const data = stats.data;
   const values = data?.orders_by_day.slice(-30) || []; const max = Math.max(1, ...values.map(day => day.count));
-  return <>{store.status === 'pending' && <p className="muted" role="status">Your store is awaiting staff verification. You can prepare product drafts while we review it; products cannot be published until approval.</p>}<div className="merchant-heading"><div><span className="eyebrow green">LET’S MAKE IT A GOOD DAY</span><h1>Hello, {user?.first_name}.</h1><p>Here’s what’s happening at {store.name}.</p></div><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div><div className="dashboard-period"><h2>Your store at a glance</h2><select aria-label="Dashboard period" value={days} onChange={event => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div>{stats.isLoading ? <Loading /> : stats.error ? <ErrorState error={stats.error} retry={() => stats.refetch()} /> : data && <>
+
+  async function submitPayout(event: FormEvent) {
+    event.preventDefault(); setPayoutBusy(true);
+    try {
+      await api(`stores/${store.id}/payouts`, 'POST', {
+        amount: payoutAmount,
+        payout_method: 'bank_transfer',
+        account_details: { bank_name: bankName, account_number: accountNumber },
+      });
+      await client.invalidateQueries({ queryKey: ['dashboard', store.id] });
+      await client.invalidateQueries({ queryKey: ['merchant-payouts', store.id] });
+      notify('Payout request submitted. Staff will review and process your transfer.');
+      setRequestingPayout(false);
+      setPayoutAmount('');
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setPayoutBusy(false);
+    }
+  }
+
+  return <>{store.status === 'pending' && <p className="muted" role="status">Your store is awaiting staff verification. You can prepare product drafts while we review it; products cannot be published until approval.</p>}<div className="merchant-heading"><div><span className="eyebrow green">LET’S MAKE IT A GOOD DAY</span><h1>Hello, {user?.first_name}.</h1><p>Here’s what’s happening at {store.name}.</p></div><div className="form-actions"><button className="button secondary" onClick={() => setRequestingPayout(true)}><WalletCards size={17} />Request payout</button><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div></div><div className="dashboard-period"><h2>Your store at a glance</h2><select aria-label="Dashboard period" value={days} onChange={event => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div>{stats.isLoading ? <Loading /> : stats.error ? <ErrorState error={stats.error} retry={() => stats.refetch()} /> : data && <>
     <div className="stats-grid">{[{label: 'Available for Payout', value: money(data.wallet?.available_balance || '0.00'), icon: WalletCards, note: 'Cleared sales past 7-day refund window'}, {label: 'In Review (Escrow)', value: money(data.wallet?.in_review || '0.00'), icon: Clock, note: 'Orders within 7-day refund period'}, {label: 'Gross Sales (Item Value)', value: money(data.wallet?.gross_sales || data.sales.estimated_item_value), icon: ChartNoAxesCombined, note: 'Total item sales before 4% platform fee'}, {label: 'Platform Commission (4%)', value: money(data.wallet?.platform_fee_deducted || '0.00'), icon: ShoppingBag, note: 'Marketplace hosting & payment processing'}].map(({label, value, icon: Icon, note}, index) => <div key={label} className={`stat-item stat-${index}`}><div><span>{label}</span><Icon size={19} /></div><strong>{value}</strong><small>{note}</small></div>)}</div>
+    {requestingPayout && <div className="setup-notice" style={{ flexDirection: 'column', alignItems: 'stretch' }}><h3>Request Merchant Payout</h3><p className="muted">Withdraw available cleared funds directly to your bank account.</p><form className="form-stack" onSubmit={submitPayout}><div className="form-row"><Field label={`Payout amount (Max: ${money(data.wallet?.available_balance || '0.00')})`}><input type="number" min="5.00" max={Number(data.wallet?.available_balance || '0')} step="0.01" required value={payoutAmount} onChange={e => setPayoutAmount(e.target.value)} placeholder="0.00" /></Field><Field label="Bank Name"><input required value={bankName} onChange={e => setBankName(e.target.value)} placeholder="e.g. JPMorgan Chase" /></Field></div><Field label="Account Number / IBAN"><input required value={accountNumber} onChange={e => setAccountNumber(e.target.value)} placeholder="e.g. 1234567890" /></Field><div className="form-row"><button className="button" disabled={payoutBusy}>{payoutBusy ? 'Submitting…' : 'Submit withdrawal request'}</button><button type="button" className="button secondary" onClick={() => setRequestingPayout(false)}>Cancel</button></div></form></div>}
     {checklist.data && !checklist.data.complete && <div className="setup-notice"><span className="setup-check"><StoreIcon size={23} /></span><div><strong>Your store is taking shape.</strong><p>{Object.values(checklist.data.steps).filter(Boolean).length} of {Object.values(checklist.data.steps).length} setup steps complete.</p></div><Link className="text-link" href={checklist.data.steps.product_added ? '/merchant/settings' : '/merchant/products/new'}>Continue setup <ArrowRight size={16} /></Link></div>}
     <div className="dashboard-columns"><section className="analytics-panel"><div className="section-heading"><div><h2>Order activity</h2><p>{data.orders.total} orders in the last {days} days</p></div><span className="chart-legend"><i />Orders</span></div><div className="bar-chart" role="img" aria-label={`Order activity: ${data.orders.total} orders in ${days} days`}><div className="chart-y"><span>{max}</span><span>{max / 2}</span><span>0</span></div><div className="chart-bars">{values.map((day, index) => <div className="chart-column" key={day.date} title={`${day.date}: ${day.count} orders`}><span style={{ height: `${day.count / max * 100}%`, minHeight: day.count ? 5 : 1 }} /><small>{index === 0 || index === values.length - 1 || (index % 7 === 0 && index < values.length - 3) ? new Date(day.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''}</small></div>)}</div></div></section><section className="stock-panel"><div className="section-heading"><h2>Needs a little attention</h2><span className="stock-number">{data.inventory.low_stock + data.inventory.out_of_stock}</span></div><p className="muted">Keep your best finds in stock.</p>{data.low_stock_products.length ? data.low_stock_products.slice(0, 4).map(product => <Link className="stock-row" href={`/merchant/products/${product.id}`} key={product.id}><span><Package size={19} /></span><div><strong>{product.title}</strong><small>{product.available ? `${product.available} units left` : 'Out of stock'}</small></div><ArrowUpRight size={16} /></Link>) : <div className="all-good"><Check size={26} /><strong>Looking good.</strong><p>Your inventory is in a healthy place.</p></div>}<Link className="text-link" href="/merchant/products">Manage inventory <ArrowRight size={16} /></Link></section></div>
-    <section className="merchant-section"><div className="section-heading"><h2>Recent orders</h2><Link className="text-link" href="/merchant/orders">View all orders <ArrowRight size={16} /></Link></div>{orders.isLoading ? <Loading /> : orders.error ? <ErrorState error={orders.error} /> : <MerchantOrderTable orders={orders.data?.results || []} />}</section><div className="dashboard-footnote">Net sales are calculated at 96% after the 4% platform fee. Funds clear from review to your available payout balance after the 7-day customer refund window expires.</div>
+    <section className="merchant-section"><div className="section-heading"><h2>Recent orders</h2><Link className="text-link" href="/merchant/orders">View all orders <ArrowRight size={16} /></Link></div>{orders.isLoading ? <Loading /> : orders.error ? <ErrorState error={orders.error} /> : <MerchantOrderTable orders={orders.data?.results || []} />}</section>
+    <section className="merchant-section"><div className="section-heading"><h2>Payout history</h2><span className="muted">{payouts.data?.length || 0} payout requests</span></div>{payouts.isLoading ? <Loading /> : payouts.error ? <ErrorState error={payouts.error} /> : !payouts.data?.length ? <p className="muted">No payouts requested yet.</p> : <div className="table-scroll"><table><thead><tr><th>Date</th><th>Reference</th><th>Amount</th><th>Method</th><th>Status</th></tr></thead><tbody>{payouts.data.map(p => <tr key={p.id}><td>{new Date(p.created).toLocaleDateString()}</td><td><strong>{p.reference}</strong></td><td>{money(p.amount)}</td><td>{p.payout_method}</td><td><Status value={p.status} /></td></tr>)}</tbody></table></div>}</section>
+    <div className="dashboard-footnote">Net sales are calculated at 96% after the 4% platform fee. Funds clear from review to your available payout balance after the 7-day customer refund window expires.</div>
   </>}</>;
 }
 

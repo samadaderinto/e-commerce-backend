@@ -15,8 +15,6 @@ from product.models import Product
 
 class UserManager(BaseUserManager):
     def create_user(self, email=None, password=None, **extra_fields):
-    
-
         if not email:
             raise ValueError('Email Address Is Needed')
         if not password:
@@ -31,7 +29,6 @@ class UserManager(BaseUserManager):
         return user
 
     def create_superuser(self, email=None, password=None, **extra_fields):
-     
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
@@ -43,7 +40,6 @@ class UserManager(BaseUserManager):
         return self.create_user(email, password, **extra_fields)
 
     def create_staffuser(self, email=None, password=None, **extra_fields):
-     
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_active', True)
 
@@ -54,8 +50,9 @@ class UserManager(BaseUserManager):
 
 class User(AbstractUser):
     GENDER_STATUS = (
-    ("male", "male"),
-    ("female", "female"))
+        ("male", "male"),
+        ("female", "female")
+    )
     
     username = None
     first_name = models.CharField(max_length=30)
@@ -64,10 +61,10 @@ class User(AbstractUser):
     email = models.EmailField(unique=True, db_index=True)
     phone1 = PhoneNumberField()
     phone2 = PhoneNumberField(null=True, blank=True)
-    password = models.CharField(max_length=90)
+    password = models.CharField(max_length=128)
 
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = ['first_name', 'last_name', 'gender', 'phone1', 'password']
+    REQUIRED_FIELDS = ['first_name', 'last_name', 'gender', 'phone1']
 
     objects = UserManager()
 
@@ -89,15 +86,16 @@ class Review(DatesMixin):
     comment = models.TextField(max_length=60)
     rating = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(5)])
 
-    def set_avg_rating(self):
+    def set_avg_rating(self) -> None:
         average = Review.objects.filter(product=self.product).aggregate(
             models.Avg('rating')
         )['rating__avg'] or 0
         self.product.average_rating = average
         self.product.save(update_fields=["average_rating", "updated"])
 
-    def num_of_reviews(self):
+    def num_of_reviews(self) -> int:
         return Review.objects.filter(product=self.product).count()
+
     
     class Meta:
         ordering = ["-created"]
@@ -127,11 +125,26 @@ class Recent(DatesMixin):
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
 
 
+from decimal import Decimal
+
+
 class Refund(DatesMixin):
+    REFUND_TYPE_STORE_CREDIT = 'store_credit'
+    REFUND_TYPE_ORIGINAL_PAYMENT = 'original_payment'
+    REFUND_TYPE_CHOICES = (
+        (REFUND_TYPE_STORE_CREDIT, 'Store Credit'),
+        (REFUND_TYPE_ORIGINAL_PAYMENT, 'Original Payment Method'),
+    )
+
     email = models.EmailField()
     order = models.ForeignKey(Order, on_delete=models.CASCADE)
     reason = models.TextField()
     accepted = models.BooleanField(default=False)
+    refund_type = models.CharField(
+        max_length=20,
+        choices=REFUND_TYPE_CHOICES,
+        default=REFUND_TYPE_STORE_CREDIT,
+    )
 
 
 class Device(DatesMixin):
@@ -141,3 +154,52 @@ class Device(DatesMixin):
     type = models.CharField(max_length=50)
     version = models.CharField(max_length=50)
     last_login = models.DateTimeField(auto_now_add=True)
+
+
+class UserWallet(DatesMixin):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="user_wallet",
+    )
+    balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+
+    def __str__(self):
+        return f"UserWallet({self.user_id}: ${self.balance})"
+
+
+class UserWalletTransaction(DatesMixin):
+    CREDIT = "credit"
+    DEBIT = "debit"
+    TRANSACTION_TYPE_CHOICES = (
+        (CREDIT, "Credit"),
+        (DEBIT, "Debit"),
+    )
+
+    SOURCE_REFUND = "refund"
+    SOURCE_PURCHASE = "purchase"
+    SOURCE_DEPOSIT = "deposit"
+    SOURCE_REFERRAL = "referral"
+    SOURCE_ADJUSTMENT = "adjustment"
+    SOURCE_CHOICES = (
+        (SOURCE_REFUND, "Refund Store Credit"),
+        (SOURCE_PURCHASE, "Checkout Purchase"),
+        (SOURCE_DEPOSIT, "Deposit"),
+        (SOURCE_REFERRAL, "Referral Reward"),
+        (SOURCE_ADJUSTMENT, "Adjustment"),
+    )
+
+    wallet = models.ForeignKey(
+        UserWallet,
+        on_delete=models.CASCADE,
+        related_name="transactions",
+    )
+    transaction_type = models.CharField(max_length=10, choices=TRANSACTION_TYPE_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_REFUND)
+    description = models.CharField(max_length=255)
+    reference = models.CharField(max_length=100, blank=True, default="")
+
+    class Meta:
+        ordering = ["-created"]
+

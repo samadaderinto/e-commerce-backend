@@ -452,3 +452,106 @@ class StorefrontTests(TestCase):
         self.assertEqual(wallet['refund_window_days'], 7)
         self.assertTrue(Decimal(wallet['gross_sales']) > 0)
         self.assertTrue(Decimal(wallet['in_review']) > 0)
+
+    def test_user_wallet_balance_and_transactions_query(self):
+        resp = self.client.get('/api/v1/wallet/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['balance'], '0.00')
+        self.assertEqual(resp.data['transactions'], [])
+
+        from core.services import credit_user_wallet
+        credit_user_wallet(self.buyer, Decimal('50.00'), 'Promotional Bonus', source='deposit')
+        resp = self.client.get('/api/v1/wallet/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['balance'], '50.00')
+        self.assertEqual(len(resp.data['transactions']), 1)
+        self.assertEqual(resp.data['transactions'][0]['amount'], '50.00')
+
+    def test_user_wallet_checkout_success_and_insufficient_balance(self):
+        self.add(1)
+        # Attempt wallet checkout with $0 balance -> 400
+        checkout_resp = self.client.post('/api/v1/checkout/', {
+            'checkout_key': str(uuid4()),
+            'address': self.address.pk,
+            'payment_type': 'user_wallet',
+        }, format='json')
+        self.assertEqual(checkout_resp.status_code, 400)
+        self.assertIn('Insufficient wallet balance', checkout_resp.data['error']['message'])
+
+        # Credit wallet with sufficient funds
+        from core.services import credit_user_wallet
+        credit_user_wallet(self.buyer, Decimal('20000.00'), 'Store Credit Deposit', source='deposit')
+        checkout_resp = self.client.post('/api/v1/checkout/', {
+            'checkout_key': str(uuid4()),
+            'address': self.address.pk,
+            'payment_type': 'user_wallet',
+        }, format='json')
+        self.assertEqual(checkout_resp.status_code, 201)
+        self.assertEqual(checkout_resp.data['payment_type'], 'user_wallet')
+
+        # Check that wallet was debited
+        wallet_resp = self.client.get('/api/v1/wallet/')
+        self.assertTrue(Decimal(wallet_resp.data['balance']) < Decimal('20000.00'))
+
+    def test_refund_with_store_credit_credits_user_wallet_when_staff_approves(self):
+        self.add(1)
+        order_resp = self.checkout()
+        order_id = order_resp.data['id']
+
+        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {
+            'reason': 'Damaged package',
+            'refund_type': 'store_credit',
+        }, format='json')
+        self.assertEqual(refund_resp.status_code, 201)
+        self.assertEqual(refund_resp.data['refund_type'], 'store_credit')
+        refund_id = refund_resp.data['refund_id']
+
+        # Staff approves refund
+        staff_admin = User.objects.create(email='admin_tester@proace.com', is_staff=True, is_active=True)
+        self.client.force_authenticate(staff_admin)
+        process_resp = self.client.post(f'/api/v1/admin/staff/refunds/{refund_id}/process/', {
+            'action': 'approve',
+        }, format='json')
+        self.assertEqual(process_resp.status_code, 200)
+
+        # Buyer wallet is credited
+        self.client.force_authenticate(self.buyer)
+        wallet_resp = self.client.get('/api/v1/wallet/')
+        self.assertTrue(Decimal(wallet_resp.data['balance']) > 0)
+
+    def test_merchant_payout_request_validates_available_balance(self):
+        self.add(1)
+        self.checkout()
+        self.client.force_authenticate(self.seller)
+
+        # Immediate payout request fails because funds are in 7-day review escrow
+        payout_resp = self.client.post(f'/api/v1/stores/{self.store.pk}/payouts/', {
+            'amount': '20.00',
+            'payout_method': 'bank_transfer',
+            'account_details': {'bank_name': 'Chase', 'account_number': '123456789'},
+        }, format='json')
+        self.assertEqual(payout_resp.status_code, 400)
+        self.assertIn('exceeds available cleared balance', payout_resp.data['error']['message'])
+
+        # Backdate the order past the 7-day refund window
+        Order.objects.filter(user=self.buyer).update(created=timezone.now() - timedelta(days=8))
+
+        # Payout request now succeeds
+        payout_resp = self.client.post(f'/api/v1/stores/{self.store.pk}/payouts/', {
+            'amount': '10.00',
+            'payout_method': 'bank_transfer',
+            'account_details': {'bank_name': 'Chase', 'account_number': '123456789'},
+        }, format='json')
+        self.assertEqual(payout_resp.status_code, 201)
+        self.assertEqual(payout_resp.data['status'], 'pending')
+        payout_id = payout_resp.data['id']
+
+        # Staff processes payout
+        staff_admin = User.objects.create(email='staff_payout_admin@proace.com', is_staff=True, is_active=True)
+        self.client.force_authenticate(staff_admin)
+        staff_payout_resp = self.client.post(f'/api/v1/admin/staff/payouts/{payout_id}/process/', {
+            'action': 'approve',
+        }, format='json')
+        self.assertEqual(staff_payout_resp.status_code, 200)
+        self.assertEqual(staff_payout_resp.data['payout']['status'], 'completed')
+

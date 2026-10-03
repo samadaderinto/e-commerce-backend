@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Any
+
 from django.conf import settings
 from django.core.cache import cache
 
@@ -11,15 +15,15 @@ PRODUCT_CACHE_MAX_ENTRIES = getattr(settings, "CACHE_MAX_ENTRIES", 256)
 LANDING_PRODUCTS_CACHE_KEY = "products:landing"
 
 
-def product_cache_key(product_id):
+def product_cache_key(product_id: int | str) -> str:
     return f"products:detail:{product_id}"
 
 
-def store_product_cache_key(store_id, product_id):
+def store_product_cache_key(store_id: int | str, product_id: int | str) -> str:
     return f"stores:{store_id}:products:{product_id}"
 
 
-def invalidate_product_cache(product):
+def invalidate_product_cache(product: Any) -> None:
     invalidate_revision('products')
     cache.delete(LANDING_PRODUCTS_CACHE_KEY)
     cache.delete(product_cache_key(product.id))
@@ -30,7 +34,7 @@ def invalidate_product_cache(product):
 
 
 @versioned_lru_cache('products')
-def get_cached_product_data(product_id):
+def get_cached_product_data(product_id: int) -> dict[str, Any]:
     product = Product.objects.get(
         id=product_id,
         visibility=True,
@@ -41,7 +45,7 @@ def get_cached_product_data(product_id):
 
 
 @versioned_lru_cache('products')
-def get_cached_store_product_data(store_id, product_id):
+def get_cached_store_product_data(store_id: int, product_id: int) -> dict[str, Any]:
     product = Product.objects.get(
         store=store_id,
         id=product_id,
@@ -53,7 +57,7 @@ def get_cached_store_product_data(store_id, product_id):
 
 
 @versioned_lru_cache('products')
-def get_cached_landing_products():
+def get_cached_landing_products() -> dict[str, Any]:
     products = Product.objects.filter(
         visibility=True,
         store__status="active",
@@ -72,3 +76,4 @@ def get_cached_landing_products():
             best_selling_products, many=True
         ).data,
     }
+

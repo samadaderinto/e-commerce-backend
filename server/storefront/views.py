@@ -29,7 +29,9 @@ from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_sche
 
 from cart.models import Cart, CartItem
 from affiliates.services import reward_referral
-from core.models import Address, Refund, Review, User, Wishlist
+from core.models import Address, Refund, Review, User, Wishlist, UserWallet, UserWalletTransaction
+from core.serializers import UserWalletSerializer, UserWalletTransactionSerializer
+from core.services import get_or_create_user_wallet, credit_user_wallet, debit_user_wallet
 from notification.views import create_notification
 from payment.models import Coupon, CouponRedemption, DeliveryInfo, Order
 from payment.couponing import calculate_coupon_discount
@@ -433,6 +435,16 @@ class OrderDetailView(APIView):
         return Response(order_data(get_object_or_404(orders, pk=pk)))
 
 
+class UserWalletView(APIView):
+    @extend_schema(responses={200: OpenApiTypes.OBJECT}, description="Get current user's wallet balance and transactions.")
+    def get(self, request):
+        wallet = get_or_create_user_wallet(request.user)
+        return Response({
+            "balance": format(wallet.balance, ".2f"),
+            "transactions": UserWalletTransactionSerializer(wallet.transactions.all()[:30], many=True).data,
+        })
+
+
 class OrderRefundView(APIView):
     @extend_schema(
         request=RefundRequestSerializer,
@@ -466,11 +478,13 @@ class OrderRefundView(APIView):
         serializer = RefundRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         reason = serializer.validated_data.get('reason', 'Customer requested return')
+        refund_type = serializer.validated_data.get('refund_type', 'store_credit')
 
         refund = Refund.objects.create(
             email=request.user.email,
             order=order,
             reason=reason,
+            refund_type=refund_type,
             accepted=False,
         )
         order.status = 'refund_requested'
@@ -483,7 +497,7 @@ class OrderRefundView(APIView):
                 create_notification(
                     recipient=store.user,
                     verb=f'Refund Requested for Order #{order.orderId}',
-                    description=f'Customer requested a refund for Order #{order.orderId}. Reason: {reason}',
+                    description=f'Customer requested a refund ({refund.get_refund_type_display()}) for Order #{order.orderId}. Reason: {reason}',
                     data={'order_id': order.pk, 'refund_id': refund.pk}
                 )
 
@@ -491,6 +505,7 @@ class OrderRefundView(APIView):
             'detail': 'Your refund request has been received. Physical returns are reviewed and processed within 1–2 business days.',
             'status': order.status,
             'refund_id': refund.pk,
+            'refund_type': refund_type,
         }, status=201)
 
 
@@ -623,6 +638,14 @@ class CheckoutView(APIView):
             payment_type=payment_type, checkout_key=key, stripe_session_id=stripe_session_id,
             items_snapshot=snapshots, address_snapshot=AddressSerializer(address).data,
         )
+        if payment_type == 'user_wallet':
+            debit_user_wallet(
+                request.user,
+                order.total,
+                f'ProAce Wallet payment for Order #{order.orderId}',
+                source=UserWalletTransaction.SOURCE_PURCHASE,
+                reference=order.orderId,
+            )
         if coupon:
             CouponRedemption.objects.filter(coupon=coupon, user=request.user).update(order=order)
         cart.ordered = True
@@ -653,8 +676,8 @@ class CheckoutView(APIView):
         address = get_object_or_404(Address, pk=serializers.IntegerField(min_value=1).run_validation(request.data.get('address')),
                                      user=request.user)
         payment_type = request.data.get('payment_type', 'cash_on_delivery')
-        if payment_type != 'cash_on_delivery':
-            raise ValidationError({'detail': 'Choose cash on delivery or use the wallet checkout.'})
+        if payment_type not in ('cash_on_delivery', 'user_wallet'):
+            raise ValidationError({'detail': 'Choose cash on delivery, ProAce user wallet, or use Stripe wallet checkout.'})
         shipping_service = str(request.data.get('shipping_service', 'usps_ground_advantage')).strip()
         order = self._complete(request, key, address, str(request.data.get('coupon', '')).strip(), payment_type, shipping_service=shipping_service)
         return Response(order_data(order), status=201)

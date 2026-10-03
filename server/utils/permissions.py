@@ -1,7 +1,11 @@
+from __future__ import annotations
+
+from typing import Any
+
 from rest_access_policy import AccessPolicy
 from affiliates.models import Marketer
-
 from store.models import Store
+
 
 # all views with permitted users in json
 
@@ -154,16 +158,17 @@ class EcommerceAccessPolicy(AccessPolicy):
 
     ]
 
-    def is_marketer(self, request, view, action, field) -> bool:
+    def is_marketer(self, request: Any, view: Any, action: str, field: str) -> bool:
         try:
-            Marketer.objects.get(pk=request.data["marketer"])
-        except:
+            marketer = Marketer.objects.get(pk=request.data["marketer"])
+            return marketer.user_id == request.user.pk
+        except (Marketer.DoesNotExist, KeyError, AttributeError):
             return False
-        return True
 
-    def is_store_owner(self, request, view, action, field) -> bool:
+    def is_store_owner(self, request: Any, view: Any, action: str, field: str) -> bool:
         try:
-            Store.objects.get(pk=request.data["store"])
-        except:
+            store = Store.objects.get(pk=request.data["store"])
+            return store.user_id == request.user.pk
+        except (Store.DoesNotExist, KeyError, AttributeError):
             return False
-        return True
+

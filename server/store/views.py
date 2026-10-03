@@ -19,11 +19,12 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from cart.models import CartItem
 from payment.models import Order
 from product.models import Product, ProductImg, Specification
-from store.models import Schedule, Store, StoreAddress, StoreInfo
+from store.models import Schedule, Store, StoreAddress, StoreInfo, StorePayout
 from store.serializers import (
     DashboardQuerySerializer, InventorySerializer, MerchantImageSerializer,
-    MerchantProductSerializer, MerchantSpecificationSerializer, ScheduleSerializer,
-    StoreAddressSerializer, StoreInfoSerializer, StoreOnboardingSerializer, StoreSerializer,
+    MerchantProductSerializer, MerchantSpecificationSerializer, PayoutCreateSerializer,
+    ScheduleSerializer, StoreAddressSerializer, StoreInfoSerializer, StoreOnboardingSerializer,
+    StorePayoutSerializer, StoreSerializer,
 )
 
 
@@ -238,6 +239,10 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         platform_fee = (gross_value * fee_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         net_value = (gross_value - platform_fee).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
+        payouts_completed = store.payouts.filter(status=StorePayout.STATUS_COMPLETED).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        payouts_pending = store.payouts.filter(status=StorePayout.STATUS_PENDING).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        available_balance = max(Decimal('0.00'), cleared_net - payouts_completed - payouts_pending)
+
         inventory = products.aggregate(
             total=Count('id'), published=Count('id', filter=Q(visibility=True)),
             drafts=Count('id', filter=Q(visibility=False)),
@@ -263,13 +268,82 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                 'platform_fee_deducted': format(platform_fee, '.2f'),
                 'net_sales': format(net_value, '.2f'),
                 'in_review': format(in_review_net, '.2f'),
-                'available_balance': format(cleared_net, '.2f'),
+                'cleared_total': format(cleared_net, '.2f'),
+                'payouts_completed': format(payouts_completed, '.2f'),
+                'payouts_pending': format(payouts_pending, '.2f'),
+                'available_balance': format(available_balance, '.2f'),
                 'refund_window_days': refund_window,
             },
             'orders_by_day': [{'date': start + timedelta(days=i), 'count': trend.get(start + timedelta(days=i), 0)} for i in range(days)],
             'top_products': list(top_products),
             'low_stock_products': list(products.filter(available__lte=threshold).order_by('available', 'pk').values('id', 'title', 'available')[:20]),
         })
+
+    @action(detail=True, methods=['get', 'post'], url_path='payouts')
+    @transaction.atomic
+    def payouts(self, request, pk=None):
+        store = self.get_object()
+        if request.method == 'GET':
+            payouts = store.payouts.all()
+            serializer = StorePayoutSerializer(payouts, many=True)
+            return Response(serializer.data)
+
+        serializer = PayoutCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        amount = serializer.validated_data['amount']
+
+        sales_orders = Order.objects.filter(
+            ordered=True, status__in=['confirmed', 'shipped', 'delivered', 'picked up']
+        )
+        items = CartItem.objects.filter(product__store=store, cart__in=sales_orders.values('cart_id'))
+        line_value = ExpressionWrapper(
+            F('quantity') * F('product__price') * (100 - F('product__discount')) / Decimal('100.0'),
+            output_field=DecimalField(max_digits=24, decimal_places=2),
+        )
+        refund_window = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
+        cutoff = timezone.now() - timedelta(days=refund_window)
+        fee_rate = getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')) / Decimal('100.0')
+
+        cleared_orders = sales_orders.filter(created__lte=cutoff)
+        cleared_items = CartItem.objects.filter(product__store=store, cart__in=cleared_orders.values('cart_id'))
+        cleared_totals = cleared_items.aggregate(value=Sum(line_value))
+        cleared_gross = cleared_totals['value'] or Decimal('0.00')
+        cleared_net = (cleared_gross * (Decimal('1.00') - fee_rate)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        payouts_completed = store.payouts.filter(status=StorePayout.STATUS_COMPLETED).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        payouts_pending = store.payouts.filter(status=StorePayout.STATUS_PENDING).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+        available_balance = max(Decimal('0.00'), cleared_net - payouts_completed - payouts_pending)
+
+        if amount > available_balance:
+            raise ValidationError({
+                'detail': f'Requested payout amount (${amount}) exceeds available cleared balance (${available_balance}).'
+            })
+
+        from nanoid import generate
+        payout = StorePayout.objects.create(
+            store=store,
+            amount=amount,
+            payout_method=serializer.validated_data['payout_method'],
+            account_details=serializer.validated_data.get('account_details', {}),
+            reference=f"PO-{generate(size=10).upper()}",
+            status=StorePayout.STATUS_PENDING,
+        )
+
+        from notification.views import create_notification, notify_staff
+        notify_staff(
+            verb=f"New Merchant Payout Request: ${amount}",
+            description=f"Store '{store.name}' requested a payout of ${amount} (Ref: {payout.reference}).",
+            data={"payout_id": payout.pk, "store_id": store.pk, "amount": str(amount)},
+        )
+        create_notification(
+            recipient=store.user,
+            verb=f"Payout Request Submitted: ${amount}",
+            description=f"Your payout request of ${amount} (Ref: {payout.reference}) has been submitted and is under review.",
+            data={"payout_id": payout.pk, "amount": str(amount)},
+        )
+
+        return Response(StorePayoutSerializer(payout).data, status=status.HTTP_201_CREATED)
+
 
 
 @extend_schema_view(

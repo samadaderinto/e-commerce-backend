@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import logging
+from typing import Any, Optional
 
 from django.conf import settings
 from django.db import transaction
@@ -8,11 +11,11 @@ from product.models import Product
 logger = logging.getLogger("codematics.search")
 
 
-def enabled():
+def enabled() -> bool:
     return bool(getattr(settings, "ELASTICSEARCH_ENABLED", False))
 
 
-def client():
+def client() -> Any:
     from elasticsearch import Elasticsearch
 
     return Elasticsearch(
@@ -23,7 +26,7 @@ def client():
     )
 
 
-def product_document(product):
+def product_document(product: Product) -> dict[str, Any]:
     return {
         "id": product.id,
         "title": product.title,
@@ -45,7 +48,7 @@ def product_document(product):
     }
 
 
-def ensure_products_index(es=None):
+def ensure_products_index(es: Any = None) -> bool:
     if not enabled():
         return False
     es = es or client()
@@ -79,7 +82,7 @@ def ensure_products_index(es=None):
     return True
 
 
-def index_product(product_id):
+def index_product(product_id: int) -> None:
     if not enabled():
         return
     try:
@@ -97,7 +100,7 @@ def index_product(product_id):
         logger.exception("Failed to index product in Elasticsearch", extra={"product_id": product_id})
 
 
-def delete_product(product_id):
+def delete_product(product_id: int) -> None:
     if not enabled():
         return
     try:
@@ -110,17 +113,23 @@ def delete_product(product_id):
         logger.exception("Failed to delete product from Elasticsearch", extra={"product_id": product_id})
 
 
-def schedule_index_product(product_id):
+def schedule_index_product(product_id: int) -> None:
     if enabled():
         transaction.on_commit(lambda: index_product(product_id))
 
 
-def schedule_delete_product(product_id):
+def schedule_delete_product(product_id: int) -> None:
     if enabled():
         transaction.on_commit(lambda: delete_product(product_id))
 
 
-def search_product_ids(query, filters=None, ordering="-created", offset=0, limit=24):
+def search_product_ids(
+    query: str,
+    filters: Optional[dict[str, Any]] = None,
+    ordering: str = "-created",
+    offset: int = 0,
+    limit: int = 24,
+) -> Optional[dict[str, Any]]:
     if not enabled() or not query:
         return None
     filters = filters or {}
@@ -176,3 +185,4 @@ def search_product_ids(query, filters=None, ordering="-created", offset=0, limit
         "ids": [int(hit["_id"]) for hit in hits],
         "count": int(total),
     }
+

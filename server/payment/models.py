@@ -7,7 +7,7 @@ from nanoid import generate
 
 
 
-def generate_order_reference():
+def generate_order_reference() -> str:
     return generate(size=13)
 
 
@@ -49,16 +49,20 @@ class Coupon(DatesMixin):
     category = models.CharField(max_length=100, blank=True, default='')
     minimum_quantity = models.PositiveIntegerField(default=1)
 
-    def can_use(self):
+    def can_use(self) -> bool:
+        from django.utils import timezone
+        now = timezone.now()
         is_active = self.active
         is_usable = self.num_used < self.num_available
-        return is_active and is_usable
+        is_valid_date = self.valid_to >= now
+        return is_active and is_usable and is_valid_date
 
-    def used(self):
+    def used(self) -> None:
         self.num_used += 1
         if self.num_used >= self.num_available:
             self.active = False
         self.save()
+
 
 
 class CouponRedemption(DatesMixin):
@@ -86,7 +90,7 @@ class DeliveryInfo(DatesMixin):
     total = models.IntegerField(default=0, blank=False, null=False)
     delivery_type = models.CharField(choices=DELIVERY_TYPE_CHOICES, max_length=150)
 
-    def get_delivery_info(self):
+    def get_delivery_info(self) -> tuple:
         full_delivery_address = '%s, %s %s, %s' % (
             self.address.address,
             self.address.state,
@@ -105,14 +109,14 @@ class DeliveryInfo(DatesMixin):
 class Order(DatesMixin):
     
     ORDER_STATUS_CHOICE = (
-    ("pending", "pending"),
-    ("cancelled", "cancelled"),
-    ("refunded", "refunded"),
-    ("delivered", "delivered"),
-    ("shipped", "shipped"),
-    ("picked up", "picked up"),
-    ("confirmed", "confirmed"))
-    
+        ("pending", "pending"),
+        ("cancelled", "cancelled"),
+        ("refunded", "refunded"),
+        ("delivered", "delivered"),
+        ("shipped", "shipped"),
+        ("picked up", "picked up"),
+        ("confirmed", "confirmed")
+    )
     
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE)
@@ -131,13 +135,14 @@ class Order(DatesMixin):
     checkout_key = models.UUIDField(null=True, blank=True, unique=True)
     stripe_session_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
     
-    def save(self, *args, **kwargs):
+    def save(self, *args, **kwargs) -> None:
         if not self.orderId:
             self.orderId = self._generate_unique()
         super().save(*args, **kwargs)
 
-    def _generate_unique(self, size=15):
+    def _generate_unique(self, size: int = 15) -> str:
         order_id = generate(size=size)
         while Order.objects.filter(orderId=order_id).exists():
             order_id = generate(size=size)
         return order_id
+

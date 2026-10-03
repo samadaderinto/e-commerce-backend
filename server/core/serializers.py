@@ -1,8 +1,36 @@
 from rest_framework import serializers
 
-from core.models import Refund, Review, User
+from core.models import Refund, Review, User, UserWallet, UserWalletTransaction
 from product.serializers import ProductCardSerializer
 from store.models import Store
+
+
+class UserWalletTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserWalletTransaction
+        fields = [
+            "id",
+            "transaction_type",
+            "amount",
+            "source",
+            "description",
+            "reference",
+            "created",
+        ]
+
+
+class UserWalletSerializer(serializers.ModelSerializer):
+    transactions = UserWalletTransactionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = UserWallet
+        fields = [
+            "id",
+            "balance",
+            "transactions",
+            "created",
+            "updated",
+        ]
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -100,6 +128,8 @@ class RefundsSerializer(serializers.ModelSerializer):
             "email",
             "order",
             "reason",
+            "refund_type",
+            "accepted",
             'created',
         ]
 

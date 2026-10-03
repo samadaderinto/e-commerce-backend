@@ -5,7 +5,7 @@ from rest_framework import serializers
 from taggit.serializers import TaggitSerializer, TagListSerializerField
 
 from product.models import Product, ProductImg, Specification
-from store.models import Schedule, Store, StoreAddress, StoreImg, StoreInfo
+from store.models import Schedule, Store, StoreAddress, StoreImg, StoreInfo, StorePayout
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -148,3 +148,24 @@ class StoreImgSerializer(serializers.ModelSerializer):
     class Meta:
         model = StoreImg
         fields = ['id', 'store', 'url']
+
+
+class StorePayoutSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StorePayout
+        fields = [
+            'id', 'store', 'amount', 'status', 'payout_method',
+            'account_details', 'reference', 'processed_at',
+            'notes', 'created', 'updated',
+        ]
+        read_only_fields = ['id', 'store', 'status', 'reference', 'processed_at', 'created', 'updated']
+
+
+class PayoutCreateSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('5.00'))
+    payout_method = serializers.ChoiceField(
+        choices=StorePayout.METHOD_CHOICES,
+        default=StorePayout.METHOD_BANK_TRANSFER,
+    )
+    account_details = serializers.DictField(required=False, default=dict)
+

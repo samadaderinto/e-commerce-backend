@@ -1,17 +1,18 @@
-import stripe
-import six
+from __future__ import annotations
+
 from decimal import Decimal
+from typing import Any, Optional
 
-from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.conf import settings
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.template.loader import get_template
-
-from notification.delivery import queue_email_delivery
+import stripe
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from notification.delivery import queue_email_delivery
 
 
-def auth_token(user):
+def auth_token(user: Any) -> dict[str, str]:
     refresh = RefreshToken.for_user(user)
 
     return {
@@ -20,7 +21,7 @@ def auth_token(user):
     }
 
 
-def send_mail(file_name, reciever_email, data=None):
+def send_mail(file_name: str, reciever_email: str, data: Optional[dict[str, Any]] = None) -> None:
     html_tpl_path = f"email-templates/{file_name}.html"
     email_html_template = get_template(html_tpl_path).render(data or {})
     sender = getattr(settings, "APPLICATION_EMAIL", settings.DEFAULT_FROM_EMAIL)
@@ -31,13 +32,14 @@ def send_mail(file_name, reciever_email, data=None):
         reply_to=sender,
         is_html=True,
     )
-    
 
-def make_payment(items, total, coupon_discount):
+
+def make_payment(items: Any, total: Decimal | str | float, coupon_discount: Decimal | str | float) -> Any:
     total = Decimal(str(total))
     coupon_discount = Decimal(str(coupon_discount))
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
     return stripe.checkout.Session.create(
-        payment_method_types=['card', "cashapp", 'access_debit'],
+        payment_method_types=['card', 'cashapp'],
         line_items=[
             {
                 'price_data': {
@@ -52,12 +54,12 @@ def make_payment(items, total, coupon_discount):
         ],
         discounts=[],
         mode='payment',
-        success_url='http://localhost:3000/success/',
-        cancel_url='http://localhost:3000/cancel/',
+        success_url=f'{frontend_url}/success/',
+        cancel_url=f'{frontend_url}/cancel/',
     )
-    
-    
-class TokenGenerator(PasswordResetTokenGenerator):
-    def _make_hash_value(self, user, timestamp):
 
-        return (six.text_type(user.pk) + six.text_type(timestamp) + six.text_type(user.is_active))
+
+class TokenGenerator(PasswordResetTokenGenerator):
+    def _make_hash_value(self, user: Any, timestamp: int) -> str:
+        return str(user.pk) + str(timestamp) + str(user.is_active)
+

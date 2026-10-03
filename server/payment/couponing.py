@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Mapping, Optional, Sequence
 
 from django.db import IntegrityError
 from rest_framework.exceptions import ValidationError
@@ -6,7 +9,13 @@ from rest_framework.exceptions import ValidationError
 from .models import Coupon, CouponRedemption
 
 
-def calculate_coupon_discount(coupon, user, lines, subtotal, reserve=True):
+def calculate_coupon_discount(
+    coupon: Optional[Coupon],
+    user: Any,
+    lines: Sequence[Mapping[str, Any]],
+    subtotal: Decimal,
+    reserve: bool = True,
+) -> Decimal:
     """Return the discount for cart lines and reserve one user redemption."""
     if not coupon or not coupon.can_use():
         raise ValidationError({'coupon': 'This coupon is invalid or has expired.'})
@@ -40,3 +49,4 @@ def calculate_coupon_discount(coupon, user, lines, subtotal, reserve=True):
         except IntegrityError:
             raise ValidationError({'coupon': 'You have already used this coupon.'})
     return discount
+

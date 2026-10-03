@@ -18,7 +18,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { api, money } from "@/lib/api";
-import type { Address, Order, Product } from "@/lib/types";
+import type { Address, Order, Product, UserWallet } from "@/lib/types";
 import { useShop } from "./providers";
 import { AddressForm, Gate } from "./account";
 import { Empty, ErrorState, Loading, ProductImage, Quantity } from "./ui";
@@ -176,7 +176,12 @@ export function CheckoutPage() {
     "usps_ground_advantage",
   );
   const [paymentType, setPaymentType] =
-    useState<"stripe_wallet">("stripe_wallet");
+    useState<"stripe_wallet" | "user_wallet">("stripe_wallet");
+  const wallet = useQuery({
+    queryKey: ["wallet", user?.id],
+    queryFn: () => api<UserWallet>("wallet"),
+    enabled: !!user,
+  });
   const [checkoutKey] = useState(() =>
     typeof crypto !== "undefined" ? crypto.randomUUID() : "",
   );
@@ -222,6 +227,19 @@ export function CheckoutPage() {
     setError("");
     try {
       const selectedService = activeShipping?.service_id || shippingService;
+      if (paymentType === "user_wallet") {
+        const order = await api<Order>("checkout", "POST", {
+          address: addressId,
+          checkout_key: checkoutKey,
+          coupon: coupon.trim(),
+          payment_type: "user_wallet",
+          shipping_service: selectedService,
+        });
+        await client.invalidateQueries({ queryKey: ["cart"] });
+        await client.invalidateQueries({ queryKey: ["wallet"] });
+        router.replace(`/orders/${order.id}?placed=true`);
+        return;
+      }
       const session = await api<{ url: string }>(
         "checkout/wallet-session",
         "POST",
@@ -377,6 +395,23 @@ export function CheckoutPage() {
                   <strong>Cards, Stripe & Cash App</strong>
                   <p>
                     Fast, secure upfront payment with live buyer protection.
+                  </p>
+                </div>
+                <WalletCards size={22} />
+              </label>
+              <label
+                className={`select-address ${paymentType === "user_wallet" ? "selected" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="payment"
+                  checked={paymentType === "user_wallet"}
+                  onChange={() => setPaymentType("user_wallet")}
+                />
+                <div>
+                  <strong>ProAce Wallet Balance ({money(wallet.data?.balance || "0.00")})</strong>
+                  <p>
+                    Pay instantly using your available store credit balance.
                   </p>
                 </div>
                 <WalletCards size={22} />

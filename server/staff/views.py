@@ -19,11 +19,13 @@ from rest_framework.pagination import LimitOffsetPagination
 from affiliates.models import Marketer
 from affiliates.serializers import MarketerSerializer
 from notification.views import (
+    create_notification,
     refund_requested_nofication,
     staff_created_nofication,
     store_moderation_notification,
 )
-from store.serializers import StoreAddressSerializer
+from store.serializers import StoreAddressSerializer, StorePayoutSerializer
+from core.services import credit_user_wallet
 
 from staff.serilalizers import (
     BackofficeCouponSerializer,
@@ -52,7 +54,7 @@ from utils.variables import methods
 from core.models import User, Refund
 from product.models import Product, Specification
 from product.cache import invalidate_product_cache
-from store.models import StoreAddress, Store
+from store.models import StoreAddress, Store, StorePayout
 from observability.models import LogEntry
 from observability.serializers import LogEntrySerializer
 
@@ -344,6 +346,98 @@ class StaffViewSet(viewsets.GenericViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"], url_path="refunds")
+    def refunds(self, request):
+        refunds = Refund.objects.select_related("order", "order__user").order_by("-created", "-pk")
+        search = request.query_params.get("search")
+        if search:
+            refunds = refunds.filter(Q(email__icontains=search) | Q(order__orderId__icontains=search))
+        return self.paginate_response(refunds, RefundsSerializer)
+
+    @action(detail=False, methods=["post"], url_path=r"refunds/(?P<refund_pk>\d+)/process")
+    def process_refund(self, request, refund_pk=None):
+        refund = get_object_or_404(Refund.objects.select_related("order", "order__user"), pk=refund_pk)
+        action_type = request.data.get("action", "approve")
+        if action_type == "approve":
+            refund.accepted = True
+            refund.order.status = "refunded"
+            refund.order.save(update_fields=["status"])
+            refund.save(update_fields=["accepted"])
+
+            if refund.refund_type == Refund.REFUND_TYPE_STORE_CREDIT:
+                credit_user_wallet(
+                    user=refund.order.user,
+                    amount=refund.order.total,
+                    description=f"Refund store credit for Order #{refund.order.orderId}",
+                    source="refund",
+                    reference=refund.order.orderId,
+                )
+
+            create_notification(
+                recipient=refund.order.user,
+                verb=f"Refund Approved for Order #{refund.order.orderId}",
+                description=f"Your refund request for Order #{refund.order.orderId} of ${refund.order.total} has been approved."
+                + (" Store credit has been added to your ProAce Wallet." if refund.refund_type == Refund.REFUND_TYPE_STORE_CREDIT else ""),
+                data={"order_id": refund.order.pk, "refund_id": refund.pk},
+            )
+            return Response({"detail": "Refund approved and processed.", "refund": RefundsSerializer(refund).data})
+        else:
+            reason = request.data.get("reason", "Refund request declined by moderation.")
+            refund.accepted = False
+            refund.order.status = "confirmed"
+            refund.order.save(update_fields=["status"])
+            refund.save(update_fields=["accepted"])
+
+            create_notification(
+                recipient=refund.order.user,
+                verb=f"Refund Request Update for Order #{refund.order.orderId}",
+                description=f"Your refund request for Order #{refund.order.orderId} was declined. Reason: {reason}",
+                data={"order_id": refund.order.pk, "refund_id": refund.pk},
+            )
+            return Response({"detail": "Refund request declined.", "refund": RefundsSerializer(refund).data})
+
+    @action(detail=False, methods=["get"], url_path="payouts")
+    def payouts(self, request):
+        payouts = StorePayout.objects.select_related("store", "store__user").order_by("-created", "-pk")
+        payout_status = request.query_params.get("status")
+        if payout_status:
+            payouts = payouts.filter(status=payout_status)
+        return self.paginate_response(payouts, StorePayoutSerializer)
+
+    @action(detail=False, methods=["post"], url_path=r"payouts/(?P<payout_pk>\d+)/process")
+    def process_payout(self, request, payout_pk=None):
+        payout = get_object_or_404(StorePayout.objects.select_related("store", "store__user"), pk=payout_pk)
+        action_type = request.data.get("action", "approve")
+        if action_type == "approve":
+            payout.status = StorePayout.STATUS_COMPLETED
+            payout.processed_at = timezone.now()
+            payout.processed_by = request.user
+            payout.save(update_fields=["status", "processed_at", "processed_by"])
+
+            create_notification(
+                recipient=payout.store.user,
+                verb=f"Payout Completed: ${payout.amount}",
+                description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) has been disbursed.",
+                data={"payout_id": payout.pk, "amount": str(payout.amount)},
+            )
+            return Response({"detail": "Payout marked as completed.", "payout": StorePayoutSerializer(payout).data})
+        else:
+            reason = request.data.get("reason", "Payout declined by compliance.")
+            payout.status = StorePayout.STATUS_REJECTED
+            payout.notes = reason
+            payout.processed_at = timezone.now()
+            payout.processed_by = request.user
+            payout.save(update_fields=["status", "notes", "processed_at", "processed_by"])
+
+            create_notification(
+                recipient=payout.store.user,
+                verb=f"Payout Declined: ${payout.amount}",
+                description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) was declined. Reason: {reason}",
+                data={"payout_id": payout.pk, "amount": str(payout.amount)},
+            )
+            return Response({"detail": "Payout marked as rejected.", "payout": StorePayoutSerializer(payout).data})
+
 
 
 def create_staff(request):

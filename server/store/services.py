@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from django.db import transaction
 from django.utils import timezone
 
@@ -6,7 +8,7 @@ from store.models import Schedule, Store
 
 
 @transaction.atomic
-def publish_due_products():
+def publish_due_products() -> int:
     from store.views import invalidate_catalog
 
     count = 0
@@ -25,3 +27,4 @@ def publish_due_products():
             count += 1
         schedule.delete()
     return count
+

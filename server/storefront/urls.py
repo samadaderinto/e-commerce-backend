@@ -6,7 +6,7 @@ from rest_framework.permissions import AllowAny
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from .views import (
     AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView,
-    OrderRefundView, ShippingRatesView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
+    OrderRefundView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, ReviewsView, WishlistView,
 )
 from store.views import StoreReviewViewSet
@@ -20,6 +20,7 @@ urlpatterns = [
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema', permission_classes=[AllowAny], authentication_classes=[]), name='redoc'),
     path('api/v1/auth/<str:action>/', AuthView.as_view()),
     path('api/v1/me/', MeView.as_view()),
+    path('api/v1/wallet/', UserWalletView.as_view()),
     path('api/v1/products/', ProductsView.as_view()),
     path('api/v1/products/<int:pk>/', ProductDetailView.as_view()),
     path('api/v1/products/<int:pk>/reviews/', ReviewsView.as_view()),
@@ -38,6 +39,10 @@ urlpatterns = [
     path('api/v1/admin/staff/<int:staff_pk>/', StaffViewSet.as_view({'get': 'staff_detail'})),
     path('api/v1/admin/staff/<int:staff_pk>/block/', StaffViewSet.as_view({'post': 'block_staff'})),
     path('api/v1/admin/staff/<int:staff_pk>/unblock/', StaffViewSet.as_view({'post': 'unblock_staff'})),
+    path('api/v1/admin/staff/refunds/', StaffViewSet.as_view({'get': 'refunds'})),
+    path('api/v1/admin/staff/refunds/<int:refund_pk>/process/', StaffViewSet.as_view({'post': 'process_refund'})),
+    path('api/v1/admin/staff/payouts/', StaffViewSet.as_view({'get': 'payouts'})),
+    path('api/v1/admin/staff/payouts/<int:payout_pk>/process/', StaffViewSet.as_view({'post': 'process_payout'})),
     path('api/v1/notifications/', include('notification.urls')),
     path('api/v1/orders/', OrdersView.as_view()),
     path('api/v1/orders/<int:pk>/', OrderDetailView.as_view()),

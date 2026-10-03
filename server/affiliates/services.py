@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 from decimal import Decimal
+from typing import Any, Optional
 
 from django.db import transaction
 
@@ -14,7 +17,7 @@ REFERRAL_REWARD_AMOUNT = Decimal("25.00")
 
 
 @transaction.atomic
-def reward_referral(referral_code, referred_user):
+def reward_referral(referral_code: str, referred_user: Any) -> Optional[Referral]:
     marketer = Marketer.objects.select_related("user").filter(
         marketer_id=referral_code
     ).first()
@@ -52,3 +55,4 @@ def reward_referral(referral_code, referred_user):
     referral.status = Referral.REWARDED
     referral.save(update_fields=["wallet_transaction", "status", "updated"])
     return referral
+
