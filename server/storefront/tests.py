@@ -259,7 +259,7 @@ class StorefrontTests(TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             response = self.checkout(checkout_key=key)
         self.assertEqual(response.status_code, 201, response.data)
-        self.assertEqual(response.data['total'], '19500.00')
+        self.assertEqual(response.data['total'], '17006.65')
         self.product.refresh_from_db()
         self.assertEqual(self.product.available, 3)
         again = self.checkout(checkout_key=key)
@@ -267,6 +267,16 @@ class StorefrontTests(TestCase):
         self.assertEqual(again.data['id'], response.data['id'])
         self.assertEqual(Order.objects.count(), 1)
         self.assertEqual(self.client.get('/api/v1/cart/').data['items'], [])
+
+    def test_shipping_rates_endpoint_returns_usps_options(self):
+        self.add(2)
+        response = self.client.get(f'/api/v1/checkout/shipping-rates/?address={self.address.pk}')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(len(response.data) >= 3)
+        service_ids = [r['service_id'] for r in response.data]
+        self.assertIn('usps_ground_advantage', service_ids)
+        self.assertIn('usps_priority_mail', service_ids)
+        self.assertIn('usps_priority_express', service_ids)
 
     def test_order_snapshot_survives_price_changes(self):
         self.add()
@@ -299,7 +309,7 @@ class StorefrontTests(TestCase):
         self.add(2)
         response = self.checkout(coupon='total10')
         self.assertEqual(response.status_code, 201, response.data)
-        self.assertEqual(response.data['total'], '17800.00')
+        self.assertEqual(response.data['total'], '15306.65')
         self.assertEqual(CouponRedemption.objects.filter(coupon=coupon, user=self.buyer).count(), 1)
         self.product.refresh_from_db()
         self.product.available = 3
@@ -314,7 +324,7 @@ class StorefrontTests(TestCase):
         self.add(2)
         response = self.checkout(coupon='BUY2')
         self.assertEqual(response.status_code, 201, response.data)
-        self.assertEqual(response.data['total'], '16100.00')
+        self.assertEqual(response.data['total'], '13606.65')
 
     def test_admin_can_create_targeted_coupon_but_customer_cannot(self):
         self.client.force_authenticate(self.buyer)

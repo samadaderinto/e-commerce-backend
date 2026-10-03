@@ -58,7 +58,7 @@ class CatalogSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'description', 'category', 'brand', 'price', 'sale_price',
                   'discount', 'available', 'average_rating', 'rating_count', 'store',
                   'store_name', 'store_username', 'image', 'images', 'tags', 'created',
-                  'is_own_store', 'is_digital']
+                  'is_own_store', 'weight', 'is_digital']
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_own_store(self, obj):
@@ -146,10 +146,19 @@ class CartSerializer(serializers.Serializer):
     total = serializers.DecimalField(max_digits=15, decimal_places=2)
 
 
+class ShippingRateSerializer(serializers.Serializer):
+    service_id = serializers.CharField()
+    name = serializers.CharField()
+    description = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    is_default = serializers.BooleanField()
+
+
 class CheckoutRequestSerializer(serializers.Serializer):
     address = serializers.IntegerField(min_value=1)
     checkout_key = serializers.UUIDField()
     coupon = serializers.CharField(required=False, allow_blank=True)
+    shipping_service = serializers.CharField(required=False, default='usps_ground_advantage')
     payment_type = serializers.ChoiceField(
         choices=['cash_on_delivery', 'stripe_wallet'], required=False, default='cash_on_delivery'
     )
@@ -159,6 +168,7 @@ class WalletCheckoutSerializer(serializers.Serializer):
     address = serializers.IntegerField(min_value=1)
     checkout_key = serializers.UUIDField()
     coupon = serializers.CharField(required=False, allow_blank=True)
+    shipping_service = serializers.CharField(required=False, default='usps_ground_advantage')
 
 
 class CouponAdminSerializer(serializers.ModelSerializer):

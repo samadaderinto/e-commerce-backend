@@ -1,3 +1,4 @@
+from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -63,6 +64,12 @@ class Product(DatesMixin):
     tags = TaggableManager()
     sales = models.IntegerField(validators=[MinValueValidator(0)], default=0)
     sponsored = models.BooleanField(default=False)
+    weight = models.DecimalField(
+        max_digits=6,
+        decimal_places=2,
+        default=Decimal('1.00'),
+        help_text='Shipping weight in pounds (lbs).',
+    )
     is_digital = models.BooleanField(
         default=False,
         help_text='Digital products are delivered online and may be sold worldwide.',

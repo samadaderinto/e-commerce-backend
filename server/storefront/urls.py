@@ -6,7 +6,7 @@ from rest_framework.permissions import AllowAny
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from .views import (
     AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView,
-    WalletCheckoutConfirmView, WalletCheckoutSessionView,
+    ShippingRatesView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, ReviewsView, WishlistView,
 )
 from store.views import StoreReviewViewSet
@@ -27,6 +27,7 @@ urlpatterns = [
     path('api/v1/addresses/', AddressesView.as_view()),
     path('api/v1/cart/', CartView.as_view()),
     path('api/v1/checkout/', CheckoutView.as_view()),
+    path('api/v1/checkout/shipping-rates/', ShippingRatesView.as_view()),
     path('api/v1/checkout/wallet-session/', WalletCheckoutSessionView.as_view()),
     path('api/v1/checkout/wallet-confirm/', WalletCheckoutConfirmView.as_view()),
     path('api/v1/admin/coupons/', CouponAdminView.as_view()),

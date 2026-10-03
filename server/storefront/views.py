@@ -32,17 +32,18 @@ from affiliates.services import reward_referral
 from core.models import Address, Review, User, Wishlist
 from payment.models import Coupon, CouponRedemption, DeliveryInfo, Order
 from payment.couponing import calculate_coupon_discount
+from payment.usps import calculate_usps_rates
 from product.models import Product
 from product.search import search_product_ids
 from product.policies import is_own_store, validate_purchase
 from store.views import invalidate_catalog
-from store.models import Store
+from store.models import Store, StoreAddress
 from .serializers import (
     AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
     CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
-    CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer, WalletCheckoutSerializer,
+    CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
     OrderSerializer, ProductIdRequestSerializer, RegisterSerializer,
-    ReviewSerializer, UserSerializer, unit_price,
+    ReviewSerializer, ShippingRateSerializer, UserSerializer, WalletCheckoutSerializer, unit_price,
 )
 
 
@@ -331,12 +332,17 @@ def active_cart(user):
     return cart if cart else Cart.objects.create(user=user)
 
 
-def calculate_shipping(subtotal, has_physical_items):
+def calculate_shipping(subtotal, has_physical_items, origin_zip='33602', dest_zip='33602', total_weight=Decimal('1.00'), service_id=None):
     if not has_physical_items:
-        return Decimal('0')
-    threshold = getattr(settings, 'FREE_SHIPPING_THRESHOLD', Decimal('100000'))
-    flat_fee = getattr(settings, 'FLAT_SHIPPING_FEE', Decimal('2500'))
-    return Decimal('0') if subtotal >= threshold else flat_fee
+        return Decimal('0.00')
+    rates = calculate_usps_rates(origin_zip, dest_zip, total_weight, subtotal, has_physical_items)
+    if not rates:
+        return Decimal('0.00')
+    if service_id:
+        for r in rates:
+            if r['service_id'] == service_id:
+                return Decimal(r['amount'])
+    return Decimal(rates[0]['amount'])
 
 
 def cart_data(cart, request):
@@ -348,7 +354,11 @@ def cart_data(cart, request):
              and item.product.store.verified_at is not None and item.quantity <= item.product.available} for item in items]
     subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
     has_physical_items = any(not row['product']['is_digital'] for row in rows)
-    shipping = calculate_shipping(subtotal, has_physical_items and bool(rows))
+    total_weight = sum(
+        Decimal(str(row['product'].get('weight') or '1.00')) * row['quantity']
+        for row in rows if not row['product']['is_digital']
+    )
+    shipping = calculate_shipping(subtotal, has_physical_items and bool(rows), total_weight=total_weight)
     return {'id': cart.pk, 'items': rows, 'subtotal': str(subtotal), 'shipping': str(shipping), 'total': str(subtotal + shipping)}
 
 
@@ -422,6 +432,52 @@ class OrderDetailView(APIView):
         return Response(order_data(get_object_or_404(orders, pk=pk)))
 
 
+class ShippingRatesView(APIView):
+    @extend_schema(
+        parameters=[
+            OpenApiParameter('address', OpenApiTypes.INT, OpenApiParameter.QUERY, required=False, description='Address ID for shipping calculation'),
+        ],
+        responses={200: ShippingRateSerializer(many=True)},
+    )
+    def get(self, request):
+        cart = active_cart(request.user)
+        items = list(cart.cart_items.select_related('product__store').all())
+        if not items:
+            return Response([])
+
+        has_physical_items = any(not item.product.is_digital for item in items)
+        total_weight = sum(
+            Decimal(str(item.product.weight or '1.00')) * item.quantity
+            for item in items if not item.product.is_digital
+        )
+        subtotal = sum((unit_price(item.product) * item.quantity for item in items), Decimal('0'))
+
+        origin_zip = '33602'
+        store_addr = StoreAddress.objects.filter(store=items[0].product.store).first()
+        if store_addr and store_addr.zip:
+            origin_zip = store_addr.zip
+
+        dest_zip = '33602'
+        address_id = request.query_params.get('address')
+        if address_id:
+            try:
+                addr = Address.objects.get(pk=address_id, user=request.user)
+                if has_physical_items:
+                    country = ''.join(c for c in addr.country.lower() if c.isalnum())
+                    us_names = {'us', 'usa', 'unitedstates', 'unitedstatesofamerica'}
+                    if country not in us_names:
+                        raise ValidationError({
+                            'address': 'Physical products are currently delivered only within the United States. '
+                                       'Digital products remain available worldwide.'
+                        })
+                dest_zip = addr.zip or '33602'
+            except Address.DoesNotExist:
+                raise ValidationError({'address': 'Address not found.'})
+
+        rates = calculate_usps_rates(origin_zip, dest_zip, total_weight, subtotal, has_physical_items)
+        return Response(rates)
+
+
 class CheckoutView(APIView):
     @staticmethod
     def _validate_service_area(address, snapshots):
@@ -457,7 +513,7 @@ class CheckoutView(APIView):
             raise ValidationError({'detail': 'Order value exceeds the supported maximum.'})
         return cart, snapshots, coupon_lines, subtotal
 
-    def _complete(self, request, key, address, code, payment_type, stripe_session_id=None):
+    def _complete(self, request, key, address, code, payment_type, stripe_session_id=None, shipping_service=None):
         User.objects.select_for_update().get(pk=request.user.pk)
         existing = Order.objects.filter(checkout_key=key).first()
         if existing:
@@ -481,9 +537,24 @@ class CheckoutView(APIView):
             product.save(update_fields=['available', 'sales', 'updated'])
             transaction.on_commit(lambda product=product: invalidate_catalog(product))
         has_physical_items = any(not row['is_digital'] for row in snapshots)
-        shipping = calculate_shipping(subtotal, has_physical_items)
-        delivery = DeliveryInfo.objects.create(user=request.user, address=address, method='home delivery',
-                                                delivery_type='standard', total=int(shipping))
+        total_weight = sum(
+            Decimal(str(item.product.weight or '1.00')) * item.quantity
+            for item in cart.cart_items.select_related('product').all() if not item.product.is_digital
+        )
+        origin_zip = '33602'
+        first_item = cart.cart_items.select_related('product__store').first()
+        if first_item:
+            store_addr = StoreAddress.objects.filter(store=first_item.product.store).first()
+            if store_addr and store_addr.zip:
+                origin_zip = store_addr.zip
+        dest_zip = address.zip or '33602'
+        shipping = calculate_shipping(subtotal, has_physical_items, origin_zip=origin_zip, dest_zip=dest_zip, total_weight=total_weight, service_id=shipping_service)
+        delivery_method = 'home delivery' if has_physical_items else 'digital'
+        delivery_service = shipping_service or ('usps_ground_advantage' if has_physical_items else 'digital_delivery')
+        delivery = DeliveryInfo.objects.create(
+            user=request.user, address=address, method=delivery_method,
+            delivery_type=delivery_service, total=int(shipping)
+        )
         order = Order.objects.create(
             user=request.user, cart=cart, delivery=delivery, status='confirmed', ordered=True,
             coupon_code=code, total=subtotal - discount + shipping, subtotal=subtotal,
@@ -510,7 +581,8 @@ class CheckoutView(APIView):
         payment_type = request.data.get('payment_type', 'cash_on_delivery')
         if payment_type != 'cash_on_delivery':
             raise ValidationError({'detail': 'Choose cash on delivery or use the wallet checkout.'})
-        order = self._complete(request, key, address, str(request.data.get('coupon', '')).strip(), payment_type)
+        shipping_service = str(request.data.get('shipping_service', 'usps_ground_advantage')).strip()
+        order = self._complete(request, key, address, str(request.data.get('coupon', '')).strip(), payment_type, shipping_service=shipping_service)
         return Response(order_data(order), status=201)
 
 
@@ -525,6 +597,7 @@ class WalletCheckoutSessionView(CheckoutView):
         address = get_object_or_404(Address, pk=serializers.IntegerField(min_value=1).run_validation(request.data.get('address')),
                                      user=request.user)
         code = str(request.data.get('coupon', '')).strip()
+        shipping_service = str(request.data.get('shipping_service', 'usps_ground_advantage')).strip()
         cart, snapshots, coupon_lines, subtotal = self._lines(request)
         self._validate_service_area(address, snapshots)
         coupon = None
@@ -533,7 +606,18 @@ class WalletCheckoutSessionView(CheckoutView):
             coupon = Coupon.objects.filter(code__iexact=code, active=True, valid_from__lte=timezone.now(), valid_to__gte=timezone.now()).first()
             discount = calculate_coupon_discount(coupon, request.user, coupon_lines, subtotal, reserve=False)
         has_physical_items = any(not row['is_digital'] for row in snapshots)
-        shipping = calculate_shipping(subtotal, has_physical_items)
+        total_weight = sum(
+            Decimal(str(item.product.weight or '1.00')) * item.quantity
+            for item in cart.cart_items.select_related('product').all() if not item.product.is_digital
+        )
+        origin_zip = '33602'
+        first_item = cart.cart_items.select_related('product__store').first()
+        if first_item:
+            store_addr = StoreAddress.objects.filter(store=first_item.product.store).first()
+            if store_addr and store_addr.zip:
+                origin_zip = store_addr.zip
+        dest_zip = address.zip or '33602'
+        shipping = calculate_shipping(subtotal, has_physical_items, origin_zip=origin_zip, dest_zip=dest_zip, total_weight=total_weight, service_id=shipping_service)
         total = subtotal - discount + shipping
         methods = [
             configured_method.strip()
@@ -548,7 +632,7 @@ class WalletCheckoutSessionView(CheckoutView):
                                         'product_data': {'name': 'ProAce order'},
                                         'unit_amount': int(total * 100)}, 'quantity': 1}],
             client_reference_id=str(request.user.pk),
-            metadata={'checkout_key': str(key), 'address': str(address.pk), 'coupon': code},
+            metadata={'checkout_key': str(key), 'address': str(address.pk), 'coupon': code, 'shipping_service': shipping_service},
             success_url=f"{settings.FRONTEND_URL}/checkout?wallet_session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{settings.FRONTEND_URL}/checkout?wallet_cancelled=1",
         )
@@ -578,7 +662,8 @@ class WalletCheckoutConfirmView(CheckoutView):
             return Response(order_data(existing), status=200)
         address = get_object_or_404(Address, pk=serializers.IntegerField(min_value=1).run_validation(session.get('metadata', {}).get('address')),
                                      user=request.user)
-        order = self._complete(request, key, address, session.get('metadata', {}).get('coupon', ''), 'stripe_wallet', session_id)
+        shipping_service = session.get('metadata', {}).get('shipping_service', 'usps_ground_advantage')
+        order = self._complete(request, key, address, session.get('metadata', {}).get('coupon', ''), 'stripe_wallet', session_id, shipping_service=shipping_service)
         return Response(order_data(order), status=201)
 
 
