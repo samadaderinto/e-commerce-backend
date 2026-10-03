@@ -68,18 +68,26 @@ and permission details rather than inferring them from a prefix.
 | --- | --- |
 | `/api/v1/auth/<action>/` | Login, registration, email verification, password reset, token refresh and logout |
 | `/api/v1/me/` | Current authenticated account |
-| `/api/v1/products/` | Public catalog and product details |
+| `/api/v1/products/` | Public catalog with Elasticsearch full-text fuzzy search and product details |
 | `/api/v1/products/<id>/reviews/` | Product reviews |
 | `/api/v1/wishlist/` | Customer saved products |
 | `/api/v1/addresses/` | Customer delivery addresses |
-| `/api/v1/cart/` | Cart read and mutation |
-| `/api/v1/checkout/` | Cash-on-delivery checkout |
-| `/api/v1/checkout/wallet-session/`, `/wallet-confirm/` | Wallet checkout session and confirmation endpoints |
-| `/api/v1/orders/` | Customer order list and order detail |
-| `/api/v1/stores/` | Merchant store, product and visibility-schedule routers |
+| `/api/v1/cart/` | Cart read, item addition, quantity updates and item removal |
+| `/api/v1/checkout/` | Checkout with COD, ProAce Wallet balance, or Stripe Wallet |
+| `/api/v1/checkout/wallet-session/`, `/wallet-confirm/` | Stripe wallet checkout session and confirmation endpoints |
+| `/api/v1/wallet/` | ProAce customer wallet balance and credit/debit transaction log |
+| `/api/v1/orders/` | Customer order list, order details, and 7-day refund request endpoints |
+| `/api/v1/orders/<id>/tracking/` | Live USPS shipment tracking milestones and status updates |
+| `/api/v1/stores/` | Merchant store, product, inventory, schedule, and payout routers |
+| `/api/v1/stores/<id>/orders/<order_id>/tracking/` | Merchant fulfillment tracking updates and shipment carrier management |
+| `/api/v1/stores/<id>/payouts/` | Merchant payout withdrawal requests against cleared escrow balance |
 | `/api/v1/notifications/` | Authenticated notification inbox and device registration |
 | `/api/v1/admin/coupons/` | Staff coupon management |
 | `/api/v1/admin/stores/` | Store moderation, approval and blocking |
+| `/api/v1/admin/staff/dashboard/` | Platform-wide business intelligence, revenue, orders, and store analytics |
+| `/api/v1/admin/staff/refunds/` | Customer refund review and moderation queue (7-day window) |
+| `/api/v1/admin/staff/payouts/` | Merchant payout request approval and processing |
+| `/api/v1/admin/staff/staffs/` | Staff account provisioning, permission toggles, and blocking (Superuser only) |
 
 OpenAPI schema, Swagger and ReDoc are served at `/api/schema/`, `/api/docs/`
 and `/api/redoc/` respectively. They are available on a running local backend.
@@ -98,8 +106,9 @@ is ready for production:
 | Keep integrated and legacy Django configurations separate. | `storefront_settings` and `storefront.urls` are the current entry points; the legacy core API surface is removed while shared core domain models remain in use. |
 | Derive ownership from authenticated users and validate purchases on the server. | Do not trust client-supplied customer, seller, store or order ownership fields. |
 | Make Elasticsearch optional and retain a database search fallback. | Local development can run without search, while indexing failures do not become the only path to catalog results. |
+| Separate application database from logging infrastructure. | Application emits structured JSON to stdout; Grafana Alloy ships logs to Loki for aggregation in Grafana. |
+| Implement 7-day buyer refund review escrow and 4% platform commission. | Merchant earnings from orders placed within the 7-day refund window are held in review before unlocking for withdrawal requests. |
 | Use SQLite for direct local development/tests and PostgreSQL for Compose/production. | Direct setup is lightweight; production data must use persistent managed storage. |
-| Preserve explicit product limitations instead of implying unsupported payment and fulfillment behavior. | Cash-on-delivery is the complete checkout path. Do not represent wallet endpoints as general card charging, payouts or shipping integrations; see the limitations in the [root README](../README.md#deployment-boundaries). |
 
 ## Deployment boundary
 

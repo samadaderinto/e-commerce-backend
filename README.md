@@ -156,24 +156,35 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 
 ## Customer Experience
 
-- Storefront with product photography, categories and deals.
-- Search, category/price filters, sorting and pagination.
-- Product details, photo gallery, stock availability and customer reviews.
-- Saved items and a persistent guest bag; sign-in merges available guest items.
-- Email-verified registration, sign-in, reset password and sign-out.
-- Profile, delivery addresses, order history and order detail pages.
-- Cash-on-delivery checkout with stock revalidation, immutable item/address
-  snapshots, transactional stock deductions and idempotent retry handling.
-- Responsive layouts, form validation, loading/error/empty states and 404s.
+## Customer Experience
+
+- Storefront with product photography, categories, deals, and Elasticsearch fuzzy search.
+- Search, category/price filters, sorting, and pagination.
+- Product details, photo gallery, stock availability, and customer reviews.
+- Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
+- Email-verified registration, sign-in, password reset, and session management.
+- Profile, delivery addresses, order history, and detailed order pages.
+- **Order Tracking**: Real-time USPS package tracking with dynamic carrier links (`https://tools.usps.com/...`), live status badges, and shipping milestones.
+- **ProAce Wallet & Refunds**: Integrated customer wallet balance with 7-day physical return window, supporting instant store credit refund resolution.
+- **Flexible Checkout**: Supports Cash-on-Delivery, ProAce Wallet balance, and Stripe Wallet payments with transactional stock deductions and idempotent retry handling.
 
 ## Seller Experience
 
-Visit `/merchant` after signing in. New sellers can create a store and pickup
-address, then create drafts, publish listings, upload images, set pricing and stock,
-edit specifications and export the current product page to CSV. The workspace
-includes date-filtered dashboard statistics, daily order activity, inventory alerts,
-seller-specific order lists and store settings. Existing owners can select among
-their stores. Blocked stores cannot publish through the merchant product API.
+Visit `/merchant` after signing in:
+- **Seller Workspace Dashboard**: Daily order activity trend bar charts, low-stock inventory alerts, and top-selling products.
+- **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`).
+- **Product Management**: Create physical and digital goods, upload product image galleries, manage pricing/discounts, toggle draft/published status, and export product catalogs to CSV.
+- **Order Fulfillment**: Review store-specific customer orders, assign carrier & tracking numbers, update fulfillment milestones, and trigger instant buyer notifications.
+- **Store Configuration**: Edit store branding, opening schedules, and warehouse origin ZIP code for live shipping postage calculations.
+
+## Admin & Staff Experience
+
+Visit `/admin` (Platform Intelligence) and `/admin/staff` (Team Administration):
+- **Executive Analytics Dashboard**: Platform gross revenue, order volume, active user growth, and store fleet health across 7/30/90/365-day periods.
+- **Order Status Distribution Chart**: Visual fulfillment pipeline breakdown across order lifecycle stages.
+- **Moderation Queues**: Review 7-day customer refund requests (approve to wallet store credit or decline with reasons) and merchant payout requests.
+- **Store Moderation**: Review pending store onboardings, approve verified sellers, or suspend non-compliant stores with instant catalog cache invalidation.
+- **Staff Provisioning (Superusers)**: Create new staff accounts, manage access levels, or block compromised accounts.
 
 ## API And Authentication
 
@@ -183,10 +194,9 @@ requests require a same-origin `Origin` header. The proxy refreshes expired acce
 tokens, excludes credentials from JSON responses, and clears cookies on sign-out.
 Production cookies require HTTPS.
 
-The Django API uses `/api/v1/`. It reuses existing users, stores, products, carts and
+The Django API uses `/api/v1/`. It reuses existing users, stores, products, carts, and
 orders. Ownership is derived from authentication. Public catalog responses exclude
-drafts and blocked sellers. The new runtime excludes optional legacy notification,
-profiler, Elasticsearch and shipping integrations that previously blocked startup.
+drafts and blocked sellers.
 
 The OpenAPI schema is available at `http://127.0.0.1:8000/api/schema/` (YAML by
 default; request `application/vnd.oai.openapi+json` for JSON), with interactive
@@ -200,45 +210,21 @@ cookies and calls the API through its same-origin Next.js proxy.
 npm run build
 npm run typecheck
 npm run test:unit
-npm run test:integration
-npm run test:e2e
-.venv/bin/python server/manage.py test storefront --settings=codematics.storefront_settings --noinput
+PYTHONPATH=server .venv/bin/pytest server/
 ```
 
 Unit tests exercise frontend API serialization/error handling, currency formatting,
 categories, and backend price rounding without making external service calls.
-Integration tests exercise the Next.js API proxy against the Django API, including
-catalog access, authentication, token-cookie handling, and same-origin protection.
-Integration and end-to-end browser tests require both local servers and the seeded
-accounts. On macOS they use installed Google Chrome. On other systems run
-`npx playwright install chromium` first; `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` can specify another executable.
-`E2E_BASE_URL` and `E2E_DEMO_PASSWORD` override the test URL and password. Tests place
-sample orders and create unpublished test products in the local database.
-Screenshots and failure traces go in `artifacts/` (ignored by Git).
+Backend tests cover authentication, permissions, cart atomicity, coupon redemption,
+wallet transactions, 7-day refund escrow, USPS tracking, and merchant payouts.
 
 ## Deployment Boundaries
 
 - Set `DJANGO_DEBUG=false`, a strong `SECRET_KEY`, `ALLOWED_HOSTS`, `FRONTEND_URL`,
-  Resend API/sender configuration and persistent media/database storage. Build
+  Resend API/sender configuration, and persistent media/database storage. Build
   the client with `npm run build` and run `npm run start --workspace=client`
   behind HTTPS.
-- The included API is ready for local integration, not a claim of production
-  marketplace certification. Review operator-specific privacy, returns and support
-  policies before launch; no legal policy or merchant identity verification service
-  is supplied.
-- Cash on delivery works end to end. Card charging, payouts, shipping labels and
-  tracking-carrier integrations are not connected. No checkout screen accepts card
-  details or claims to have charged a customer.
-- Merchant fulfillment status updates remain read-only because the legacy order
-  has one shared status for a potentially multi-seller cart. Seller fulfillment
-  records are needed before enabling independent shipment updates.
-- Dashboard monetary figures are explicitly estimates from current catalog prices,
-  not settled revenue. New customer orders preserve historical prices; old orders
-  without snapshots remain readable but cannot reconstruct historic line amounts.
-- Legacy migration drift outside the integrated routes, including `Refund`, still
-  requires a separate data migration before those older workflows can be deployed.
-- Product photos and fonts use external providers. Image-load failures have a
-  fallback; production sellers can upload photographs into configured media storage.
-
-The existing [merchant API notes](server/store/README.md) document the underlying
-seller routes; they are mounted under `/api/v1/stores/` in the integrated runtime.
+- Dedicated monitoring stack (Grafana Loki, Alloy, Prometheus, Tempo) runs via
+  `server/monitoring/compose.yaml` with centralized dashboards at `http://127.0.0.1:3002`.
+- Product photos and media uploads are persisted in named volumes or S3-compatible
+  object storage (MinIO/AWS S3).

@@ -6,7 +6,7 @@ import { CartPage, CheckoutPage } from '@/components/cart';
 import { MerchantPage } from '@/components/merchant';
 import { HelpPage, PolicyPage } from '@/components/help';
 import { Loading } from '@/components/ui';
-import { AdminStaffPage } from '@/components/admin';
+import { AdminDashboardPage, AdminStaffPage } from '@/components/admin';
 
 export default async function Page({ params }: { params: Promise<{slug?: string[]}> }) {
   const { slug = [] } = await params;
@@ -21,6 +21,7 @@ export default async function Page({ params }: { params: Promise<{slug?: string[
   else if (slug[0] === 'account' && slug.length <= 2 && (!slug[1] || ['orders', 'addresses', 'profile'].includes(slug[1]))) content = <AccountPage section={slug[1]} />;
   else if (slug[0] === 'orders' && /^\d+$/.test(slug[1] || '') && slug.length === 2) content = <OrderPage id={slug[1]} />;
   else if (slug[0] === 'merchant' && slug.length <= 3 && (!slug[1] || ['products', 'orders', 'settings', 'new-store'].includes(slug[1])) && (!slug[2] || (slug[1] === 'products' && (slug[2] === 'new' || /^\d+$/.test(slug[2]))))) content = <MerchantPage segments={slug.slice(1)} />;
+  else if (slug[0] === 'admin' && slug.length === 1) content = <AdminDashboardPage />;
   else if (slug[0] === 'admin' && slug[1] === 'staff' && slug.length === 2) content = <AdminStaffPage />;
   else if (slug[0] === 'help' && slug.length === 1) content = <HelpPage />;
   else if (['privacy', 'terms'].includes(slug[0]) && slug.length === 1) content = <PolicyPage type={slug[0]} />;

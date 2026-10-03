@@ -17,4 +17,15 @@ export type StorePayout = { id: number; store: number; amount: string; status: '
 export type Dashboard = { inventory: { total: number; published: number; drafts: number; units: number; low_stock: number; out_of_stock: number }; orders: { total: number; by_status: {status: string; count: number}[] }; sales: { units: number; estimated_item_value: string }; wallet?: { gross_sales: string; platform_fee_percent: string; platform_fee_deducted: string; net_sales: string; in_review: string; cleared_total?: string; payouts_completed?: string; payouts_pending?: string; available_balance: string; refund_window_days: number }; orders_by_day: {date: string; count: number}[]; top_products: {product_id: number; product__title: string; units: number}[]; low_stock_products: { id: number; title: string; available: number}[] };
 export type NotificationItem = { id: number; level: 'success' | 'info' | 'warning' | 'error'; unread: boolean; verb: string; description?: string | null; timestamp: string; deleted: boolean; data?: Record<string, unknown> | null; actor?: { id?: number; type: string; label: string } | null; target?: { id?: number; type: string; label: string } | null; action_object?: { id?: number; type: string; label: string } | null };
 export type NotificationCounts = { unread: number; read: number; archived: number; total: number };
-
+export type AdminDashboardData = {
+  period: { from: string; to: string; days: number };
+  users: { total: number; active: number; staff: number; new: number };
+  stores: { total: number; active: number; blocked: number; new: number };
+  products: { total: number; published: number; hidden: number; out_of_stock: number; sponsored: number };
+  orders: { total: number; ordered: number; gross_total: string; by_status: { status: string; count: number }[] };
+  coupons: { total: number; active: number };
+  refunds: { total: number; accepted: number; pending: number };
+  marketers: { total: number };
+  recent_orders: { orderId: string; user: number; buyer_email: string; total: string; status: string; created: string; carrier?: string; tracking_number?: string }[];
+  top_stores: { id: number; name: string; username: string; status: string; products: number; orders: number }[];
+};

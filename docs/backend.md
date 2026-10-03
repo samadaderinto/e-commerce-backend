@@ -49,7 +49,24 @@ clients can use bearer tokens and the OpenAPI docs.
 Sellers create a store and pickup address, then create drafts, upload images,
 publish products, update pricing/stock/specifications and review seller-specific
 orders. Store moderation can block publishing. Product creation and update logic
-should continue to validate owner, store state, price and stock server-side.
+validates owner, store state, price and stock server-side.
+
+### Merchant escrow and payouts
+- **Platform Commission (4%)**: Automatically items and deducts a 4% platform fee (`PLATFORM_FEE_PERCENT = 4.00`) from gross item sales.
+- **7-Day Review Escrow**: Net sales from customer orders placed within the 7-day refund window (`REFUND_WINDOW_DAYS = 7`) are held in `in_review` status.
+- **Cleared Balance**: Once orders surpass the 7-day refund deadline, funds unlock to `cleared_net` and become available for merchant withdrawal requests via `/api/v1/stores/<id>/payouts/`.
+- **Fulfillment & USPS Tracking**: Merchants update carrier, tracking number, and milestone descriptions on store orders via `/api/v1/stores/<id>/orders/<order_id>/tracking/`, which triggers customer notifications and provides live tracking links.
+
+## ProAce User Wallet and 7-day refunds
+
+- **Customer Wallet (`/api/v1/wallet/`)**: Every registered customer has an integrated store balance for instant 1-click checkout purchases and instant store credit refund resolution.
+- **7-Day Refund Policy (`/api/v1/orders/<id>/refund/`)**: Customers can request refunds for physical items within 7 days of order placement. Refund destinations can be selected as ProAce Store Credit (instant wallet credit upon staff approval) or original payment method. Digital goods are non-refundable once delivered.
+
+## USPS Tracking Engine
+
+- `server/payment/usps.py`: Integrates with the USPS XML TrackV2 API with simulated fallback for local/offline testing.
+- Orders dynamically generate live tracking links (`https://tools.usps.com/go/TrackConfirmAction?tLabels=<tracking_number>`).
+- Live tracking milestones are queryable by customers, merchants, staff, and superusers via `/api/v1/orders/<id>/tracking/`.
 
 ## Search
 
@@ -57,7 +74,7 @@ Public catalog search uses Elasticsearch when `ELASTICSEARCH_ENABLED=true`.
 Product saves and deletes sync to Elasticsearch through Django signals on a
 best-effort basis. If Elasticsearch is disabled or a search request fails, the
 catalog falls back to database `icontains` filtering for title, brand and
-description.
+description. Multi-match queries apply field weights (`title^4`, `brand^3`, `category^2`, `tags^2`, `description`) and `fuzziness: "AUTO"`.
 
 Search files:
 

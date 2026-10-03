@@ -7,16 +7,21 @@ TypeScript, React 19, React Query and shared UI components.
 
 - `client/src/app/layout.tsx`: app shell root, global metadata and providers.
 - `client/src/app/[[...slug]]/page.tsx`: catch-all page router for storefront,
-  account, merchant and help views.
+  account, merchant, admin, and help views.
 - `client/src/app/api/*`: same-origin API proxy routes that talk to Django.
-- `client/src/components/shell.tsx`: shared navigation and layout shell.
+- `client/src/components/shell.tsx`: shared navigation, search bar, and layout shell.
 - `client/src/components/storefront.tsx`: catalog, product detail and shopping
   storefront views.
-- `client/src/components/cart.tsx`: cart and checkout UI.
-- `client/src/components/account.tsx`: auth, profile, addresses and orders UI.
-- `client/src/components/merchant.tsx`: seller onboarding, dashboard, products,
-  orders and store settings.
-- `client/src/components/ui.tsx`: reusable controls and small primitives.
+- `client/src/components/cart.tsx`: cart and multi-method checkout UI (COD, ProAce Wallet, Stripe).
+- `client/src/components/account.tsx`: auth, profile, addresses, ProAce Wallet ledger,
+  order details with live USPS package tracking, and 7-day refund submission form.
+- `client/src/components/merchant.tsx`: seller onboarding, dashboard with daily order trend
+  charts, 7-day escrow financial breakdown, 4% platform fee calculation, payout requests,
+  products, inventory health, and order fulfillment modal.
+- `client/src/components/admin.tsx`: `AdminDashboardPage` (platform-wide business insights,
+  order fulfillment distribution bar chart, store leaderboards) and `AdminStaffPage`
+  (staff account creation, permission controls, and blocking).
+- `client/src/components/ui.tsx`: reusable controls, product cards, loading spinners, and small primitives.
 - `client/src/lib/api.ts`: browser API helper, error normalization, money
   formatting and category constants.
 - `client/src/lib/types.ts`: shared frontend DTO and domain types.
