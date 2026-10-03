@@ -22,7 +22,15 @@ class OrdersSerializer(serializers.ModelSerializer):
             "delivery",
             "ordered_date",
             "ordered",
-            "payment_type"
+            "payment_type",
+            "carrier",
+            "tracking_number",
+            "tracking_url",
+            "shipped_at",
+            "delivered_at",
+            "tracking_events",
+            "items_snapshot",
+            "address_snapshot",
         ]
        
 

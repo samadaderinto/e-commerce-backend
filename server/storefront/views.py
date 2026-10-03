@@ -415,10 +415,23 @@ class CartView(APIView):
 
 
 def order_data(order):
-    return {'id': order.pk, 'reference': order.orderId, 'status': order.status,
-            'created': order.created, 'total': str(order.total), 'subtotal': str(order.subtotal),
-            'payment_type': order.payment_type, 'items': order.items_snapshot,
-            'address': order.address_snapshot}
+    return {
+        'id': order.pk,
+        'reference': order.orderId,
+        'status': order.status,
+        'created': order.created,
+        'total': str(order.total),
+        'subtotal': str(order.subtotal),
+        'payment_type': order.payment_type,
+        'carrier': getattr(order, 'carrier', 'USPS') or 'USPS',
+        'tracking_number': getattr(order, 'tracking_number', '') or '',
+        'tracking_url': getattr(order, 'tracking_url', '') or '',
+        'shipped_at': getattr(order, 'shipped_at', None),
+        'delivered_at': getattr(order, 'delivered_at', None),
+        'tracking_events': getattr(order, 'tracking_events', []) or [],
+        'items': order.items_snapshot,
+        'address': order.address_snapshot,
+    }
 
 
 class OrdersView(APIView):
@@ -431,8 +444,36 @@ class OrdersView(APIView):
 class OrderDetailView(APIView):
     @extend_schema(responses=OrderSerializer)
     def get(self, request, pk):
-        orders = Order.objects.filter(user=request.user).order_by('-created')
+        if request.user.is_staff or request.user.is_superuser:
+            orders = Order.objects.all().order_by('-created')
+        else:
+            orders = Order.objects.filter(user=request.user).order_by('-created')
         return Response(order_data(get_object_or_404(orders, pk=pk)))
+
+
+class OrderTrackingView(APIView):
+    @extend_schema(responses={200: OpenApiTypes.OBJECT}, description="Get real-time tracking updates for an order.")
+    def get(self, request, pk):
+        if request.user.is_staff or request.user.is_superuser:
+            orders = Order.objects.all()
+        else:
+            orders = Order.objects.filter(user=request.user)
+        order = get_object_or_404(orders, pk=pk)
+        from payment.usps import track_usps_shipment
+        tracking_info = track_usps_shipment(order.tracking_number)
+        return Response({
+            'order_id': order.pk,
+            'reference': order.orderId,
+            'status': order.status,
+            'carrier': order.carrier or 'USPS',
+            'tracking_number': order.tracking_number or '',
+            'tracking_url': order.tracking_url or '',
+            'shipped_at': order.shipped_at,
+            'delivered_at': order.delivered_at,
+            'tracking_events': order.tracking_events or [],
+            'live_tracking': tracking_info,
+        })
+
 
 
 class UserWalletView(APIView):

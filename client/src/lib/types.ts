@@ -5,8 +5,10 @@ export type Address = { id: number; address: string; city: string; state: string
 export type CartLine = { product: Product; quantity: number; total: string; purchasable: boolean };
 export type Cart = { id?: number; items: CartLine[]; subtotal: string; shipping: string; total: string };
 export type ShippingRate = { service_id: string; name: string; description: string; amount: string; is_default: boolean };
-export type Order = { id: number; reference: string; status: string; created: string; total: string; subtotal: string; payment_type: string; items: { product: number; title: string; image: string; quantity: number; unit_price: string; is_digital?: boolean; download_url?: string }[]; address: Address };
+export type TrackingEvent = { status: string; description: string; timestamp: string };
+export type Order = { id: number; reference: string; status: string; created: string; total: string; subtotal: string; payment_type: string; carrier?: string; tracking_number?: string; tracking_url?: string; shipped_at?: string | null; delivered_at?: string | null; tracking_events?: TrackingEvent[]; items: { product: number; title: string; image: string; quantity: number; unit_price: string; is_digital?: boolean; download_url?: string }[]; address: Address };
 export type Store = { id: number; name: string; username: string; status: 'pending' | 'active' | 'blocked'; verified_at?: string | null };
+
 export type MerchantProduct = { id: number; title: string; description: string; category: string; price: string; available: number; discount: number; visibility: boolean; brand: string; image_url: string; images: {id: number; image: string}[]; tags: string[]; sales: number; is_digital: boolean; digital_file_url: string; weight?: string };
 export type Page<T> = { count: number; results: T[]; next?: string | null; previous?: string | null; pages?: number; page?: number };
 export type UserWalletTransaction = { id: number; transaction_type: 'credit' | 'debit'; amount: string; source: string; description: string; reference: string; created: string };

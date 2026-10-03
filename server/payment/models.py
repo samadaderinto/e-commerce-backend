@@ -134,6 +134,19 @@ class Order(DatesMixin):
     address_snapshot = models.JSONField(default=dict, blank=True)
     checkout_key = models.UUIDField(null=True, blank=True, unique=True)
     stripe_session_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    carrier = models.CharField(max_length=50, default="USPS", blank=True)
+    tracking_number = models.CharField(max_length=100, blank=True, default="")
+    shipped_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    tracking_events = models.JSONField(default=list, blank=True)
+
+    @property
+    def tracking_url(self) -> str:
+        if not self.tracking_number:
+            return ""
+        if self.carrier.upper() == "USPS":
+            return f"https://tools.usps.com/go/TrackConfirmAction?tLabels={self.tracking_number}"
+        return ""
     
     def save(self, *args, **kwargs) -> None:
         if not self.orderId:
@@ -145,4 +158,5 @@ class Order(DatesMixin):
         while Order.objects.filter(orderId=order_id).exists():
             order_id = generate(size=size)
         return order_id
+
 

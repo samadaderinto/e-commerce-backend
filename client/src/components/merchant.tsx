@@ -4,14 +4,28 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, ChartNoAxesCombined, Check, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, LayoutDashboard, Package, Plus, Search, Settings, ShoppingBag, Store as StoreIcon, Upload, WalletCards, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, ChartNoAxesCombined, Check, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, LayoutDashboard, Package, Plus, Search, Settings, ShoppingBag, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
-import type { Dashboard, MerchantProduct, Page, Store, StorePayout } from '@/lib/types';
+import type { Dashboard, MerchantProduct, Page, Store, StorePayout, TrackingEvent } from '@/lib/types';
 import { useShop } from './providers';
 import { Gate } from './account';
 import { Empty, ErrorState, Field, Loading, ProductImage, Status } from './ui';
 
-type MerchantOrder = { id: number; reference: string; status: string; created: string; ordered: boolean; items: {product: number; title: string; quantity: number}[] };
+type MerchantOrder = {
+  id: number;
+  reference: string;
+  status: string;
+  created: string;
+  ordered: boolean;
+  carrier?: string;
+  tracking_number?: string;
+  tracking_url?: string;
+  shipped_at?: string | null;
+  delivered_at?: string | null;
+  tracking_events?: TrackingEvent[];
+  items: { product: number; title: string; quantity: number }[];
+};
+
 
 export function MerchantPage({ segments }: { segments: string[] }) {
   const { user } = useShop();
@@ -136,17 +150,49 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
   return <section className="merchant-section"><div className="section-heading"><h2>Image gallery</h2><label className="button secondary upload-label"><Upload size={17} />{uploading ? 'Uploading…' : 'Upload image'}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={uploading} onChange={async event => { const file = event.target.files?.[0]; if (!file) return; if (file.size > 5 * 1024 * 1024) { notify('Images must be 5 MB or smaller.', true); return; } setUploading(true); const form = new FormData(); form.append('image', file); try { await api(`${base}/images`, 'POST', form); await client.invalidateQueries({ queryKey: ['merchant-product'] }); notify('Image uploaded'); } catch (error) { notify((error as Error).message, true); } finally { setUploading(false); event.target.value = ''; } }} /></label></div><div className="asset-gallery">{product.images.map(image => <div key={image.id}><ProductImage src={image.image} alt={product.title} /><button className="icon-button" aria-label="Delete image" onClick={async () => { try { await api(`${base}/images/${image.id}`, 'DELETE'); await client.invalidateQueries({ queryKey: ['merchant-product'] }); } catch (error) { notify((error as Error).message, true); } }}><X size={16} /></button></div>)}</div><details className="spec-editor"><summary>Product specifications</summary>{specs.isLoading ? <Loading /> : specs.error ? <ErrorState error={specs.error} /> : <form className="form-stack" onSubmit={async event => { event.preventDefault(); const payload = Object.fromEntries(new FormData(event.currentTarget)); try { await api(`${base}/specifications`, 'PUT', payload); notify('Specifications saved'); await specs.refetch(); } catch (error) { notify((error as Error).message, true); } }}><div className="form-row"><Field label="SKU / serial number"><input name="serial" maxLength={25} required defaultValue={specs.data?.serial} /></Field><Field label="Colour"><input name="color" maxLength={25} required defaultValue={specs.data?.color} /></Field></div><Field label="Attributes"><input name="attributes" maxLength={250} required defaultValue={specs.data?.attributes} /></Field><div className="form-row">{['height', 'width', 'breadth', 'weight'].map(field => <Field label={field.charAt(0).toUpperCase() + field.slice(1)} key={field}><input type="number" name={field} min="0.01" max="99.99" step="0.01" required defaultValue={specs.data?.[field]} /></Field>)}</div><button className="button">Save specifications</button></form>}</details></section>;
 }
 
-function MerchantOrderTable({ orders }: { orders: MerchantOrder[] }) {
+function MerchantOrderTable({ orders, storeId, onUpdated }: { orders: MerchantOrder[]; storeId?: number; onUpdated?: () => void }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [trackingOrder, setTrackingOrder] = useState<MerchantOrder | null>(null);
+  const [trackingNumber, setTrackingNumber] = useState('');
+  const [carrier, setCarrier] = useState('USPS');
+  const [orderStatus, setOrderStatus] = useState('shipped');
+  const [busy, setBusy] = useState(false);
+  const { notify } = useShop();
+
+  async function submitTracking(event: FormEvent) {
+    event.preventDefault();
+    if (!storeId || !trackingOrder) return;
+    setBusy(true);
+    try {
+      await api(`stores/${storeId}/orders/${trackingOrder.id}/tracking`, 'POST', {
+        tracking_number: trackingNumber,
+        carrier,
+        status: orderStatus,
+      });
+      notify(`Order #${trackingOrder.reference} updated to ${orderStatus}`);
+      setTrackingOrder(null);
+      setTrackingNumber('');
+      onUpdated?.();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!orders.length) return <div className="empty-state"><ShoppingBag size={30} /><h2>The first of many.</h2><p>Your customer orders will appear here.</p></div>;
-  return <div className="table-scroll"><table><thead><tr><th>Order</th><th>Date</th><th>Products</th><th>Units</th><th>Status</th><th /></tr></thead><tbody>{orders.map(order => <tr key={order.id}><td><strong>{order.reference}</strong></td><td>{new Date(order.created).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'})}</td><td>{expanded === order.id ? order.items.map(item => <p key={item.product}>{item.title} × {item.quantity}</p>) : `${order.items[0]?.title || 'Order'}${order.items.length > 1 ? ` +${order.items.length - 1}` : ''}`}</td><td>{order.items.reduce((sum, item) => sum + item.quantity, 0)}</td><td><Status value={order.status} /></td><td><button className="icon-button" aria-label={`View items for ${order.reference}`} title="View order items" onClick={() => setExpanded(expanded === order.id ? null : order.id)}><Eye size={17} /></button></td></tr>)}</tbody></table></div>;
+  return <>
+    <div className="table-scroll"><table><thead><tr><th>Order</th><th>Date</th><th>Products</th><th>Units</th><th>Tracking</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{orders.map(order => <tr key={order.id}><td><strong>{order.reference}</strong></td><td>{new Date(order.created).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'})}</td><td>{expanded === order.id ? order.items.map(item => <p key={item.product}>{item.title} × {item.quantity}</p>) : `${order.items[0]?.title || 'Order'}${order.items.length > 1 ? ` +${order.items.length - 1}` : ''}`}</td><td>{order.items.reduce((sum, item) => sum + item.quantity, 0)}</td><td>{order.tracking_number ? <small style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Truck size={13} color="#0066cc" />{order.carrier || 'USPS'}: {order.tracking_number}</small> : <span className="muted" style={{ fontSize: '0.8rem' }}>No tracking</span>}</td><td><Status value={order.status} /></td><td style={{ whiteSpace: 'nowrap' }}><button className="icon-button" aria-label={`View items for ${order.reference}`} title="View order items" onClick={() => setExpanded(expanded === order.id ? null : order.id)}><Eye size={17} /></button>{storeId && ['pending', 'confirmed', 'shipped'].includes(order.status) && <button className="button secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem', marginLeft: '0.4rem' }} onClick={() => { setTrackingOrder(order); setTrackingNumber(order.tracking_number || ''); setCarrier(order.carrier || 'USPS'); setOrderStatus(order.status === 'pending' ? 'shipped' : order.status); }}><Truck size={13} />Ship / Track</button>}</td></tr>)}</tbody></table></div>
+    {trackingOrder && <div className="admin-dialog-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setTrackingOrder(null); }}><section className="admin-dialog" role="dialog" aria-modal="true" aria-labelledby="tracking-title"><div className="admin-dialog-head"><div><span className="eyebrow green">FULFILLMENT & TRACKING</span><h2 id="tracking-title">Update Order #{trackingOrder.reference}</h2></div><button className="icon-button" aria-label="Close" onClick={() => setTrackingOrder(null)}><X size={19} /></button></div><form className="form-stack" onSubmit={submitTracking}><div className="form-row"><Field label="Shipping Carrier"><select value={carrier} onChange={e => setCarrier(e.target.value)}><option value="USPS">USPS (United States Postal Service)</option><option value="UPS">UPS</option><option value="FedEx">FedEx</option><option value="DHL">DHL</option></select></Field><Field label="Order Status"><select value={orderStatus} onChange={e => setOrderStatus(e.target.value)}><option value="confirmed">Confirmed</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option></select></Field></div><Field label="USPS Tracking Number"><input required value={trackingNumber} onChange={e => setTrackingNumber(e.target.value)} placeholder="e.g. 9400 1000 0000 0000 0000 00" /></Field><div className="form-actions"><button type="button" className="button secondary" onClick={() => setTrackingOrder(null)}>Cancel</button><button className="button" disabled={busy}>{busy ? 'Updating…' : 'Save tracking & notify customer'}</button></div></form></section></div>}
+  </>;
 }
 
 function MerchantOrders({ store }: { store: Store }) {
-  const [status, setStatus] = useState(''); const [offset, setOffset] = useState(0);
+  const [status, setStatus] = useState(''); const [offset, setOffset] = useState(0); const client = useQueryClient();
   const orders = useQuery({ queryKey: ['merchant-orders', store.id, status, offset], queryFn: () => api<Page<MerchantOrder>>(`stores/${store.id}/orders?status=${status}&limit=20&offset=${offset}`) });
-  return <><div className="merchant-heading"><div><h1>Every order, a good beginning.</h1><p>Follow your customers’ finds from your store.</p></div><select aria-label="Filter orders by status" value={status} onChange={event => { setStatus(event.target.value); setOffset(0); }}><option value="">All statuses</option>{['pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'].map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}</select></div>{orders.isLoading ? <Loading /> : orders.error ? <ErrorState error={orders.error} retry={() => orders.refetch()} /> : <><MerchantOrderTable orders={orders.data?.results || []} /><div className="table-pagination"><span>{orders.data?.count || 0} orders</span><div><button className="icon-button" disabled={!offset} aria-label="Previous orders" onClick={() => setOffset(offset - 20)}><ChevronLeft size={18} /></button><button className="icon-button" disabled={offset + 20 >= (orders.data?.count || 0)} aria-label="Next orders" onClick={() => setOffset(offset + 20)}><ChevronRight size={18} /></button></div></div></>}</>;
+  return <><div className="merchant-heading"><div><h1>Every order, a good beginning.</h1><p>Follow your customers’ finds from your store.</p></div><select aria-label="Filter orders by status" value={status} onChange={event => { setStatus(event.target.value); setOffset(0); }}><option value="">All statuses</option>{['pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'].map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}</select></div>{orders.isLoading ? <Loading /> : orders.error ? <ErrorState error={orders.error} retry={() => orders.refetch()} /> : <><MerchantOrderTable orders={orders.data?.results || []} storeId={store.id} onUpdated={() => { client.invalidateQueries({ queryKey: ['merchant-orders', store.id] }); client.invalidateQueries({ queryKey: ['merchant-recent', store.id] }); client.invalidateQueries({ queryKey: ['dashboard', store.id] }); }} /><div className="table-pagination"><span>{orders.data?.count || 0} orders</span><div><button className="icon-button" disabled={!offset} aria-label="Previous orders" onClick={() => setOffset(offset - 20)}><ChevronLeft size={18} /></button><button className="icon-button" disabled={offset + 20 >= (orders.data?.count || 0)} aria-label="Next orders" onClick={() => setOffset(offset + 20)}><ChevronRight size={18} /></button></div></div></>}</>;
 }
+
 
 function MerchantSettings({ store }: { store: Store }) {
   const { notify } = useShop(); const client = useQueryClient(); const [busy, setBusy] = useState(false);

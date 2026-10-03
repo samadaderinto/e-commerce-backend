@@ -195,11 +195,76 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         page = self.paginate_queryset(orders)
         data = [{
             'id': order.pk, 'reference': order.orderId, 'status': order.status,
+            'carrier': order.carrier or 'USPS',
+            'tracking_number': order.tracking_number or '',
+            'tracking_url': order.tracking_url or '',
+            'shipped_at': order.shipped_at,
+            'delivered_at': order.delivered_at,
+            'tracking_events': order.tracking_events or [],
             'created': order.created, 'ordered': order.ordered,
             'items': [{'product': item.product_id, 'title': item.product.title,
                        'quantity': item.quantity} for item in order.cart.merchant_items],
         } for order in page]
         return self.get_paginated_response(data)
+
+    @action(detail=True, methods=['patch', 'post'], url_path=r'orders/(?P<order_pk>\d+)/tracking')
+    @transaction.atomic
+    def update_order_tracking(self, request, pk=None, order_pk=None):
+        store = self.get_object()
+        order = get_object_or_404(self.store_orders(store).select_for_update(), pk=order_pk)
+        tracking_number = str(request.data.get('tracking_number', '')).strip()
+        carrier = str(request.data.get('carrier', 'USPS')).strip() or 'USPS'
+        new_status = request.data.get('status')
+
+        if tracking_number:
+            order.tracking_number = tracking_number
+            order.carrier = carrier
+            if not order.shipped_at:
+                order.shipped_at = timezone.now()
+            if order.status in ('pending', 'confirmed'):
+                order.status = 'shipped'
+
+        if new_status and new_status in dict(Order.ORDER_STATUS_CHOICE):
+            order.status = new_status
+            if new_status == 'shipped' and not order.shipped_at:
+                order.shipped_at = timezone.now()
+            elif new_status == 'delivered' and not order.delivered_at:
+                order.delivered_at = timezone.now()
+
+        event_description = request.data.get('event_description')
+        if event_description or tracking_number:
+            events = list(order.tracking_events or [])
+            events.append({
+                'status': order.status,
+                'description': event_description or f"Package marked {order.status.upper()} via {carrier} (Tracking #{tracking_number or 'N/A'})",
+                'timestamp': timezone.now().isoformat(),
+            })
+            order.tracking_events = events
+
+        order.save(update_fields=['status', 'carrier', 'tracking_number', 'shipped_at', 'delivered_at', 'tracking_events', 'updated'])
+
+        from notification.views import create_notification
+        create_notification(
+            recipient=order.user,
+            actor=store.user,
+            target=order,
+            verb=f"Order #{order.orderId} {order.status.title()}",
+            description=f"Your order status has been updated to {order.status}. Carrier: {order.carrier}, Tracking #{order.tracking_number or 'N/A'}",
+            data={"event": "order_tracking_update", "order_id": order.pk, "tracking_number": order.tracking_number, "status": order.status},
+        )
+
+        return Response({
+            'id': order.pk,
+            'reference': order.orderId,
+            'status': order.status,
+            'carrier': order.carrier,
+            'tracking_number': order.tracking_number,
+            'tracking_url': order.tracking_url,
+            'shipped_at': order.shipped_at,
+            'delivered_at': order.delivered_at,
+            'tracking_events': order.tracking_events,
+        })
+
 
     @action(detail=True, methods=['get'])
     def dashboard(self, request, pk=None):

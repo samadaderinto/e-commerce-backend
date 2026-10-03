@@ -6,7 +6,7 @@ from rest_framework.permissions import AllowAny
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from .views import (
     AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView,
-    OrderRefundView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
+    OrderRefundView, OrderTrackingView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, ReviewsView, WishlistView,
 )
 from store.views import StoreReviewViewSet
@@ -46,9 +46,11 @@ urlpatterns = [
     path('api/v1/notifications/', include('notification.urls')),
     path('api/v1/orders/', OrdersView.as_view()),
     path('api/v1/orders/<int:pk>/', OrderDetailView.as_view()),
+    path('api/v1/orders/<int:pk>/tracking/', OrderTrackingView.as_view()),
     path('api/v1/orders/<int:pk>/refund/', OrderRefundView.as_view()),
     path('api/v1/stores/', include('store.urls')),
 ]
+
 if settings.LOCAL_PROFILING_ENABLED:
     urlpatterns += [path('silk/', include('silk.urls', namespace='silk'))]
 if settings.DEBUG:

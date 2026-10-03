@@ -12,7 +12,9 @@ from rest_framework.test import APIClient
 
 from cart.models import CartItem
 from core.models import Address, User
+from core.services import credit_user_wallet
 from notification.models import NotificationDelivery
+
 from notification.tasks import deliver_notification_task
 from payment.models import Coupon, CouponRedemption, Order
 from product.models import Product
@@ -554,4 +556,52 @@ class StorefrontTests(TestCase):
         }, format='json')
         self.assertEqual(staff_payout_resp.status_code, 200)
         self.assertEqual(staff_payout_resp.data['payout']['status'], 'completed')
+
+    def test_order_tracking_workflow(self):
+        # 1. Buyer places order
+        self.add(1)
+        checkout_resp = self.checkout()
+        self.assertEqual(checkout_resp.status_code, 201)
+        order_id = checkout_resp.data['id']
+
+        # 2. Store owner updates tracking number and ships order
+        self.client.force_authenticate(self.seller)
+        tracking_resp = self.client.post(f'/api/v1/stores/{self.store.pk}/orders/{order_id}/tracking/', {
+            'tracking_number': '9400100000000000000001',
+            'carrier': 'USPS',
+            'status': 'shipped',
+        }, format='json')
+        self.assertEqual(tracking_resp.status_code, 200)
+        self.assertEqual(tracking_resp.data['status'], 'shipped')
+        self.assertEqual(tracking_resp.data['tracking_number'], '9400100000000000000001')
+        self.assertIn('TrackConfirmAction', tracking_resp.data['tracking_url'])
+
+        # 3. Buyer views order tracking
+        self.client.force_authenticate(self.buyer)
+        track_view_resp = self.client.get(f'/api/v1/orders/{order_id}/tracking/')
+        self.assertEqual(track_view_resp.status_code, 200)
+        self.assertEqual(track_view_resp.data['tracking_number'], '9400100000000000000001')
+        self.assertIn('live_tracking', track_view_resp.data)
+
+        # 4. Staff member can view tracking and order details for any order
+        staff_member = User.objects.create(email='staff_tracker@proace.com', is_staff=True, is_active=True)
+        self.client.force_authenticate(staff_member)
+        staff_track_resp = self.client.get(f'/api/v1/orders/{order_id}/tracking/')
+        self.assertEqual(staff_track_resp.status_code, 200)
+        self.assertEqual(staff_track_resp.data['tracking_number'], '9400100000000000000001')
+
+        staff_detail_resp = self.client.get(f'/api/v1/orders/{order_id}/')
+        self.assertEqual(staff_detail_resp.status_code, 200)
+        self.assertEqual(staff_detail_resp.data['tracking_number'], '9400100000000000000001')
+
+        # 5. Superuser / Admin can also view tracking and order details
+        super_admin = User.objects.create(email='super_admin@proace.com', is_superuser=True, is_staff=True, is_active=True)
+        self.client.force_authenticate(super_admin)
+        admin_track_resp = self.client.get(f'/api/v1/orders/{order_id}/tracking/')
+        self.assertEqual(admin_track_resp.status_code, 200)
+        self.assertEqual(admin_track_resp.data['tracking_number'], '9400100000000000000001')
+
+
+
+
 

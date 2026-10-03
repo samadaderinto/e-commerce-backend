@@ -221,8 +221,15 @@ class OrderSerializer(serializers.Serializer):
     total = serializers.DecimalField(max_digits=15, decimal_places=2)
     subtotal = serializers.DecimalField(max_digits=15, decimal_places=2)
     payment_type = serializers.CharField()
+    carrier = serializers.CharField(required=False, default='USPS')
+    tracking_number = serializers.CharField(required=False, default='')
+    tracking_url = serializers.CharField(required=False, default='')
+    shipped_at = serializers.DateTimeField(required=False, allow_null=True)
+    delivered_at = serializers.DateTimeField(required=False, allow_null=True)
+    tracking_events = serializers.ListField(required=False, child=serializers.DictField(), default=list)
     items = OrderItemSnapshotSerializer(many=True)
     address = OrderAddressSnapshotSerializer()
+
 
 
 class ProductIdRequestSerializer(serializers.Serializer):
