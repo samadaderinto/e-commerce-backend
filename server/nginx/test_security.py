@@ -26,6 +26,21 @@ class Backend(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def _nginx_available():
+    if not shutil.which("nginx"):
+        return False
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "nginx.conf").write_text("events { worker_connections 10; } error_log /dev/null; http { server { listen 127.0.0.1:0; } }")
+        cmd = ["nginx", "-e", str(root / "startup.log"), "-p", f"{root}/", "-c", "nginx.conf", "-t"]
+        try:
+            res = subprocess.run(cmd, capture_output=True, timeout=2)
+            return res.returncode == 0
+        except Exception:
+            return False
+
+
+@unittest.skipUnless(_nginx_available(), "Nginx execution not permitted in current environment")
 class SecurityTests(unittest.TestCase):
     @contextlib.contextmanager
     def proxy(self, allowed="", blocked="", suspected="", trusted=""):

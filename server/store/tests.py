@@ -286,3 +286,32 @@ class MerchantTests(TestCase):
         self.assertEqual(response.data['count'], 1)
         client.credentials(HTTP_AUTHORIZATION='Bearer invalid-token')
         self.assertEqual(client.get(self.products_url).status_code, 401)
+
+    def test_merchant_can_onboard_digital_products_and_ebooks(self):
+        # Digital product without download URL fails validation
+        payload = {
+            'title': 'Mastering Python E-Book',
+            'description': 'A comprehensive digital guide to Python mastery.',
+            'category': 'books',
+            'price': '29.99',
+            'available': 100,
+            'is_digital': True,
+        }
+        response = self.client.post(self.products_url, payload, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('digital_file_url', str(response.data))
+
+        # Digital product with valid download URL succeeds
+        payload['digital_file_url'] = 'https://downloads.proace.test/ebooks/python-guide.pdf'
+        response = self.client.post(self.products_url, payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertTrue(response.data['is_digital'])
+        self.assertEqual(response.data['digital_file_url'], 'https://downloads.proace.test/ebooks/python-guide.pdf')
+        self.assertEqual(response.data['category'], 'books')
+        product_id = response.data['id']
+
+        # Product is stored as digital in DB
+        product = Product.objects.get(pk=product_id)
+        self.assertTrue(product.is_digital)
+        self.assertEqual(product.digital_file_url, 'https://downloads.proace.test/ebooks/python-guide.pdf')
+

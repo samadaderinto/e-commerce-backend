@@ -331,6 +331,14 @@ def active_cart(user):
     return cart if cart else Cart.objects.create(user=user)
 
 
+def calculate_shipping(subtotal, has_physical_items):
+    if not has_physical_items:
+        return Decimal('0')
+    threshold = getattr(settings, 'FREE_SHIPPING_THRESHOLD', Decimal('100000'))
+    flat_fee = getattr(settings, 'FLAT_SHIPPING_FEE', Decimal('2500'))
+    return Decimal('0') if subtotal >= threshold else flat_fee
+
+
 def cart_data(cart, request):
     items = cart.cart_items.select_related('product__store').prefetch_related('product__images', 'product__tags')
     rows = [{'product': CatalogSerializer(item.product, context={'request': request}).data,
@@ -340,7 +348,7 @@ def cart_data(cart, request):
              and item.product.store.verified_at is not None and item.quantity <= item.product.available} for item in items]
     subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
     has_physical_items = any(not row['product']['is_digital'] for row in rows)
-    shipping = Decimal('0') if subtotal >= 100000 or not rows or not has_physical_items else Decimal('2500')
+    shipping = calculate_shipping(subtotal, has_physical_items and bool(rows))
     return {'id': cart.pk, 'items': rows, 'subtotal': str(subtotal), 'shipping': str(shipping), 'total': str(subtotal + shipping)}
 
 
@@ -473,7 +481,7 @@ class CheckoutView(APIView):
             product.save(update_fields=['available', 'sales', 'updated'])
             transaction.on_commit(lambda product=product: invalidate_catalog(product))
         has_physical_items = any(not row['is_digital'] for row in snapshots)
-        shipping = Decimal('0') if subtotal >= 100000 or not has_physical_items else Decimal('2500')
+        shipping = calculate_shipping(subtotal, has_physical_items)
         delivery = DeliveryInfo.objects.create(user=request.user, address=address, method='home delivery',
                                                 delivery_type='standard', total=int(shipping))
         order = Order.objects.create(
@@ -525,7 +533,7 @@ class WalletCheckoutSessionView(CheckoutView):
             coupon = Coupon.objects.filter(code__iexact=code, active=True, valid_from__lte=timezone.now(), valid_to__gte=timezone.now()).first()
             discount = calculate_coupon_discount(coupon, request.user, coupon_lines, subtotal, reserve=False)
         has_physical_items = any(not row['is_digital'] for row in snapshots)
-        shipping = Decimal('0') if subtotal >= 100000 or not has_physical_items else Decimal('2500')
+        shipping = calculate_shipping(subtotal, has_physical_items)
         total = subtotal - discount + shipping
         methods = [
             configured_method.strip()
@@ -551,6 +559,7 @@ class WalletCheckoutConfirmView(CheckoutView):
     @extend_schema(request=serializers.Serializer, responses=OrderSerializer)
     @transaction.atomic
     def post(self, request):
+        User.objects.select_for_update().get(pk=request.user.pk)
         session_id = str(request.data.get('session_id', '')).strip()
         if stripe is None or not session_id or not getattr(settings, 'STRIPE_SECRET', ''):
             raise ValidationError({'detail': 'Invalid wallet session.'})

@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const API = process.env.API_URL || 'http://127.0.0.1:8000/api/v1';
-const options = { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax' as const, path: '/' };
 
 async function handler(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
+  const isSecure = request.nextUrl.protocol === 'https:' || request.headers.get('x-forwarded-proto') === 'https';
+  const options = { httpOnly: true, secure: isSecure, sameSite: 'lax' as const, path: '/' };
   const { path } = await params;
   if (path.some(part => !/^[a-zA-Z0-9_-]+$/.test(part))) return NextResponse.json({ detail: 'Invalid route.' }, { status: 400 });
   if (!['GET', 'HEAD'].includes(request.method)) {

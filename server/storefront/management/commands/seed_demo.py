@@ -46,7 +46,19 @@ class Command(BaseCommand):
                 user = User.objects.create_user(email=email, password=options['password'], first_name=first, last_name='Demo', phone1='+2348012345678')
             users.append(user)
         buyer, seller = users
-        store, _ = Store.objects.get_or_create(username='proace-select', defaults={'user': seller, 'name': 'Proace Select'})
+        store, _ = Store.objects.get_or_create(
+            username='proace-select',
+            defaults={
+                'user': seller,
+                'name': 'Proace Select',
+                'status': Store.STATUS_ACTIVE,
+                'verified_at': timezone.now(),
+            },
+        )
+        if store.status != Store.STATUS_ACTIVE or store.verified_at is None:
+            store.status = Store.STATUS_ACTIVE
+            store.verified_at = timezone.now()
+            store.save(update_fields=['status', 'verified_at'])
         StoreInfo.objects.get_or_create(store=store, defaults={'email': 'seller@proace.local', 'bio': 'Considered essentials for everyday life.'})
         StoreAddress.objects.get_or_create(store=store, is_default=True, defaults={'address': '401 E Jackson Street', 'city': 'Tampa', 'state': 'Florida', 'country': 'United States', 'zip': '33602'})
         address, _ = Address.objects.get_or_create(user=buyer, address='100 N Tampa Street', defaults={'city': 'Tampa', 'state': 'Florida', 'country': 'United States', 'zip': '33602'})
