@@ -231,3 +231,7 @@ class ProductIdRequestSerializer(serializers.Serializer):
 
 class CartMutationRequestSerializer(ProductIdRequestSerializer):
     quantity = serializers.IntegerField(min_value=1, max_value=1000, required=False)
+
+
+class RefundRequestSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500, required=False, default='Customer requested return')

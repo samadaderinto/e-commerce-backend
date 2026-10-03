@@ -1,6 +1,7 @@
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum
 from django.db.models.functions import TruncDate
@@ -217,6 +218,26 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             output_field=DecimalField(max_digits=24, decimal_places=2),
         )
         totals = items.aggregate(units=Sum('quantity'), value=Sum(line_value))
+        refund_window = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
+        cutoff = timezone.now() - timedelta(days=refund_window)
+        fee_rate = getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')) / Decimal('100.0')
+
+        in_review_orders = sales_orders.filter(created__gt=cutoff)
+        in_review_items = CartItem.objects.filter(product__store=store, cart__in=in_review_orders.values('cart_id'))
+        in_review_totals = in_review_items.aggregate(value=Sum(line_value))
+        in_review_gross = in_review_totals['value'] or Decimal('0.00')
+        in_review_net = (in_review_gross * (Decimal('1.00') - fee_rate)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        cleared_orders = sales_orders.filter(created__lte=cutoff)
+        cleared_items = CartItem.objects.filter(product__store=store, cart__in=cleared_orders.values('cart_id'))
+        cleared_totals = cleared_items.aggregate(value=Sum(line_value))
+        cleared_gross = cleared_totals['value'] or Decimal('0.00')
+        cleared_net = (cleared_gross * (Decimal('1.00') - fee_rate)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+        gross_value = totals['value'] or Decimal('0.00')
+        platform_fee = (gross_value * fee_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        net_value = (gross_value - platform_fee).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
         inventory = products.aggregate(
             total=Count('id'), published=Count('id', filter=Q(visibility=True)),
             drafts=Count('id', filter=Q(visibility=False)),
@@ -236,6 +257,15 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             'sales': {'units': totals['units'] or 0,
                       'estimated_item_value': format(totals['value'] or Decimal('0'), '.2f'),
                       'basis': 'Current item prices for confirmed, shipped, delivered and picked-up orders. Excludes coupons, tax, shipping and fees; not payout revenue.'},
+            'wallet': {
+                'gross_sales': format(gross_value, '.2f'),
+                'platform_fee_percent': format(getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')), '.2f'),
+                'platform_fee_deducted': format(platform_fee, '.2f'),
+                'net_sales': format(net_value, '.2f'),
+                'in_review': format(in_review_net, '.2f'),
+                'available_balance': format(cleared_net, '.2f'),
+                'refund_window_days': refund_window,
+            },
             'orders_by_day': [{'date': start + timedelta(days=i), 'count': trend.get(start + timedelta(days=i), 0)} for i in range(days)],
             'top_products': list(top_products),
             'low_stock_products': list(products.filter(available__lte=threshold).order_by('available', 'pk').values('id', 'title', 'available')[:20]),

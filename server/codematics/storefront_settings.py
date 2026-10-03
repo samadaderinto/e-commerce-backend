@@ -102,5 +102,7 @@ STORAGES = {
     **STORAGES,
     'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
 }
+REFUND_WINDOW_DAYS = int(os.environ.get('REFUND_WINDOW_DAYS', '7'))
+PLATFORM_FEE_PERCENT = Decimal(os.environ.get('PLATFORM_FEE_PERCENT', '4.00'))
 
 configure_observability(globals())

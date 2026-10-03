@@ -6,7 +6,7 @@ from rest_framework.permissions import AllowAny
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from .views import (
     AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView,
-    ShippingRatesView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
+    OrderRefundView, ShippingRatesView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, ReviewsView, WishlistView,
 )
 from store.views import StoreReviewViewSet
@@ -41,6 +41,7 @@ urlpatterns = [
     path('api/v1/notifications/', include('notification.urls')),
     path('api/v1/orders/', OrdersView.as_view()),
     path('api/v1/orders/<int:pk>/', OrderDetailView.as_view()),
+    path('api/v1/orders/<int:pk>/refund/', OrderRefundView.as_view()),
     path('api/v1/stores/', include('store.urls')),
 ]
 if settings.LOCAL_PROFILING_ENABLED:

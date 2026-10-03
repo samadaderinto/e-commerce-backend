@@ -29,7 +29,8 @@ from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_sche
 
 from cart.models import Cart, CartItem
 from affiliates.services import reward_referral
-from core.models import Address, Review, User, Wishlist
+from core.models import Address, Refund, Review, User, Wishlist
+from notification.views import create_notification
 from payment.models import Coupon, CouponRedemption, DeliveryInfo, Order
 from payment.couponing import calculate_coupon_discount
 from payment.usps import calculate_usps_rates
@@ -42,7 +43,7 @@ from .serializers import (
     AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
     CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
     CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
-    OrderSerializer, ProductIdRequestSerializer, RegisterSerializer,
+    OrderSerializer, ProductIdRequestSerializer, RefundRequestSerializer, RegisterSerializer,
     ReviewSerializer, ShippingRateSerializer, UserSerializer, WalletCheckoutSerializer, unit_price,
 )
 
@@ -432,6 +433,67 @@ class OrderDetailView(APIView):
         return Response(order_data(get_object_or_404(orders, pk=pk)))
 
 
+class OrderRefundView(APIView):
+    @extend_schema(
+        request=RefundRequestSerializer,
+        responses={201: OpenApiTypes.OBJECT, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+        description="Request a refund for an order within the 7-day return window."
+    )
+    @transaction.atomic
+    def post(self, request, pk):
+        orders = Order.objects.filter(user=request.user)
+        order = get_object_or_404(orders, pk=pk)
+
+        if order.status in ('refunded', 'refund_requested', 'cancelled'):
+            raise ValidationError({'detail': 'A refund has already been processed or requested for this order.'})
+
+        snapshots = order.items_snapshot or []
+        is_all_digital = bool(snapshots) and all(item.get('is_digital', False) for item in snapshots)
+        if is_all_digital:
+            raise ValidationError({
+                'detail': 'Digital products (e-books, software downloads) are non-refundable once delivered. '
+                          'If you are experiencing a technical issue with your file, please contact customer support at support@proace.com.'
+            })
+
+        refund_window = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
+        from datetime import timedelta
+        deadline = order.created + timedelta(days=refund_window)
+        if timezone.now() > deadline:
+            raise ValidationError({
+                'detail': f'The {refund_window}-day return window for this order has expired.'
+            })
+
+        serializer = RefundRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data.get('reason', 'Customer requested return')
+
+        refund = Refund.objects.create(
+            email=request.user.email,
+            order=order,
+            reason=reason,
+            accepted=False,
+        )
+        order.status = 'refund_requested'
+        order.save(update_fields=['status'])
+
+        stores = {item.get('store') for item in snapshots if item.get('store')}
+        for store_id in stores:
+            store = Store.objects.filter(pk=store_id).first()
+            if store and store.user:
+                create_notification(
+                    recipient=store.user,
+                    verb=f'Refund Requested for Order #{order.orderId}',
+                    description=f'Customer requested a refund for Order #{order.orderId}. Reason: {reason}',
+                    data={'order_id': order.pk, 'refund_id': refund.pk}
+                )
+
+        return Response({
+            'detail': 'Your refund request has been received. Physical returns are reviewed and processed within 1–2 business days.',
+            'status': order.status,
+            'refund_id': refund.pk,
+        }, status=201)
+
+
 class ShippingRatesView(APIView):
     @extend_schema(
         parameters=[
@@ -565,6 +627,18 @@ class CheckoutView(APIView):
             CouponRedemption.objects.filter(coupon=coupon, user=request.user).update(order=order)
         cart.ordered = True
         cart.save(update_fields=['ordered', 'updated'])
+
+        store_ids = {item.get('store') for item in snapshots if item.get('store')}
+        for store_id in store_ids:
+            store = Store.objects.filter(pk=store_id).first()
+            if store and store.user:
+                create_notification(
+                    recipient=store.user,
+                    verb=f'New order #{order.orderId}',
+                    description=f'New order #{order.orderId} placed with items from your store. Net earnings held in 7-day review escrow.',
+                    data={'order_id': order.pk}
+                )
+
         return order
 
     @extend_schema(request=CheckoutRequestSerializer, responses={201: OrderSerializer, 200: OrderSerializer})

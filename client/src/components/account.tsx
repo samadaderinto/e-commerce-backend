@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, ReactNode, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, ArrowRight, Check, ChevronRight, Eye, EyeOff, Heart, LockKeyhole, LogOut, MapPin, Package, Plus, ShoppingBag, Store, Trash2, UserRound } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, ChevronRight, Eye, EyeOff, Heart, LockKeyhole, LogOut, MapPin, Package, Plus, RotateCcw, ShoppingBag, Store, Trash2, UserRound } from 'lucide-react';
 import { api, money } from '@/lib/api';
 import type { Address, Order, User } from '@/lib/types';
 import { useShop } from './providers';
@@ -73,7 +73,34 @@ function OrderList({ orders, loading, error }: { orders?: Order[]; loading: bool
 }
 
 export function OrderPage({ id }: { id: string }) {
-  const { user } = useShop(); const params = useSearchParams();
+  const { user, notify } = useShop(); const params = useSearchParams(); const client = useQueryClient();
   const order = useQuery({ queryKey: ['order', id, user?.id], queryFn: () => api<Order>(`orders/${id}`), enabled: !!user });
-  return <Gate next={`/orders/${id}`}><div className="container order-detail"><Link className="text-link" href="/account/orders"><ArrowLeft size={16} />All orders</Link>{order.isLoading ? <Loading /> : order.error ? <ErrorState error={order.error} /> : order.data && <><div className="order-success"><div className="success-icon"><Check size={30} /></div><span className="eyebrow green">{params.has('placed') ? 'A GOOD FIND, INDEED' : 'YOUR ORDER'}</span><h1>{params.has('placed') ? 'It’s on the list.' : order.data.reference}</h1><p>{params.has('placed') ? `Your order ${order.data.reference} is confirmed. Thank you for shopping with ProAce.` : `Placed on ${new Date(order.data.created).toLocaleDateString()}`}</p><Status value={order.data.status} /></div><div className="order-progress">{['confirmed', 'shipped', 'delivered'].map((step, index) => <div key={step} className={['confirmed', 'shipped', 'delivered'].indexOf(order.data!.status) >= index ? 'done' : ''}><span><Check size={15} /></span><strong>{step}</strong></div>)}</div><div className="checkout-layout"><section><h2>Your finds</h2>{order.data.items.map((item, index) => <div className="order-item" key={index}><ProductImage src={item.image} alt={item.title} /><div><Link href={`/products/${item.product}`}>{item.title}</Link><p>Quantity: {item.quantity}</p>{item.is_digital && item.download_url && <a className="text-link" href={item.download_url} target="_blank" rel="noreferrer">Download product <ArrowRight size={14} /></a>}</div><strong>{money(Number(item.unit_price) * item.quantity)}</strong></div>)}</section><aside className="order-summary"><h2>Order details</h2><h4>Deliver to</h4><p>{order.data.address.address}<br />{order.data.address.city}, {order.data.address.state}<br />{order.data.address.country} {order.data.address.zip}</p><h4>Payment method</h4><p>Cash on delivery</p><div className="summary-total"><span>Total</span><strong>{money(order.data.total)}</strong></div><Link className="button" href="/shop">Keep discovering <ArrowRight size={16} /></Link></aside></div></>}</div></Gate>;
+  const [requestingRefund, setRequestingRefund] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const data = order.data;
+  const isAllDigital = data?.items?.every(item => item.is_digital) ?? false;
+  const hasPhysical = data?.items?.some(item => !item.is_digital) ?? false;
+  const createdTime = data ? new Date(data.created).getTime() : 0;
+  const daysElapsed = (Date.now() - createdTime) / (1000 * 60 * 60 * 24);
+  const isWithin7Days = daysElapsed <= 7;
+  const canRequestRefund = hasPhysical && isWithin7Days && !['refunded', 'refund_requested', 'cancelled'].includes(data?.status || '');
+
+  async function submitRefund(event: FormEvent) {
+    event.preventDefault(); setBusy(true);
+    try {
+      await api(`orders/${id}/refund`, 'POST', { reason: reason || 'Customer requested return' });
+      await client.invalidateQueries({ queryKey: ['order', id] });
+      await client.invalidateQueries({ queryKey: ['orders'] });
+      notify('Refund request submitted. We will review your return within 1–2 business days.');
+      setRequestingRefund(false);
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Gate next={`/orders/${id}`}><div className="container order-detail"><Link className="text-link" href="/account/orders"><ArrowLeft size={16} />All orders</Link>{order.isLoading ? <Loading /> : order.error ? <ErrorState error={order.error} /> : data && <><div className="order-success"><div className="success-icon"><Check size={30} /></div><span className="eyebrow green">{params.has('placed') ? 'A GOOD FIND, INDEED' : 'YOUR ORDER'}</span><h1>{params.has('placed') ? 'It’s on the list.' : data.reference}</h1><p>{params.has('placed') ? `Your order ${data.reference} is confirmed. Thank you for shopping with ProAce.` : `Placed on ${new Date(data.created).toLocaleDateString()}`}</p><Status value={data.status} /></div><div className="order-progress">{['confirmed', 'shipped', 'delivered'].map((step, index) => <div key={step} className={['confirmed', 'shipped', 'delivered'].indexOf(data.status) >= index ? 'done' : ''}><span><Check size={15} /></span><strong>{step}</strong></div>)}</div><div className="checkout-layout"><section><h2>Your finds</h2>{data.items.map((item, index) => <div className="order-item" key={index}><ProductImage src={item.image} alt={item.title} /><div><Link href={`/products/${item.product}`}>{item.title}</Link><p>Quantity: {item.quantity}</p>{item.is_digital ? <div className="digital-badge"><small>Digital download (Non-refundable once downloaded)</small>{item.download_url && <a className="text-link" href={item.download_url} target="_blank" rel="noreferrer">Download file <ArrowRight size={14} /></a>}</div> : null}</div><strong>{money(Number(item.unit_price) * item.quantity)}</strong></div>)}</section><aside className="order-summary"><h2>Order details</h2><h4>Deliver to</h4><p>{data.address.address}<br />{data.address.city}, {data.address.state}<br />{data.address.country} {data.address.zip}</p><h4>Payment status</h4><p>{data.payment_type === 'stripe_wallet' ? 'Cards, Stripe & Wallet (Paid)' : data.payment_type === 'card' ? 'Card (Paid)' : 'Online Payment (Paid)'}</p><div className="summary-total"><span>Total</span><strong>{money(data.total)}</strong></div>{canRequestRefund && !requestingRefund && <button className="button secondary" onClick={() => setRequestingRefund(true)}><RotateCcw size={16} />Request a return / refund</button>}{requestingRefund && <form className="form-stack" onSubmit={submitRefund} style={{ marginTop: '1rem' }}><h4>Request refund (7-day window)</h4><Field label="Reason for return"><textarea value={reason} onChange={e => setReason(e.target.value)} required rows={3} placeholder="Please provide details..." /></Field><div className="form-row"><button className="button" disabled={busy}>{busy ? 'Submitting…' : 'Submit request'}</button><button type="button" className="button secondary" onClick={() => setRequestingRefund(false)}>Cancel</button></div></form>}{hasPhysical && !isWithin7Days && <p className="fine-print">The 7-day return window for this order has closed.</p>}{isAllDigital && <p className="fine-print">Digital products are non-refundable. For file issues, contact support@proace.com.</p>}<Link className="button" href="/shop">Keep discovering <ArrowRight size={16} /></Link></aside></div></>}</div></Gate>;
 }

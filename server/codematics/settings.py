@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 """
 
 from datetime import timedelta
+from decimal import Decimal
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -485,6 +486,9 @@ ELASTICSEARCH_DSL={
         'hosts': 'localhost:9200'
     },
 }
+
+REFUND_WINDOW_DAYS = int(os.environ.get('REFUND_WINDOW_DAYS', '7'))
+PLATFORM_FEE_PERCENT = Decimal(os.environ.get('PLATFORM_FEE_PERCENT', '4.00'))
 
 from observability.config import configure as configure_observability
 configure_observability(globals())

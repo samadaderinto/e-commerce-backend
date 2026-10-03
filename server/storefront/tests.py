@@ -406,3 +406,49 @@ class StorefrontTests(TestCase):
     def test_catalog_rejects_invalid_filters(self):
         for params in [{'page': 'no'}, {'min_price': '-10'}, {'store': 'abc'}]:
             self.assertEqual(self.client.get('/api/v1/products/', params).status_code, 400)
+
+    def test_physical_order_can_request_refund_within_7_days(self):
+        self.add()
+        order_resp = self.checkout()
+        order_id = order_resp.data['id']
+        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {'reason': 'Wrong size'}, format='json')
+        self.assertEqual(refund_resp.status_code, 201)
+        self.assertEqual(refund_resp.data['status'], 'refund_requested')
+        order = Order.objects.get(pk=order_id)
+        self.assertEqual(order.status, 'refund_requested')
+
+    def test_order_refund_fails_after_7_days(self):
+        self.add()
+        order_resp = self.checkout()
+        order_id = order_resp.data['id']
+        Order.objects.filter(pk=order_id).update(created=timezone.now() - timedelta(days=8))
+        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {'reason': 'Late return'}, format='json')
+        self.assertEqual(refund_resp.status_code, 400)
+        self.assertIn('expired', refund_resp.data['error']['message'])
+
+    def test_digital_order_is_non_refundable(self):
+        digital_product = Product.objects.create(
+            title='Ebook Guide', description='Digital product',
+            price=Decimal('100.00'), discount=0, available=100, is_digital=True,
+            digital_file_url='https://example.com/ebook.pdf',
+            store=self.store, brand='ProAce Digital',
+        )
+        self.client.post('/api/v1/cart/', {'product': digital_product.pk, 'quantity': 1}, format='json')
+        order_resp = self.checkout()
+        order_id = order_resp.data['id']
+        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {'reason': 'Changed mind'}, format='json')
+        self.assertEqual(refund_resp.status_code, 400)
+        self.assertIn('non-refundable', refund_resp.data['error']['message'])
+
+    def test_merchant_dashboard_reports_escrow_and_cleared_balances(self):
+        self.add(1)
+        self.checkout()
+        self.client.force_authenticate(self.seller)
+        resp = self.client.get(f'/api/v1/stores/{self.store.pk}/dashboard/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('wallet', resp.data)
+        wallet = resp.data['wallet']
+        self.assertEqual(wallet['platform_fee_percent'], '4.00')
+        self.assertEqual(wallet['refund_window_days'], 7)
+        self.assertTrue(Decimal(wallet['gross_sales']) > 0)
+        self.assertTrue(Decimal(wallet['in_review']) > 0)
