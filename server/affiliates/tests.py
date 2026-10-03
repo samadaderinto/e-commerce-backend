@@ -40,6 +40,49 @@ class AffiliateReferralTests(TestCase):
         self.assertEqual(referral.status, Referral.REWARDED)
         self.assertEqual(referral.reward_amount, Decimal("25.00"))
 
+        # Verify Option A: The user's primary UserWallet was credited with $25.00 store credit
+        from core.models import UserWallet, UserWalletTransaction
+        user_wallet = UserWallet.objects.get(user=self.referrer)
+        self.assertEqual(user_wallet.balance, Decimal("25.00"))
+        self.assertEqual(user_wallet.transactions.filter(source=UserWalletTransaction.SOURCE_REFERRAL).count(), 1)
+
+    def test_reward_referral_capped_at_four_users(self):
+        # Create and reward 4 users ($100 total)
+        for i in range(1, 5):
+            u = User.objects.create_user(
+                email=f"user{i}@test.com",
+                password="Strong-test-password-123",
+                first_name=f"User{i}",
+                last_name="Test",
+                gender="male",
+                phone1=f"+234801234568{i}",
+            )
+            reward_referral(self.marketer.marketer_id, u)
+
+        from core.models import UserWallet
+        user_wallet = UserWallet.objects.get(user=self.referrer)
+        affiliate_wallet = AffiliateWallet.objects.get(user=self.referrer)
+        self.assertEqual(user_wallet.balance, Decimal("100.00"))
+        self.assertEqual(affiliate_wallet.balance, Decimal("100.00"))
+        self.assertEqual(Referral.objects.filter(marketer=self.marketer, status=Referral.REWARDED).count(), 4)
+
+        # 5th referred user is capped (status pending, no extra $25 credited)
+        u5 = User.objects.create_user(
+            email="user5@test.com",
+            password="Strong-test-password-123",
+            first_name="User5",
+            last_name="Test",
+            gender="female",
+            phone1="+2348012345699",
+        )
+        ref5 = reward_referral(self.marketer.marketer_id, u5)
+        self.assertEqual(ref5.status, Referral.PENDING)
+
+        user_wallet.refresh_from_db()
+        affiliate_wallet.refresh_from_db()
+        self.assertEqual(user_wallet.balance, Decimal("100.00"))
+        self.assertEqual(affiliate_wallet.balance, Decimal("100.00"))
+
     def test_reward_referral_is_idempotent_for_same_referred_user(self):
         referred = User.objects.create_user(
             email="duplicate@test.com",
