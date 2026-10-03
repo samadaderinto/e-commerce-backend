@@ -15,6 +15,39 @@ import { Product } from "@/lib/types";
 import { money } from "@/lib/api";
 import { useShop } from "./providers";
 
+export function VerifiedBadge({
+  size = 15,
+  className = "",
+}: {
+  size?: number;
+  className?: string;
+}) {
+  return (
+    <span
+      className={`verified-badge ${className}`}
+      title="Verified Official Store"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        verticalAlign: "middle",
+        color: "#1d9bf0",
+        flexShrink: 0,
+      }}
+    >
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        aria-label="Verified Official Store"
+      >
+        <path d="M22.25 12c0-1.43-.88-2.67-2.19-3.34.46-1.39.2-2.9-.81-3.91s-2.52-1.27-3.91-.81c-.67-1.31-1.91-2.19-3.34-2.19s-2.67.88-3.34 2.19c-1.39-.46-2.9-.2-3.91.81s-1.27 2.52-.81 3.91C2.63 9.33 1.75 10.57 1.75 12s.88 2.67 2.19 3.34c-.46 1.39-.2 2.9.81 3.91s2.52 1.27 3.91.81c.67 1.31 1.91 2.19 3.34 2.19s2.67-.88 3.34-2.19c1.39.46 2.9.2 3.91-.81s1.27-2.52.81-3.91c1.31-.67 2.19-1.91 2.19-3.34zm-11.79 3.84l-3.3-3.3 1.41-1.41 1.89 1.89 5.09-5.09 1.41 1.41-6.5 6.5z" />
+      </svg>
+    </span>
+  );
+}
+
 export function ProductImage({
   src,
   alt,
@@ -91,7 +124,10 @@ export function ProductCard({ product }: { product: Product }) {
         </button>
       </div>
       <div className="product-meta">
-        <span>{product.brand || product.store_name}</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+          {product.brand || product.store_name}
+          {product.is_official_store && <VerifiedBadge size={13} />}
+        </span>
         <span>
           <Star size={12} fill="currentColor" />
           {Number(product.average_rating) > 0

@@ -19,12 +19,20 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from cart.models import CartItem
 from payment.models import Order
 from product.models import Product, ProductImg, Specification
-from store.models import Schedule, Store, StoreAddress, StoreInfo, StorePayout
+from store.models import (
+    MerchantWallet, Schedule, Store, StoreAddress, StoreEarningsLedger,
+    StoreInfo, StorePayout,
+)
 from store.serializers import (
     DashboardQuerySerializer, InventorySerializer, MerchantImageSerializer,
-    MerchantProductSerializer, MerchantSpecificationSerializer, PayoutCreateSerializer,
-    ScheduleSerializer, StoreAddressSerializer, StoreInfoSerializer, StoreOnboardingSerializer,
-    StorePayoutSerializer, StoreSerializer,
+    MerchantPayoutCreateSerializer, MerchantProductSerializer, MerchantSpecificationSerializer,
+    MerchantWalletSerializer, PayoutCreateSerializer, ScheduleSerializer,
+    StoreAddressSerializer, StoreEarningsLedgerSerializer, StoreInfoSerializer,
+    StoreOnboardingSerializer, StorePayoutSerializer, StoreSerializer,
+)
+from store.services import (
+    calculate_merchant_financials, calculate_store_financials,
+    get_or_create_merchant_wallet, request_merchant_payout,
 )
 
 
@@ -131,7 +139,17 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         return StoreOnboardingSerializer if self.action in {'create', 'create_store'} else StoreSerializer
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        user = self.request.user
+        if getattr(user, 'is_superuser', False):
+            serializer.save(
+                user=user,
+                is_official=True,
+                status=Store.STATUS_ACTIVE,
+                verified_at=timezone.now(),
+                verified_by=user,
+            )
+        else:
+            serializer.save(user=user)
 
     @action(detail=False, methods=['post'], url_path='create')
     def create_store(self, request):
@@ -284,29 +302,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             output_field=DecimalField(max_digits=24, decimal_places=2),
         )
         totals = items.aggregate(units=Sum('quantity'), value=Sum(line_value))
-        refund_window = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
-        cutoff = timezone.now() - timedelta(days=refund_window)
-        fee_rate = getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')) / Decimal('100.0')
-
-        in_review_orders = sales_orders.filter(created__gt=cutoff)
-        in_review_items = CartItem.objects.filter(product__store=store, cart__in=in_review_orders.values('cart_id'))
-        in_review_totals = in_review_items.aggregate(value=Sum(line_value))
-        in_review_gross = in_review_totals['value'] or Decimal('0.00')
-        in_review_net = (in_review_gross * (Decimal('1.00') - fee_rate)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-        cleared_orders = sales_orders.filter(created__lte=cutoff)
-        cleared_items = CartItem.objects.filter(product__store=store, cart__in=cleared_orders.values('cart_id'))
-        cleared_totals = cleared_items.aggregate(value=Sum(line_value))
-        cleared_gross = cleared_totals['value'] or Decimal('0.00')
-        cleared_net = (cleared_gross * (Decimal('1.00') - fee_rate)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-        gross_value = totals['value'] or Decimal('0.00')
-        platform_fee = (gross_value * fee_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        net_value = (gross_value - platform_fee).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-        payouts_completed = store.payouts.filter(status=StorePayout.STATUS_COMPLETED).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-        payouts_pending = store.payouts.filter(status=StorePayout.STATUS_PENDING).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-        available_balance = max(Decimal('0.00'), cleared_net - payouts_completed - payouts_pending)
+        financials = calculate_store_financials(store)
 
         inventory = products.aggregate(
             total=Count('id'), published=Count('id', filter=Q(visibility=True)),
@@ -327,22 +323,102 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             'sales': {'units': totals['units'] or 0,
                       'estimated_item_value': format(totals['value'] or Decimal('0'), '.2f'),
                       'basis': 'Current item prices for confirmed, shipped, delivered and picked-up orders. Excludes coupons, tax, shipping and fees; not payout revenue.'},
-            'wallet': {
-                'gross_sales': format(gross_value, '.2f'),
-                'platform_fee_percent': format(getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')), '.2f'),
-                'platform_fee_deducted': format(platform_fee, '.2f'),
-                'net_sales': format(net_value, '.2f'),
-                'in_review': format(in_review_net, '.2f'),
-                'cleared_total': format(cleared_net, '.2f'),
-                'payouts_completed': format(payouts_completed, '.2f'),
-                'payouts_pending': format(payouts_pending, '.2f'),
-                'available_balance': format(available_balance, '.2f'),
-                'refund_window_days': refund_window,
-            },
+            'wallet': financials,
             'orders_by_day': [{'date': start + timedelta(days=i), 'count': trend.get(start + timedelta(days=i), 0)} for i in range(days)],
             'top_products': list(top_products),
             'low_stock_products': list(products.filter(available__lte=threshold).order_by('available', 'pk').values('id', 'title', 'available')[:20]),
         })
+
+    @action(detail=False, methods=['get'], url_path='wallet')
+    def merchant_wallet(self, request):
+        """
+        Consolidated financial wallet for the authenticated vendor across all their stores.
+        """
+        data = calculate_merchant_financials(request.user)
+        return Response(MerchantWalletSerializer(data).data)
+
+    @action(detail=False, methods=['get'], url_path='wallet/ledger')
+    def merchant_ledger(self, request):
+        """
+        Granular ledger entries for all stores owned by the merchant.
+        Supports query params: ?store_id=X, ?status=pending|available|completed|reversed, ?entry_type=sale|payout|fee|refund
+        """
+        user_stores = Store.objects.filter(user=request.user)
+        entries = StoreEarningsLedger.objects.filter(store__in=user_stores).select_related('store', 'wallet')
+
+        store_id = request.query_params.get('store_id')
+        if store_id:
+            entries = entries.filter(store_id=store_id)
+
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            entries = entries.filter(status=status_filter)
+
+        entry_type_filter = request.query_params.get('entry_type')
+        if entry_type_filter:
+            entries = entries.filter(entry_type=entry_type_filter)
+
+        page = self.paginate_queryset(entries)
+        serializer = StoreEarningsLedgerSerializer(page, many=True)
+        return self.get_paginated_response(serializer.data)
+
+    @action(detail=False, methods=['get', 'post'], url_path='wallet/payouts')
+    @transaction.atomic
+    def merchant_payouts(self, request):
+        """
+        Unified payout requests and listing across all stores for the merchant.
+        """
+        user_stores = Store.objects.filter(user=request.user)
+        wallet = get_or_create_merchant_wallet(request.user)
+
+        if request.method == 'GET':
+            payouts = StorePayout.objects.filter(
+                Q(wallet=wallet) | Q(store__in=user_stores)
+            ).select_related('store').distinct().order_by('-created')
+            page = self.paginate_queryset(payouts)
+            serializer = StorePayoutSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = MerchantPayoutCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        amount = serializer.validated_data['amount']
+        payout_method = serializer.validated_data['payout_method']
+        account_details = serializer.validated_data.get('account_details', {})
+        notes = serializer.validated_data.get('notes', '')
+
+        store = None
+        store_id = serializer.validated_data.get('store_id')
+        if store_id:
+            store = get_object_or_404(user_stores, pk=store_id)
+        else:
+            store = user_stores.first()
+
+        # Synchronize merchant financials to ensure fresh balances
+        calculate_merchant_financials(request.user)
+
+        payout = request_merchant_payout(
+            user=request.user,
+            amount=amount,
+            payout_method=payout_method,
+            account_details=account_details,
+            store=store,
+            notes=notes,
+        )
+
+        from notification.views import create_notification, notify_staff
+        notify_staff(
+            verb=f"New Merchant Payout Request: ${amount}",
+            description=f"Merchant '{request.user.email}' requested a payout of ${amount} (Ref: {payout.reference}).",
+            data={"payout_id": payout.pk, "amount": str(amount), "user_id": request.user.pk},
+        )
+        create_notification(
+            recipient=request.user,
+            verb=f"Payout Request Submitted: ${amount}",
+            description=f"Your payout request of ${amount} (Ref: {payout.reference}) has been submitted and is under review.",
+            data={"payout_id": payout.pk, "amount": str(amount)},
+        )
+
+        return Response(StorePayoutSerializer(payout).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get', 'post'], url_path='payouts')
     @transaction.atomic
@@ -356,42 +432,25 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         serializer = PayoutCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         amount = serializer.validated_data['amount']
+        payout_method = serializer.validated_data['payout_method']
+        account_details = serializer.validated_data.get('account_details', {})
+        notes = serializer.validated_data.get('notes', '')
 
-        sales_orders = Order.objects.filter(
-            ordered=True, status__in=['confirmed', 'shipped', 'delivered', 'picked up']
-        )
-        items = CartItem.objects.filter(product__store=store, cart__in=sales_orders.values('cart_id'))
-        line_value = ExpressionWrapper(
-            F('quantity') * F('product__price') * (100 - F('product__discount')) / Decimal('100.0'),
-            output_field=DecimalField(max_digits=24, decimal_places=2),
-        )
-        refund_window = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
-        cutoff = timezone.now() - timedelta(days=refund_window)
-        fee_rate = getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')) / Decimal('100.0')
-
-        cleared_orders = sales_orders.filter(created__lte=cutoff)
-        cleared_items = CartItem.objects.filter(product__store=store, cart__in=cleared_orders.values('cart_id'))
-        cleared_totals = cleared_items.aggregate(value=Sum(line_value))
-        cleared_gross = cleared_totals['value'] or Decimal('0.00')
-        cleared_net = (cleared_gross * (Decimal('1.00') - fee_rate)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
-        payouts_completed = store.payouts.filter(status=StorePayout.STATUS_COMPLETED).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-        payouts_pending = store.payouts.filter(status=StorePayout.STATUS_PENDING).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-        available_balance = max(Decimal('0.00'), cleared_net - payouts_completed - payouts_pending)
-
-        if amount > available_balance:
+        # Validate store-specific balance
+        store_fin = calculate_store_financials(store)
+        store_available = Decimal(store_fin['available_balance'])
+        if amount > store_available:
             raise ValidationError({
-                'detail': f'Requested payout amount (${amount}) exceeds available cleared balance (${available_balance}).'
+                'detail': f'Requested payout amount (${amount}) exceeds available cleared balance (${store_available}).'
             })
 
-        from nanoid import generate
-        payout = StorePayout.objects.create(
-            store=store,
+        payout = request_merchant_payout(
+            user=request.user,
             amount=amount,
-            payout_method=serializer.validated_data['payout_method'],
-            account_details=serializer.validated_data.get('account_details', {}),
-            reference=f"PO-{generate(size=10).upper()}",
-            status=StorePayout.STATUS_PENDING,
+            payout_method=payout_method,
+            account_details=account_details,
+            store=store,
+            notes=notes,
         )
 
         from notification.views import create_notification, notify_staff

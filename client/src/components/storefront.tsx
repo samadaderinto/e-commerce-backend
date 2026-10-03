@@ -33,6 +33,7 @@ import {
   ProductGrid,
   ProductImage,
   Quantity,
+  VerifiedBadge,
 } from "./ui";
 import { useShop } from "./providers";
 
@@ -170,10 +171,18 @@ export function ShopPage() {
   const category = categories.find(
     (category) => category.key === params.get("category"),
   );
-  const title = params.get("search")
-    ? `Results for “${params.get("search")}”`
-    : category?.name ||
-      (params.has("deals") ? "Everyday deals" : "A world of good finds");
+  const storeId = params.get("store");
+  const firstProduct = products.data?.results?.[0];
+  const storeName = firstProduct?.store_name || (storeId ? `Store #${storeId}` : null);
+  const isOfficialStore = Boolean(firstProduct?.is_official_store);
+
+  const title = storeName
+    ? storeName
+    : params.get("search")
+      ? `Results for “${params.get("search")}”`
+      : category?.name ||
+        (params.has("deals") ? "Everyday deals" : "A world of good finds");
+
   function update(key: string, value: string) {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
@@ -181,12 +190,21 @@ export function ShopPage() {
     if (key !== "page") next.delete("page");
     router.push(`/shop?${next}`, { scroll: false });
   }
+
   return (
     <div className="container shop-page">
       <div className="breadcrumb">
         <Link href="/">Home</Link>
         <ChevronRight size={12} />
-        <span>Shop</span>
+        {storeName ? (
+          <>
+            <Link href="/shop">Marketplace</Link>
+            <ChevronRight size={12} />
+            <span>{storeName}</span>
+          </>
+        ) : (
+          <span>Shop</span>
+        )}
         {category && (
           <>
             <ChevronRight size={12} />
@@ -194,16 +212,70 @@ export function ShopPage() {
           </>
         )}
       </div>
-      <div className="shop-heading">
+
+      <div className="shop-heading" style={storeName ? { paddingBottom: "24px" } : undefined}>
         <div>
-          <span className="eyebrow green">THE PROACE COLLECTION</span>
-          <h1>{title}</h1>
-          <p>Considered essentials. Unexpected favourites.</p>
+          <span className="eyebrow green">
+            {storeName ? (isOfficialStore ? "OFFICIAL PARTNER STORE" : "FEATURED MERCHANT") : "THE PROACE COLLECTION"}
+          </span>
+          <h1 style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            {title}
+            {storeName && isOfficialStore && <VerifiedBadge size={24} />}
+          </h1>
+          <p>
+            {storeName
+              ? isOfficialStore
+                ? "Official brand catalog. Authenticity guaranteed with direct marketplace fulfillment."
+                : `Browse the curated catalog and collections from ${storeName}.`
+              : "Considered essentials. Unexpected favourites."}
+          </p>
         </div>
         <span className="result-total">
           {products.data?.count ?? "…"} products
         </span>
       </div>
+
+      {storeName && (
+        <div style={{ display: "flex", gap: "8px", overflowX: "auto", padding: "14px 0", borderBottom: "1px solid var(--line)", marginBottom: "10px" }}>
+          <button
+            className={`button secondary ${!params.has("category") ? "active" : ""}`}
+            style={{
+              padding: "6px 14px",
+              minHeight: "34px",
+              fontSize: "11px",
+              borderRadius: "20px",
+              background: !params.has("category") ? "var(--green)" : "white",
+              color: !params.has("category") ? "white" : "var(--ink)",
+              borderColor: !params.has("category") ? "var(--green)" : "var(--line)"
+            }}
+            onClick={() => update("category", "")}
+          >
+            All Products
+          </button>
+          {categories.map((cat) => {
+            const active = params.get("category") === cat.key;
+            return (
+              <button
+                key={cat.key}
+                className={`button secondary ${active ? "active" : ""}`}
+                style={{
+                  padding: "6px 14px",
+                  minHeight: "34px",
+                  fontSize: "11px",
+                  borderRadius: "20px",
+                  background: active ? "var(--green)" : "white",
+                  color: active ? "white" : "var(--ink)",
+                  borderColor: active ? "var(--green)" : "var(--line)",
+                  whiteSpace: "nowrap"
+                }}
+                onClick={() => update("category", cat.key)}
+              >
+                {cat.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div className="shop-layout">
         <aside className={`filters ${filtersOpen ? "open" : ""}`}>
           <div className="filter-heading">
@@ -453,8 +525,9 @@ export function ProductPage({ id }: { id: string }) {
           )}
         </div>
         <div className="product-information">
-          <span className="eyebrow green">
+          <span className="eyebrow green" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
             {product.brand || product.store_name}
+            {product.is_official_store && <VerifiedBadge size={14} />}
           </span>
           <h1>{product.title}</h1>
           <div className="rating-line">
@@ -565,8 +638,9 @@ export function ProductPage({ id }: { id: string }) {
           </div>
           <Link className="seller-link" href={`/shop?store=${product.store}`}>
             <StoreIcon size={19} />
-            <span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
               Sold by <strong>{product.store_name}</strong>
+              {product.is_official_store && <VerifiedBadge size={15} />}
             </span>
             <ArrowUpRight size={16} />
           </Link>
@@ -610,7 +684,10 @@ export function ProductPage({ id }: { id: string }) {
                 </div>
                 <div>
                   <dt>Sold by</dt>
-                  <dd>{product.store_name}</dd>
+                  <dd style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                    {product.store_name}
+                    {product.is_official_store && <VerifiedBadge size={14} />}
+                  </dd>
                 </div>
               </dl>
             </>

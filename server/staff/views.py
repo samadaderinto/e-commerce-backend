@@ -25,6 +25,7 @@ from notification.views import (
     store_moderation_notification,
 )
 from store.serializers import StoreAddressSerializer, StorePayoutSerializer
+from store.services import process_payout_status_change, process_refund_deduction
 from core.services import credit_user_wallet
 
 from staff.serilalizers import (
@@ -331,6 +332,9 @@ class StaffViewSet(viewsets.GenericViewSet):
             refund.order.save(update_fields=["status"])
             refund.save(update_fields=["accepted"])
 
+            # Reverse merchant ledger earnings and adjust merchant wallet
+            process_refund_deduction(refund.order)
+
             if refund.refund_type == Refund.REFUND_TYPE_STORE_CREDIT:
                 credit_user_wallet(
                     user=refund.order.user,
@@ -365,7 +369,7 @@ class StaffViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=["get"], url_path="payouts")
     def payouts(self, request):
-        payouts = StorePayout.objects.select_related("store", "store__user").order_by("-created", "-pk")
+        payouts = StorePayout.objects.select_related("store", "store__user", "wallet").order_by("-created", "-pk")
         payout_status = request.query_params.get("status")
         if payout_status:
             payouts = payouts.filter(status=payout_status)
@@ -373,35 +377,32 @@ class StaffViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=["post"], url_path=r"payouts/(?P<payout_pk>\d+)/process")
     def process_payout(self, request, payout_pk=None):
-        payout = get_object_or_404(StorePayout.objects.select_related("store", "store__user"), pk=payout_pk)
+        payout = get_object_or_404(StorePayout.objects.select_related("store", "store__user", "wallet"), pk=payout_pk)
         action_type = request.data.get("action", "approve")
-        if action_type == "approve":
-            payout.status = StorePayout.STATUS_COMPLETED
-            payout.processed_at = timezone.now()
-            payout.processed_by = request.user
-            payout.save(update_fields=["status", "processed_at", "processed_by"])
+        recipient_user = (payout.store and payout.store.user) or (payout.wallet and payout.wallet.user)
 
-            create_notification(
-                recipient=payout.store.user,
-                verb=f"Payout Completed: ${payout.amount}",
-                description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) has been disbursed.",
-                data={"payout_id": payout.pk, "amount": str(payout.amount)},
-            )
+        if action_type == "approve":
+            process_payout_status_change(payout, action="approve", processed_by=request.user)
+
+            if recipient_user:
+                create_notification(
+                    recipient=recipient_user,
+                    verb=f"Payout Completed: ${payout.amount}",
+                    description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) has been disbursed.",
+                    data={"payout_id": payout.pk, "amount": str(payout.amount)},
+                )
             return Response({"detail": "Payout marked as completed.", "payout": StorePayoutSerializer(payout).data})
         else:
             reason = request.data.get("reason", "Payout declined by compliance.")
-            payout.status = StorePayout.STATUS_REJECTED
-            payout.notes = reason
-            payout.processed_at = timezone.now()
-            payout.processed_by = request.user
-            payout.save(update_fields=["status", "notes", "processed_at", "processed_by"])
+            process_payout_status_change(payout, action="reject", processed_by=request.user, notes=reason)
 
-            create_notification(
-                recipient=payout.store.user,
-                verb=f"Payout Declined: ${payout.amount}",
-                description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) was declined. Reason: {reason}",
-                data={"payout_id": payout.pk, "amount": str(payout.amount)},
-            )
+            if recipient_user:
+                create_notification(
+                    recipient=recipient_user,
+                    verb=f"Payout Declined: ${payout.amount}",
+                    description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) was declined. Reason: {reason}",
+                    data={"payout_id": payout.pk, "amount": str(payout.amount)},
+                )
             return Response({"detail": "Payout marked as rejected.", "payout": StorePayoutSerializer(payout).data})
 
 

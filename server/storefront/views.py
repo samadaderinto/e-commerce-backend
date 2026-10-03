@@ -41,6 +41,7 @@ from product.search import search_product_ids
 from product.policies import is_own_store, validate_purchase
 from store.views import invalidate_catalog
 from store.models import Store, StoreAddress
+from store.services import record_order_earnings_for_merchant
 from .serializers import (
     AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
     CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
@@ -691,6 +692,9 @@ class CheckoutView(APIView):
             CouponRedemption.objects.filter(coupon=coupon, user=request.user).update(order=order)
         cart.ordered = True
         cart.save(update_fields=['ordered', 'updated'])
+
+        # Record granular store ledger entries and update unified merchant wallet
+        record_order_earnings_for_merchant(order)
 
         store_ids = {item.get('store') for item in snapshots if item.get('store')}
         for store_id in store_ids:

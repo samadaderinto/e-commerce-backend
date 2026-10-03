@@ -61,9 +61,10 @@ class MerchantTests(TestCase):
         data.update(kwargs)
         return data
 
-    def make_order(self, status='confirmed', ordered=True, mixed=False, quantity=2):
+    def make_order(self, status='confirmed', ordered=True, mixed=False, quantity=2, product=None):
+        target_product = product or self.product
         cart = Cart.objects.create(user=self.other, ordered=ordered)
-        CartItem.objects.create(cart=cart, product=self.product, quantity=quantity)
+        CartItem.objects.create(cart=cart, product=target_product, quantity=quantity)
         if mixed:
             CartItem.objects.create(cart=cart, product=self.foreign_product, quantity=9)
         address = Address.objects.create(user=self.other, address='1 Test Road',
@@ -314,4 +315,132 @@ class MerchantTests(TestCase):
         product = Product.objects.get(pk=product_id)
         self.assertTrue(product.is_digital)
         self.assertEqual(product.digital_file_url, 'https://downloads.proace.test/ebooks/python-guide.pdf')
+
+    def test_admin_created_store_is_auto_verified_and_official(self):
+        admin_user = User.objects.create_superuser(
+            email='admin.store@example.com',
+            password='Admin-password-123!',
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin_user)
+
+        response = admin_client.post('/stores/create/', {'name': 'Proace Official Store'}, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        store = Store.objects.get(pk=response.data['id'])
+        self.assertTrue(store.is_official)
+        self.assertEqual(store.status, Store.STATUS_ACTIVE)
+        self.assertIsNotNone(store.verified_at)
+
+    def test_official_store_enjoys_zero_platform_fee_in_dashboard_and_payouts(self):
+        admin_user = User.objects.create_superuser(
+            email='company.admin@example.com',
+            password='Admin-password-123!',
+        )
+        admin_store = Store.objects.create(
+            user=admin_user,
+            name='Company Flagship Store',
+            is_official=True,
+            status=Store.STATUS_ACTIVE,
+            verified_at=timezone.now(),
+        )
+        product = self.make_product(admin_store, price='100.00', discount=0)
+        order = self.make_order(product=product, quantity=2, status='delivered')
+
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin_user)
+
+        resp = admin_client.get(f'/stores/{admin_store.pk}/dashboard/?days=7')
+        self.assertEqual(resp.status_code, 200)
+        wallet = resp.data['wallet']
+        self.assertEqual(wallet['platform_fee_percent'], '0.00')
+        self.assertEqual(wallet['platform_fee_deducted'], '0.00')
+        self.assertEqual(wallet['gross_sales'], '200.00')
+        self.assertEqual(wallet['net_sales'], '200.00')
+        self.assertEqual(wallet['in_review'], '200.00')
+
+    def test_multi_store_unified_merchant_wallet_and_ledger(self):
+        # The owner creates a second store
+        second_store = Store.objects.create(
+            user=self.owner,
+            name='My Second Shop',
+            status=Store.STATUS_ACTIVE,
+            verified_at=timezone.now(),
+        )
+        second_product = self.make_product(second_store, title='Gaming Mouse', price='50.00', discount=0)
+
+        # Generate orders across Store 1 and Store 2
+        from store.services import record_order_earnings_for_merchant, settle_pending_merchant_earnings
+        order1 = self.make_order(product=self.product, quantity=2, status='confirmed')  # $180 gross
+        order2 = self.make_order(product=second_product, quantity=4, status='confirmed')  # $200 gross
+        record_order_earnings_for_merchant(order1)
+        record_order_earnings_for_merchant(order2)
+
+        # Check unified merchant wallet endpoint
+        wallet_resp = self.client.get('/stores/wallet/')
+        self.assertEqual(wallet_resp.status_code, 200)
+        data = wallet_resp.data
+        self.assertEqual(data['stores_count'], 2)
+        # Total gross = 180 + 200 = 380; platform fee (4%) = 7.20 + 8.00 = 15.20; net = 364.80
+        self.assertEqual(data['total_gross_sales'], '380.00')
+        self.assertEqual(data['total_platform_fees'], '15.20')
+        self.assertEqual(data['total_net_sales'], '364.80')
+        self.assertEqual(data['pending_balance'], '364.80')
+        self.assertEqual(data['available_balance'], '0.00')
+
+        # Check ledger entries across stores
+        ledger_resp = self.client.get('/stores/wallet/ledger/')
+        self.assertEqual(ledger_resp.status_code, 200)
+        self.assertEqual(ledger_resp.data['count'], 2)
+
+        # Filter ledger by store
+        store1_ledger = self.client.get(f'/stores/wallet/ledger/?store_id={self.store.pk}')
+        self.assertEqual(store1_ledger.data['count'], 1)
+        self.assertEqual(store1_ledger.data['results'][0]['store_name'], 'My shop')
+
+        store2_ledger = self.client.get(f'/stores/wallet/ledger/?store_id={second_store.pk}')
+        self.assertEqual(store2_ledger.data['count'], 1)
+        self.assertEqual(store2_ledger.data['results'][0]['store_name'], 'My Second Shop')
+
+        # Backdate both orders past the 7-day refund window and trigger settlement
+        Order.objects.filter(pk__in=[order1.pk, order2.pk]).update(created=timezone.now() - timedelta(days=8))
+        from store.models import StoreEarningsLedger
+        StoreEarningsLedger.objects.filter(order__in=[order1, order2]).update(available_at=timezone.now() - timedelta(days=1))
+
+        settled_count = settle_pending_merchant_earnings()
+        self.assertEqual(settled_count, 2)
+
+        # Funds are now available for unified withdrawal
+        wallet_resp_after = self.client.get('/stores/wallet/')
+        self.assertEqual(wallet_resp_after.data['pending_balance'], '0.00')
+        self.assertEqual(wallet_resp_after.data['available_balance'], '364.80')
+
+        # Request a unified payout withdrawing combined earnings from both stores
+        payout_resp = self.client.post('/stores/wallet/payouts/', {
+            'amount': '300.00',
+            'payout_method': 'bank_transfer',
+            'account_details': {'bank_name': 'Chase', 'account_number': '987654321'},
+            'notes': 'Consolidated multi-store withdrawal',
+        }, format='json')
+        self.assertEqual(payout_resp.status_code, 201)
+        self.assertEqual(payout_resp.data['status'], 'pending')
+        self.assertEqual(payout_resp.data['amount'], '300.00')
+
+        # Staff approves the payout
+        staff_admin = User.objects.create_superuser(email='staff.admin@proace.test', password='Admin-password-123')
+        staff_client = APIClient()
+        staff_client.force_authenticate(staff_admin)
+
+        payout_id = payout_resp.data['id']
+        staff_resp = staff_client.post(f'/api/v1/admin/staff/payouts/{payout_id}/process/', {
+            'action': 'approve',
+        }, format='json')
+        self.assertEqual(staff_resp.status_code, 200)
+        self.assertEqual(staff_resp.data['payout']['status'], 'completed')
+
+        # Verify wallet total_withdrawn updated
+        final_wallet = self.client.get('/stores/wallet/').data
+        self.assertEqual(final_wallet['total_withdrawn'], '300.00')
+        self.assertEqual(final_wallet['available_balance'], '64.80')
+
+
 

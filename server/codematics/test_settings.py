@@ -6,6 +6,10 @@ from .settings import *  # noqa: F403
 SECRET_KEY = 'merchant-tests-only-not-for-deployment'
 SIMPLE_JWT = {**SIMPLE_JWT, 'SIGNING_KEY': SECRET_KEY}  # noqa: F405
 DEBUG = False
+CELERY_TASK_ALWAYS_EAGER = True
+CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_BROKER_URL = 'memory://'
+CELERY_RESULT_BACKEND = 'cache+memory://'
 ALLOWED_HOSTS = ['testserver', 'localhost']
 INSTALLED_APPS = [
     'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes',
@@ -23,7 +27,11 @@ try:
     INSTALLED_APPS.append('django_cleanup.apps.CleanupConfig')
 except ImportError:
     pass
-MIDDLEWARE = []
+MIDDLEWARE = [
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+]
 STORAGES = {
     'default': {'BACKEND': 'django.core.files.storage.InMemoryStorage'},
     'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},

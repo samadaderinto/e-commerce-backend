@@ -5,19 +5,22 @@ from rest_framework import serializers
 from taggit.serializers import TaggitSerializer, TagListSerializerField
 
 from product.models import Product, ProductImg, Specification
-from store.models import Schedule, Store, StoreAddress, StoreImg, StoreInfo, StorePayout
+from store.models import (
+    MerchantWallet, Schedule, Store, StoreAddress, StoreEarningsLedger,
+    StoreImg, StoreInfo, StorePayout,
+)
 
 
 class StoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
         fields = [
-            'id', 'user', 'username', 'name', 'status', 'blocked_reason',
+            'id', 'user', 'username', 'name', 'status', 'is_official', 'blocked_reason',
             'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated',
         ]
         read_only_fields = [
-            'id', 'user', 'status', 'blocked_reason', 'blocked_at',
+            'id', 'user', 'status', 'is_official', 'blocked_reason', 'blocked_at',
             'blocked_by', 'verified_at', 'verified_by', 'created', 'updated',
         ]
         extra_kwargs = {'username': {'required': False}}
@@ -154,11 +157,11 @@ class StorePayoutSerializer(serializers.ModelSerializer):
     class Meta:
         model = StorePayout
         fields = [
-            'id', 'store', 'amount', 'status', 'payout_method',
+            'id', 'store', 'wallet', 'amount', 'status', 'payout_method',
             'account_details', 'reference', 'processed_at',
             'notes', 'created', 'updated',
         ]
-        read_only_fields = ['id', 'store', 'status', 'reference', 'processed_at', 'created', 'updated']
+        read_only_fields = ['id', 'store', 'wallet', 'status', 'reference', 'processed_at', 'created', 'updated']
 
 
 class PayoutCreateSerializer(serializers.Serializer):
@@ -168,4 +171,67 @@ class PayoutCreateSerializer(serializers.Serializer):
         default=StorePayout.METHOD_BANK_TRANSFER,
     )
     account_details = serializers.DictField(required=False, default=dict)
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class StoreEarningsLedgerSerializer(serializers.ModelSerializer):
+    store_name = serializers.CharField(source='store.name', read_only=True)
+    store_username = serializers.CharField(source='store.username', read_only=True)
+
+    class Meta:
+        model = StoreEarningsLedger
+        fields = [
+            'id', 'wallet', 'store', 'store_name', 'store_username', 'order',
+            'entry_type', 'gross_amount', 'fee_amount', 'net_amount', 'status',
+            'available_at', 'cleared_at', 'description', 'reference',
+            'created', 'updated',
+        ]
+        read_only_fields = fields
+
+
+class MerchantStoreFinancialSummarySerializer(serializers.Serializer):
+    store_id = serializers.IntegerField()
+    store_name = serializers.CharField()
+    store_username = serializers.CharField()
+    status = serializers.CharField()
+    is_official = serializers.BooleanField()
+    gross_sales = serializers.CharField()
+    platform_fee_percent = serializers.CharField()
+    platform_fee_deducted = serializers.CharField()
+    net_sales = serializers.CharField()
+    in_review = serializers.CharField()
+    cleared_total = serializers.CharField()
+    payouts_completed = serializers.CharField()
+    payouts_pending = serializers.CharField()
+    available_balance = serializers.CharField()
+    refund_window_days = serializers.IntegerField()
+
+
+class MerchantWalletSerializer(serializers.Serializer):
+    wallet_id = serializers.IntegerField()
+    stripe_account_id = serializers.CharField(allow_blank=True)
+    stripe_details_submitted = serializers.BooleanField()
+    stripe_payouts_enabled = serializers.BooleanField()
+    available_balance = serializers.CharField()
+    pending_balance = serializers.CharField()
+    total_withdrawn = serializers.CharField()
+    total_gross_sales = serializers.CharField()
+    total_platform_fees = serializers.CharField()
+    total_net_sales = serializers.CharField()
+    refund_window_days = serializers.IntegerField()
+    platform_fee_percent = serializers.CharField()
+    stores_count = serializers.IntegerField()
+    stores = MerchantStoreFinancialSummarySerializer(many=True)
+
+
+class MerchantPayoutCreateSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('5.00'))
+    payout_method = serializers.ChoiceField(
+        choices=StorePayout.METHOD_CHOICES,
+        default=StorePayout.METHOD_BANK_TRANSFER,
+    )
+    account_details = serializers.DictField(required=False, default=dict)
+    store_id = serializers.IntegerField(required=False, allow_null=True)
+    notes = serializers.CharField(required=False, allow_blank=True, default='')
+
 

@@ -66,7 +66,7 @@ def create_notification(recipient, verb, actor=None, target=None, action_object=
         data=data or {},
         public=public,
     )
-    transaction.on_commit(lambda: _send_external_notification(notification), robust=True)
+    transaction.on_commit(lambda: _send_external_notification(notification))
     return notification
 
 

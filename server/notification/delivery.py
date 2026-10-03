@@ -11,7 +11,6 @@ from notification.models import NotificationDelivery
 def _schedule_delivery(delivery: NotificationDelivery) -> NotificationDelivery:
     transaction.on_commit(
         lambda: _dispatch_delivery(delivery.pk),
-        robust=True,
     )
     return delivery
 

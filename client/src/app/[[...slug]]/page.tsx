@@ -23,6 +23,7 @@ export default async function Page({ params }: { params: Promise<{slug?: string[
   else if (slug[0] === 'merchant' && slug.length <= 3 && (!slug[1] || ['products', 'orders', 'settings', 'new-store'].includes(slug[1])) && (!slug[2] || (slug[1] === 'products' && (slug[2] === 'new' || /^\d+$/.test(slug[2]))))) content = <MerchantPage segments={slug.slice(1)} />;
   else if (slug[0] === 'admin' && slug.length === 1) content = <AdminDashboardPage />;
   else if (slug[0] === 'admin' && slug[1] === 'staff' && slug.length === 2) content = <AdminStaffPage />;
+  else if (slug[0] === 'stores' && /^\d+$/.test(slug[1] || '') && slug.length === 2) content = <ShopPage />;
   else if (slug[0] === 'help' && slug.length === 1) content = <HelpPage />;
   else if (['privacy', 'terms'].includes(slug[0]) && slug.length === 1) content = <PolicyPage type={slug[0]} />;
   else notFound();

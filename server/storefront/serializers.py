@@ -45,6 +45,7 @@ class AddressSerializer(serializers.ModelSerializer):
 
 class CatalogSerializer(serializers.ModelSerializer):
     is_own_store = serializers.SerializerMethodField()
+    is_official_store = serializers.BooleanField(source='store.is_official', read_only=True, default=False)
     image = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     sale_price = serializers.SerializerMethodField()
@@ -57,7 +58,7 @@ class CatalogSerializer(serializers.ModelSerializer):
         model = Product
         fields = ['id', 'title', 'description', 'category', 'brand', 'price', 'sale_price',
                   'discount', 'available', 'average_rating', 'rating_count', 'store',
-                  'store_name', 'store_username', 'image', 'images', 'tags', 'created',
+                  'store_name', 'store_username', 'is_official_store', 'image', 'images', 'tags', 'created',
                   'is_own_store', 'weight', 'is_digital']
 
     @extend_schema_field(OpenApiTypes.BOOL)
