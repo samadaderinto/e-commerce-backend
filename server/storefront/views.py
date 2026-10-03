@@ -46,7 +46,7 @@ from .serializers import (
     AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
     CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
     CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
-    OrderSerializer, ProductIdRequestSerializer, RefundRequestSerializer, RegisterSerializer,
+    OrderSerializer, ProductIdRequestSerializer, PublicStoreSerializer, RefundRequestSerializer, RegisterSerializer,
     ReviewSerializer, ShippingRateSerializer, UserSerializer, WalletCheckoutSerializer, unit_price,
 )
 
@@ -255,6 +255,15 @@ class ProductDetailView(APIView):
     def get(self, request, pk):
         product = get_object_or_404(catalog(), pk=pk)
         return Response(CatalogSerializer(product, context={'request': request}).data)
+
+
+class PublicStoreView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(operation_id='storefront_public_store_retrieve', responses=PublicStoreSerializer, auth=[])
+    def get(self, request, pk):
+        store = get_object_or_404(Store.objects.filter(status=Store.STATUS_ACTIVE, verified_at__isnull=False), pk=pk)
+        return Response(PublicStoreSerializer(store).data)
 
 
 class ReviewsView(APIView):

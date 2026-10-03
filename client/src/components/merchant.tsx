@@ -83,7 +83,108 @@ function MerchantDashboard({ store }: { store: Store }) {
 
   const isOfficial = Boolean(store.is_official || user?.is_superuser);
 
-  return <>{store.status === 'pending' && !isOfficial && <p className="muted" role="status">Your store is awaiting staff verification. You can prepare product drafts while we review it; products cannot be published until approval.</p>}<div className="merchant-heading"><div><span className="eyebrow green">LET’S MAKE IT A GOOD DAY</span><h1>Hello, {user?.first_name}.</h1><p style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>Here’s what’s happening at {store.name}.{isOfficial && <VerifiedBadge size={16} />}</p></div><div className="form-actions"><button className="button secondary" onClick={() => setRequestingPayout(true)}><WalletCards size={17} />Request payout</button><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div></div><div className="dashboard-period"><h2>Your store at a glance</h2><select aria-label="Dashboard period" value={days} onChange={event => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div>{stats.isLoading ? <Loading /> : stats.error ? <ErrorState error={stats.error} retry={() => stats.refetch()} /> : data && <>
+  return (
+    <>
+      {store.status === 'pending' && !isOfficial && (
+        <p className="muted" role="status">
+          Your store is awaiting staff verification. You can prepare product drafts while we review it; products cannot be published until approval.
+        </p>
+      )}
+      <div className="merchant-heading">
+        <div>
+          <span className="eyebrow green">LET’S MAKE IT A GOOD DAY</span>
+          <h1>Hello, {user?.first_name}.</h1>
+          <p style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            Here’s what’s happening at {store.name}.
+            <VerifiedBadge
+              tier={isOfficial ? 'official' : 'starter'}
+              tierData={store.seller_tier}
+              size={17}
+            />
+            <span
+              style={{
+                fontSize: '10px',
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                padding: '2px 8px',
+                borderRadius: '10px',
+                background: isOfficial
+                  ? '#fef3c7'
+                  : (store.seller_tier?.tier === 'legendary'
+                      ? '#ffe4e6'
+                      : store.seller_tier?.tier === 'mega'
+                        ? '#e0f2fe'
+                        : store.seller_tier?.tier === 'power'
+                          ? '#d1fae5'
+                          : store.seller_tier?.tier === 'accelerator'
+                            ? '#ede9fe'
+                            : store.seller_tier?.tier === 'booster'
+                              ? '#f1f5f9'
+                              : '#e0f2fe'),
+                color: isOfficial
+                  ? '#b45309'
+                  : (store.seller_tier?.tier === 'booster'
+                      ? '#475569'
+                      : store.seller_tier?.badge_hex || '#1d9bf0'),
+                border: store.seller_tier?.tier === 'legendary' ? '1px solid #fecdd3' : 'none'
+              }}
+            >
+              {isOfficial ? 'Official Partner Store (Gold)' : (store.seller_tier?.name ? `${store.seller_tier.name} Seller` : 'Starter')}
+            </span>
+          </p>
+        </div>
+        <div className="form-actions">
+          <button className="button secondary" onClick={() => setRequestingPayout(true)}>
+            <WalletCards size={17} />
+            Request payout
+          </button>
+          <Link className="button" href="/merchant/products/new">
+            <Plus size={17} />
+            Add product
+          </Link>
+        </div>
+      </div>
+
+      {!isOfficial && store.seller_tier?.next_tier && store.seller_tier.next_threshold && (
+        <div
+          style={{
+            background: '#f8fafc',
+            border: '1px solid var(--line)',
+            borderRadius: '8px',
+            padding: '12px 18px',
+            marginBottom: '20px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '16px',
+            flexWrap: 'wrap'
+          }}
+        >
+          <div>
+            <strong style={{ fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Seller Level: <VerifiedBadge tierData={store.seller_tier} size={15} /> {store.seller_tier.name}
+            </strong>
+            <small className="muted" style={{ fontSize: '11px' }}>
+              Total Sales: {money(store.seller_tier.current_sales || 0)} · Reach {money(store.seller_tier.next_threshold)} to unlock <strong>{store.seller_tier.next_tier}</strong> badge
+            </small>
+          </div>
+          <div style={{ minWidth: '170px', flex: '1', maxWidth: '300px' }}>
+            <div style={{ height: '7px', background: '#e2e8f0', borderRadius: '4px', overflow: 'hidden' }}>
+              <div
+                style={{
+                  height: '100%',
+                  background: store.seller_tier.badge_hex || 'var(--green)',
+                  width: `${Math.min(100, Math.round(((store.seller_tier.current_sales || 0) / store.seller_tier.next_threshold) * 100))}%`
+                }}
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9px', color: 'var(--muted)', marginTop: '4px' }}>
+              <span>{money(store.seller_tier.current_sales || 0)}</span>
+              <span>Next: {store.seller_tier.next_tier} ({money(store.seller_tier.next_threshold)})</span>
+            </div>
+          </div>
+        </div>
+      )}<div className="dashboard-period"><h2>Your store at a glance</h2><select aria-label="Dashboard period" value={days} onChange={event => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div>{stats.isLoading ? <Loading /> : stats.error ? <ErrorState error={stats.error} retry={() => stats.refetch()} /> : data && <>
     <div className="stats-grid">{[
       {label: 'Available for Payout', value: money(data.wallet?.available_balance || '0.00'), icon: WalletCards, note: 'Cleared sales past 7-day refund window'},
       {label: 'In Review (Escrow)', value: money(data.wallet?.in_review || '0.00'), icon: Clock, note: 'Orders within 7-day refund period'},
@@ -96,7 +197,8 @@ function MerchantDashboard({ store }: { store: Store }) {
     <section className="merchant-section"><div className="section-heading"><h2>Recent orders</h2><Link className="text-link" href="/merchant/orders">View all orders <ArrowRight size={16} /></Link></div>{orders.isLoading ? <Loading /> : orders.error ? <ErrorState error={orders.error} /> : <MerchantOrderTable orders={orders.data?.results || []} />}</section>
     <section className="merchant-section"><div className="section-heading"><h2>Payout history</h2><span className="muted">{payouts.data?.length || 0} payout requests</span></div>{payouts.isLoading ? <Loading /> : payouts.error ? <ErrorState error={payouts.error} /> : !payouts.data?.length ? <p className="muted">No payouts requested yet.</p> : <div className="table-scroll"><table><thead><tr><th>Date</th><th>Reference</th><th>Amount</th><th>Method</th><th>Status</th></tr></thead><tbody>{payouts.data.map(p => <tr key={p.id}><td>{new Date(p.created).toLocaleDateString()}</td><td><strong>{p.reference}</strong></td><td>{money(p.amount)}</td><td>{p.payout_method}</td><td><Status value={p.status} /></td></tr>)}</tbody></table></div>}</section>
     <div className="dashboard-footnote">{isOfficial ? 'Company official store: 100% of sales are retained with zero platform commission fee.' : 'Net sales are calculated at 96% after the 4% platform fee. Funds clear from review to your available payout balance after the 7-day customer refund window expires.'}</div>
-  </>}</>;
+  </>}</>
+  );
 }
 
 function exportRows(products: MerchantProduct[]) {
@@ -111,7 +213,7 @@ function MerchantProducts({ store }: { store: Store }) {
   const query = new URLSearchParams({ search, limit: '15', offset: String(offset) }); if (filter) query.set('visibility', filter);
   const products = useQuery({ queryKey: ['merchant-products', store.id, query.toString()], queryFn: () => api<Page<MerchantProduct>>(`stores/${store.id}/products?${query}`) });
   async function toggle(product: MerchantProduct) { setBusy(product.id); try { await api(`stores/${store.id}/products/${product.id}`, 'PATCH', { visibility: !product.visibility }); await client.invalidateQueries({ queryKey: ['merchant-products'] }); await client.invalidateQueries({ queryKey: ['dashboard'] }); await client.invalidateQueries({ queryKey: ['products'] }); notify(product.visibility ? 'Product unpublished' : 'Your product is live'); } catch (error) { notify((error as Error).message, true); } finally { setBusy(null); } }
-  return <><div className="merchant-heading"><div><h1>Your products</h1><p>A collection worth discovering.</p></div><div className="form-actions"><button className="button secondary" title="Export current page" disabled={!products.data?.results.length} onClick={() => exportRows(products.data!.results)}><ArrowDownToLine size={17} />Export page</button><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div></div><div className="merchant-toolbar"><div className="tabs">{[['', 'All products'], ['true', 'Published'], ['false', 'Drafts']].map(([value, label]) => <button className={filter === value ? 'active' : ''} key={value} onClick={() => { setFilter(value); setOffset(0); }}>{label}</button>)}</div><div className="search-box"><Search size={17} /><input aria-label="Search your products" placeholder="Search products…" value={search} onChange={event => { setSearch(event.target.value); setOffset(0); }} /></div></div>{products.isLoading ? <Loading /> : products.error ? <ErrorState error={products.error} retry={() => products.refetch()} /> : !products.data?.results.length ? <Empty title={search ? 'Nothing matches just yet' : 'Your first product starts here'} text={search ? 'Try another search or change the filter.' : 'Add your first listing and give your customers something to discover.'} href="/merchant/products/new" label="Add product" /> : <><div className="table-scroll"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Inventory</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{products.data.results.map(product => <tr key={product.id}><td><Link className="table-product" href={`/merchant/products/${product.id}`}><ProductImage src={product.images[0]?.image || product.image_url} alt={product.title} /><span><strong>{product.title}</strong><small style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>#{String(product.id).padStart(5, '0')} · {product.brand || store.name}{store.is_official && <VerifiedBadge size={12} />}</small></span></Link></td><td>{categories.find(category => category.key === product.category)?.name || product.category}</td><td className="table-price">{money(product.price)}</td><td><span className={product.available <= 5 ? 'low-stock' : ''}>{product.available} in stock</span></td><td><button className={`publish-toggle ${product.visibility ? 'on' : ''}`} disabled={busy === product.id} role="switch" aria-checked={product.visibility} aria-label={`Publish ${product.title}`} onClick={() => toggle(product)}><span />{product.visibility ? 'Published' : 'Draft'}</button></td><td><Link className="icon-button" title="Edit product" aria-label={`Edit ${product.title}`} href={`/merchant/products/${product.id}`}><ArrowUpRight size={18} /></Link></td></tr>)}</tbody></table></div><div className="table-pagination"><span>Showing {offset + 1}–{Math.min(offset + 15, products.data.count)} of {products.data.count} products</span><div><button className="icon-button" aria-label="Previous page" disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 15))}><ChevronLeft size={18} /></button><button className="icon-button" aria-label="Next page" disabled={offset + 15 >= products.data.count} onClick={() => setOffset(value => value + 15)}><ChevronRight size={18} /></button></div></div></>}</>;
+  return <><div className="merchant-heading"><div><h1>Your products</h1><p>A collection worth discovering.</p></div><div className="form-actions"><button className="button secondary" title="Export current page" disabled={!products.data?.results.length} onClick={() => exportRows(products.data!.results)}><ArrowDownToLine size={17} />Export page</button><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div></div><div className="merchant-toolbar"><div className="tabs">{[['', 'All products'], ['true', 'Published'], ['false', 'Drafts']].map(([value, label]) => <button className={filter === value ? 'active' : ''} key={value} onClick={() => { setFilter(value); setOffset(0); }}>{label}</button>)}</div><div className="search-box"><Search size={17} /><input aria-label="Search your products" placeholder="Search products…" value={search} onChange={event => { setSearch(event.target.value); setOffset(0); }} /></div></div>{products.isLoading ? <Loading /> : products.error ? <ErrorState error={products.error} retry={() => products.refetch()} /> : !products.data?.results.length ? <Empty title={search ? 'Nothing matches just yet' : 'Your first product starts here'} text={search ? 'Try another search or change the filter.' : 'Add your first listing and give your customers something to discover.'} href="/merchant/products/new" label="Add product" /> : <><div className="table-scroll"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Inventory</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{products.data.results.map(product => <tr key={product.id}><td><Link className="table-product" href={`/merchant/products/${product.id}`}><ProductImage src={product.images[0]?.image || product.image_url} alt={product.title} /><span><strong>{product.title}</strong><small style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>#{String(product.id).padStart(5, '0')} · {product.brand || store.name}<VerifiedBadge tier={store.is_official ? 'official' : 'starter'} tierData={store.seller_tier} size={12} /></small></span></Link></td><td>{categories.find(category => category.key === product.category)?.name || product.category}</td><td className="table-price">{money(product.price)}</td><td><span className={product.available <= 5 ? 'low-stock' : ''}>{product.available} in stock</span></td><td><button className={`publish-toggle ${product.visibility ? 'on' : ''}`} disabled={busy === product.id} role="switch" aria-checked={product.visibility} aria-label={`Publish ${product.title}`} onClick={() => toggle(product)}><span />{product.visibility ? 'Published' : 'Draft'}</button></td><td><Link className="icon-button" title="Edit product" aria-label={`Edit ${product.title}`} href={`/merchant/products/${product.id}`}><ArrowUpRight size={18} /></Link></td></tr>)}</tbody></table></div><div className="table-pagination"><span>Showing {offset + 1}–{Math.min(offset + 15, products.data.count)} of {products.data.count} products</span><div><button className="icon-button" aria-label="Previous page" disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 15))}><ChevronLeft size={18} /></button><button className="icon-button" aria-label="Next page" disabled={offset + 15 >= products.data.count} onClick={() => setOffset(value => value + 15)}><ChevronRight size={18} /></button></div></div></>}</>;
 }
 
 function ProductEditor({ store, id }: { store: Store; id: string }) {
@@ -205,6 +307,155 @@ function MerchantSettings({ store }: { store: Store }) {
   const { notify } = useShop(); const client = useQueryClient(); const [busy, setBusy] = useState(false);
   const profile = useQuery({ queryKey: ['store-profile', store.id], queryFn: () => api<Record<string, string>>(`stores/${store.id}/profile`) });
   const address = useQuery({ queryKey: ['store-address', store.id], queryFn: () => api<Record<string, string>>(`stores/${store.id}/pickup-address`) });
-  async function submit(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setBusy(true); const data = Object.fromEntries(new FormData(event.currentTarget)); try { await api(`stores/${store.id}`, 'PATCH', {name: data.name}); await api(`stores/${store.id}/profile`, 'PATCH', {email: data.email, bio: data.bio, phone1: data.phone1, instagram: data.instagram}); await api(`stores/${store.id}/pickup-address`, 'PUT', {address: data.address, city: data.city, state: data.state, country: data.country, zip: data.zip, is_default: true}); await client.invalidateQueries({queryKey: ['stores']}); await profile.refetch(); await address.refetch(); notify('Your store details are updated'); } catch (error) { notify((error as Error).message, true); } finally {setBusy(false);} }
-  return <><div className="merchant-heading"><div><h1>Make yourself at home.</h1><p>Your store, your details.</p></div></div>{profile.isLoading || address.isLoading ? <Loading /> : profile.error || address.error ? <ErrorState error={(profile.error || address.error)!} /> : <form className="form-stack settings-form" onSubmit={submit}><h2>Store profile</h2><div className="form-row"><Field label="Store name"><input name="name" defaultValue={store.name} required maxLength={40} /></Field><Field label="Contact email"><input type="email" name="email" defaultValue={profile.data?.email} required /></Field></div><Field label="About your store"><textarea name="bio" defaultValue={profile.data?.bio} rows={4} /></Field><div className="form-row"><Field label="Phone number"><input name="phone1" type="tel" defaultValue={profile.data?.phone1 || ''} /></Field><Field label="Instagram URL"><input name="instagram" type="url" defaultValue={profile.data?.instagram || ''} /></Field></div><h2>Pickup address</h2><Field label="Street address"><input name="address" required defaultValue={address.data?.address} /></Field><div className="form-row">{['city', 'state', 'country', 'zip'].map(field => <Field label={field === 'zip' ? 'Postal code' : field[0].toUpperCase() + field.slice(1)} key={field}><input name={field} required defaultValue={address.data?.[field] || ''} /></Field>)}</div><button className="button" disabled={busy}>{busy ? 'Saving…' : 'Save store details'}<Check size={17} /></button></form>}</>;
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
+
+  const effectiveAvatar = avatarUrl ?? profile.data?.avatar_url ?? '';
+  const effectiveBanner = bannerUrl ?? profile.data?.banner_url ?? '';
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true);
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+    try {
+      await api(`stores/${store.id}`, 'PATCH', { name: data.name });
+      await api(`stores/${store.id}/profile`, 'PATCH', {
+        email: data.email,
+        bio: data.bio,
+        avatar_url: data.avatar_url,
+        banner_url: data.banner_url,
+        website: data.website,
+        phone1: data.phone1,
+        whatsapp: data.whatsapp,
+        instagram: data.instagram,
+        twitter: data.twitter,
+      });
+      await api(`stores/${store.id}/pickup-address`, 'PUT', {
+        address: data.address,
+        city: data.city,
+        state: data.state,
+        country: data.country,
+        zip: data.zip,
+        is_default: true,
+      });
+      await client.invalidateQueries({ queryKey: ['stores'] });
+      await client.invalidateQueries({ queryKey: ['public-store', store.id] });
+      await profile.refetch();
+      await address.refetch();
+      notify('Your store details are updated');
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="merchant-heading">
+        <div>
+          <h1>Make yourself at home.</h1>
+          <p>Your store, your brand identity.</p>
+        </div>
+      </div>
+      {profile.isLoading || address.isLoading ? (
+        <Loading />
+      ) : profile.error || address.error ? (
+        <ErrorState error={(profile.error || address.error)!} />
+      ) : (
+        <form className="form-stack settings-form" onSubmit={submit}>
+          <h2>Store branding (X.com style)</h2>
+          <div className="form-row">
+            <Field label="Profile picture / Logo URL (Circular avatar)">
+              <input
+                name="avatar_url"
+                type="url"
+                placeholder="https://…/logo.png"
+                defaultValue={profile.data?.avatar_url}
+                onChange={e => setAvatarUrl(e.target.value)}
+              />
+            </Field>
+            <Field label="Header / Cover banner URL (Wide banner)">
+              <input
+                name="banner_url"
+                type="url"
+                placeholder="https://…/banner.jpg"
+                defaultValue={profile.data?.banner_url}
+                onChange={e => setBannerUrl(e.target.value)}
+              />
+            </Field>
+          </div>
+
+          {(effectiveAvatar || effectiveBanner) && (
+            <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--line)', background: '#fafbf8', marginBottom: '15px' }}>
+              <div style={{ height: '110px', background: effectiveBanner ? `url(${effectiveBanner}) center/cover no-repeat` : 'linear-gradient(135deg, #1d9bf0, #173d2c)', position: 'relative' }} />
+              <div style={{ padding: '0 20px 16px', display: 'flex', alignItems: 'flex-end', gap: '15px', marginTop: '-35px' }}>
+                <div style={{ width: '70px', height: '70px', borderRadius: '50%', border: '3px solid white', overflow: 'hidden', background: '#eef2ea', display: 'grid', placeItems: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
+                  {effectiveAvatar ? <img src={effectiveAvatar} alt={store.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--green)' }}>{store.name?.[0]}</span>}
+                </div>
+                <div style={{ paddingBottom: '4px' }}>
+                  <strong style={{ fontSize: '15px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {store.name}
+                    <VerifiedBadge
+                      tier={store.is_official ? 'official' : 'starter'}
+                      tierData={store.seller_tier}
+                      size={17}
+                    />
+                  </strong>
+                  <small className="muted">@{store.username || 'store'}</small>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <h2>Store profile</h2>
+          <div className="form-row">
+            <Field label="Store name">
+              <input name="name" defaultValue={store.name} required maxLength={40} />
+            </Field>
+            <Field label="Contact email">
+              <input type="email" name="email" defaultValue={profile.data?.email} required />
+            </Field>
+          </div>
+          <Field label="About your store (Bio)">
+            <textarea name="bio" defaultValue={profile.data?.bio} rows={3} placeholder="Tell shoppers about your products and company mission..." />
+          </Field>
+          <div className="form-row">
+            <Field label="Website URL">
+              <input name="website" type="url" placeholder="https://…" defaultValue={profile.data?.website || ''} />
+            </Field>
+            <Field label="Telephone number">
+              <input name="phone1" type="tel" placeholder="+1 (555) 000-0000" defaultValue={profile.data?.phone1 || ''} />
+            </Field>
+          </div>
+          <div className="form-row">
+            <Field label="WhatsApp">
+              <input name="whatsapp" type="tel" placeholder="+1 (555) 000-0000" defaultValue={profile.data?.whatsapp || ''} />
+            </Field>
+            <Field label="X / Twitter (@handle or URL)">
+              <input name="twitter" defaultValue={profile.data?.twitter || ''} placeholder="https://x.com/yourhandle" />
+            </Field>
+          </div>
+          <Field label="Instagram URL">
+            <input name="instagram" type="url" defaultValue={profile.data?.instagram || ''} placeholder="https://instagram.com/yourhandle" />
+          </Field>
+
+          <h2>Pickup & shipping address</h2>
+          <Field label="Street address">
+            <input name="address" required defaultValue={address.data?.address} />
+          </Field>
+          <div className="form-row">
+            {['city', 'state', 'country', 'zip'].map(field => (
+              <Field label={field === 'zip' ? 'Postal code' : field[0].toUpperCase() + field.slice(1)} key={field}>
+                <input name={field} required defaultValue={address.data?.[field] || ''} />
+              </Field>
+            ))}
+          </div>
+          <button className="button" disabled={busy}>
+            {busy ? 'Saving…' : 'Save store details'}
+            <Check size={17} />
+          </button>
+        </form>
+      )}
+    </>
+  );
 }

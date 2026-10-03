@@ -43,6 +43,118 @@ def get_or_create_merchant_wallet(user: Any) -> MerchantWallet:
     return wallet
 
 
+def calculate_store_tier(store: Store | None) -> dict:
+    """
+    Computes the seller tier and badge color based on cumulative sales volume:
+    - Official Store: 'official' (Gold badge #e5a93c)
+    - Starter: $0 - $4,999 (Blue badge #1d9bf0)
+    - Booster: $5,000 - $24,999 (Silver badge #94a3b8)
+    - Accelerator: $25,000 - $99,999 (Purple badge #8b5cf6)
+    - Power Seller: $100,000 - $499,999 (Emerald badge #10b981)
+    - Mega Seller: $500,000 - $999,999 (Diamond badge #0ea5e9)
+    - Legendary Seller: $1,000,000+ (Cosmic Ruby Flame badge #ff0055)
+    """
+    if not store:
+        return {
+            'tier': 'starter',
+            'name': 'Starter',
+            'badge_color': 'blue',
+            'badge_hex': '#1d9bf0',
+            'min_sales': 0.0,
+            'current_sales': 0.0,
+            'next_tier': 'Booster',
+            'next_threshold': 5000.0,
+        }
+
+    if getattr(store, 'is_official', False):
+        return {
+            'tier': 'official',
+            'name': 'Official Partner Store',
+            'badge_color': 'gold',
+            'badge_hex': '#e5a93c',
+            'min_sales': 0.0,
+            'current_sales': 0.0,
+            'next_tier': None,
+            'next_threshold': None,
+        }
+
+    gross = StoreEarningsLedger.objects.filter(
+        store=store,
+        entry_type=StoreEarningsLedger.TYPE_SALE,
+    ).exclude(
+        status=StoreEarningsLedger.STATUS_REVERSED
+    ).aggregate(total=Sum('gross_amount'))['total'] or Decimal('0.00')
+
+    sales = float(gross)
+
+    if sales >= 1000000.0:
+        return {
+            'tier': 'legendary',
+            'name': 'Legendary Seller',
+            'badge_color': 'legendary',
+            'badge_hex': '#ff0055',
+            'min_sales': 1000000.0,
+            'current_sales': sales,
+            'next_tier': None,
+            'next_threshold': None,
+        }
+    elif sales >= 500000.0:
+        return {
+            'tier': 'mega',
+            'name': 'Mega Seller',
+            'badge_color': 'diamond',
+            'badge_hex': '#0ea5e9',
+            'min_sales': 500000.0,
+            'current_sales': sales,
+            'next_tier': 'Legendary Seller',
+            'next_threshold': 1000000.0,
+        }
+    elif sales >= 100000.0:
+        return {
+            'tier': 'power',
+            'name': 'Power Seller',
+            'badge_color': 'emerald',
+            'badge_hex': '#10b981',
+            'min_sales': 100000.0,
+            'current_sales': sales,
+            'next_tier': 'Mega Seller',
+            'next_threshold': 500000.0,
+        }
+    elif sales >= 25000.0:
+        return {
+            'tier': 'accelerator',
+            'name': 'Accelerator',
+            'badge_color': 'purple',
+            'badge_hex': '#8b5cf6',
+            'min_sales': 25000.0,
+            'current_sales': sales,
+            'next_tier': 'Power Seller',
+            'next_threshold': 100000.0,
+        }
+    elif sales >= 5000.0:
+        return {
+            'tier': 'booster',
+            'name': 'Booster',
+            'badge_color': 'silver',
+            'badge_hex': '#94a3b8',
+            'min_sales': 5000.0,
+            'current_sales': sales,
+            'next_tier': 'Accelerator',
+            'next_threshold': 25000.0,
+        }
+    else:
+        return {
+            'tier': 'starter',
+            'name': 'Starter',
+            'badge_color': 'blue',
+            'badge_hex': '#1d9bf0',
+            'min_sales': 0.0,
+            'current_sales': sales,
+            'next_tier': 'Booster',
+            'next_threshold': 5000.0,
+        }
+
+
 @transaction.atomic
 def record_order_earnings_for_merchant(order: Any) -> list[StoreEarningsLedger]:
     """

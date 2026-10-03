@@ -1,4 +1,14 @@
-export type Product = { is_own_store: boolean; is_official_store?: boolean; is_digital: boolean; id: number; title: string; description: string; category: string; brand: string; price: string; sale_price: string; discount: number; available: number; weight?: string; average_rating: string; rating_count: number; store: number; store_name: string; store_username: string; image: string; images: string[]; tags: string[]; created: string };
+export type SellerTier = {
+  tier: 'official' | 'starter' | 'booster' | 'accelerator' | 'power' | 'mega' | 'legendary';
+  name: string;
+  badge_color: 'gold' | 'blue' | 'silver' | 'purple' | 'emerald' | 'diamond' | 'legendary';
+  badge_hex: string;
+  min_sales: number;
+  current_sales?: number;
+  next_tier?: string | null;
+  next_threshold?: number | null;
+};
+export type Product = { is_own_store: boolean; is_official_store?: boolean; seller_tier?: SellerTier; is_digital: boolean; id: number; title: string; description: string; category: string; brand: string; price: string; sale_price: string; discount: number; available: number; weight?: string; average_rating: string; rating_count: number; store: number; store_name: string; store_username: string; image: string; images: string[]; tags: string[]; created: string };
 export type User = { id: number; email: string; first_name: string; last_name: string; phone1: string; is_staff: boolean; is_superuser: boolean };
 export type StaffUser = User & { phone2?: string | null; gender: 'male' | 'female'; is_active: boolean; date_joined: string };
 export type Address = { id: number; address: string; city: string; state: string; country: string; zip: string; is_default: boolean };
@@ -7,7 +17,9 @@ export type Cart = { id?: number; items: CartLine[]; subtotal: string; shipping:
 export type ShippingRate = { service_id: string; name: string; description: string; amount: string; is_default: boolean };
 export type TrackingEvent = { status: string; description: string; timestamp: string };
 export type Order = { id: number; reference: string; status: string; created: string; total: string; subtotal: string; payment_type: string; carrier?: string; tracking_number?: string; tracking_url?: string; shipped_at?: string | null; delivered_at?: string | null; tracking_events?: TrackingEvent[]; items: { product: number; title: string; image: string; quantity: number; unit_price: string; is_digital?: boolean; download_url?: string }[]; address: Address };
-export type Store = { id: number; name: string; username: string; status: 'pending' | 'active' | 'blocked'; is_official?: boolean; verified_at?: string | null };
+export type StoreProfile = { email?: string; bio?: string; avatar_url?: string; banner_url?: string; website?: string; instagram?: string; twitter?: string; facebook?: string; whatsapp?: string; phone1?: string; phone2?: string };
+export type Store = { id: number; name: string; username: string; status: 'pending' | 'active' | 'blocked'; is_official?: boolean; seller_tier?: SellerTier; verified_at?: string | null };
+export type PublicStore = { id: number; name: string; username: string; is_official: boolean; seller_tier?: SellerTier; created: string; profile?: StoreProfile | null; address?: { city: string; state: string; country: string } | null; product_count: number };
 
 export type MerchantProduct = { id: number; title: string; description: string; category: string; price: string; available: number; discount: number; visibility: boolean; brand: string; image_url: string; images: {id: number; image: string}[]; tags: string[]; sales: number; is_digital: boolean; digital_file_url: string; weight?: string };
 export type Page<T> = { count: number; results: T[]; next?: string | null; previous?: string | null; pages?: number; page?: number };

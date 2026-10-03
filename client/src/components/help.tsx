@@ -24,6 +24,18 @@ export function HelpPage() {
       <h2>The everyday questions</h2>
       {[
         [
+          'What do the verified store checkmarks (ticks) and badge colors mean?',
+          'Every approved seller on ProAce receives a verified checkmark (tick) to signal authenticity, identity verification, and customer trust. As merchants grow their sales and maintain top review ratings, their verified tick automatically upgrades:\n• Starter Seller (Blue Tick): Staff-verified active merchant.\n• Booster Seller (Silver Tick): $1,000+ in verified sales.\n• Accelerator Seller (Electric Violet Tick): $5,000+ in verified sales.\n• Power Seller (Emerald Green Tick): $20,000+ in verified sales.\n• Mega Seller (Diamond Cyan Tick): $50,000+ in verified sales.\n• Official Partner (Gold Tick): ProAce flagship & official brand partner stores (0% platform commission).',
+        ],
+        [
+          'How does a store get verified to earn the blue tick?',
+          'All new stores undergo mandatory verification review by our compliance team before they can go public. To qualify, merchants must complete onboarding with verified contact details, a physical pickup address, and publishable product listings that meet our safety and quality guidelines. Once staff approves the store, the blue tick is immediately activated.',
+        ],
+        [
+          'Can a store lose its verified tick or be blocked?',
+          'Yes. Verification is tied to trust and customer satisfaction. If a store violates marketplace guidelines, sells prohibited or counterfeit goods, or accumulates excessive unresolved buyer disputes, compliance staff may suspend, block, or revoke the store’s verified badge.',
+        ],
+        [
           'How does package tracking work?',
           'Once a seller ships your order, a tracking number and direct USPS tracking link appear on your order details page. You can follow parcel transit milestones in real-time on ProAce or directly on USPS.com.',
         ],
@@ -49,7 +61,7 @@ export function HelpPage() {
         ],
         [
           'How do seller payouts and escrow work?',
-          'Net sales from new orders are held in a 7-day buyer review escrow corresponding to the refund window. Once cleared, merchants can withdraw available funds to their bank accounts or payment accounts after a transparent 4% platform fee.',
+          'Net sales from new orders are held in a 7-day buyer review escrow corresponding to the refund window. Once cleared, merchants can withdraw available funds across all their stores to their bank accounts or payment accounts after a transparent 4% platform fee (0% for Official Partner stores).',
         ],
         [
           'Where can I manage my orders?',
@@ -58,7 +70,7 @@ export function HelpPage() {
       ].map(([question, answer]) => (
         <details key={question}>
           <summary>{question}</summary>
-          <p>{answer}</p>
+          <p style={{ whiteSpace: 'pre-line' }}>{answer}</p>
         </details>
       ))}
 
@@ -103,6 +115,10 @@ export function PolicyPage({ type }: { type: string }) {
           <p>
             {business.legalName} serves customers across the United States for physical goods via USPS postage calculation. Digital products are delivered electronically worldwide with zero shipping fees.
           </p>
+          <h2>Store Verification & Verified Tick Badges</h2>
+          <p>
+            To protect buyers and ensure authenticity across the marketplace, all stores must undergo mandatory onboarding review by ProAce staff. Once approved, stores receive the <strong>Verified Blue Tick</strong>. Sellers automatically unlock progressive tier checkmarks (Silver, Violet, Emerald, Diamond, and Gold) based on cumulative verified sales and positive fulfillment track records. Badges remain subject to ongoing compliance and may be revoked if quality or safety guidelines are breached.
+          </p>
           <h2>7-Day Return Window & Refunds</h2>
           <p>
             Customers may request a return or refund for physical items within <strong>7 calendar days</strong> of placing their order. Approved refunds can be credited instantly to your <strong>ProAce Wallet (Store Credit)</strong> or refunded to the original payment method. Physical returns are inspected and resolved within 1–2 business days.
@@ -113,7 +129,7 @@ export function PolicyPage({ type }: { type: string }) {
           </p>
           <h2>Merchant Escrow & Platform Fees</h2>
           <p>
-            Merchants receive 96% of net sales after a standard 4% platform processing fee. Net earnings from orders are held in 7-day buyer escrow before clearing into available payout balances.
+            Standard merchants receive 96% of net sales after a standard 4% platform processing fee (Official Partner stores retain 100% of sales with 0% commission). Net earnings from orders are held in a 7-day buyer escrow before clearing into available payout balances.
           </p>
           <h2>Order Cancellation</h2>
           <p>

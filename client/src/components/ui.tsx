@@ -11,39 +11,118 @@ import {
   ShoppingBag,
   Star,
 } from "lucide-react";
-import { Product } from "@/lib/types";
+import { Product, SellerTier } from "@/lib/types";
 import { money } from "@/lib/api";
 import { useShop } from "./providers";
 
+export type TierLevel = 'official' | 'starter' | 'booster' | 'accelerator' | 'power' | 'mega' | 'legendary';
+
+export const tierConfig: Record<TierLevel, { color: string; label: string; title: string }> = {
+  official: {
+    color: '#e5a93c', // Golden
+    label: 'Official Store',
+    title: 'Verified Official Partner Store (Gold Badge)',
+  },
+  starter: {
+    color: '#1d9bf0', // Blue
+    label: 'Starter Seller',
+    title: 'Verified Starter Seller (Blue Badge)',
+  },
+  booster: {
+    color: '#94a3b8', // Silver / Slate
+    label: 'Booster Seller',
+    title: 'Verified Booster Seller ($5,000+ Sales - Silver Badge)',
+  },
+  accelerator: {
+    color: '#8b5cf6', // Electric Violet
+    label: 'Accelerator Seller',
+    title: 'Verified Accelerator Seller ($25,000+ Sales - Purple Badge)',
+  },
+  power: {
+    color: '#10b981', // Emerald Green
+    label: 'Power Seller',
+    title: 'Verified Power Seller ($100,000+ Sales - Emerald Badge)',
+  },
+  mega: {
+    color: '#0ea5e9', // Diamond Cyan
+    label: 'Mega Seller',
+    title: 'Verified Mega Seller ($500,000+ Sales - Diamond Badge)',
+  },
+  legendary: {
+    color: '#ff0055', // Cosmic Ruby Flame
+    label: 'Legendary Seller',
+    title: 'Verified Legendary Seller ($1,000,000+ Sales - Cosmic Badge)',
+  },
+};
+
 export function VerifiedBadge({
+  tier = 'starter',
+  tierData,
   size = 15,
   className = "",
 }: {
+  tier?: TierLevel;
+  tierData?: SellerTier;
   size?: number;
   className?: string;
 }) {
+  const activeTier: TierLevel = (tierData?.tier as TierLevel) || tier;
+  const config = tierConfig[activeTier] || tierConfig.starter;
+  const color = tierData?.badge_hex || config.color;
+
   return (
     <span
-      className={`verified-badge ${className}`}
-      title="Verified Official Store"
+      className={`verified-badge tier-${activeTier} ${className}`}
+      title={tierData ? `Verified ${tierData.name} · ProAce Seller Network` : config.title}
       style={{
         display: "inline-flex",
         alignItems: "center",
         justifyContent: "center",
         verticalAlign: "middle",
-        color: "#1d9bf0",
+        color: color,
         flexShrink: 0,
       }}
     >
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        aria-label="Verified Official Store"
-      >
-        <path d="M22.25 12c0-1.43-.88-2.67-2.19-3.34.46-1.39.2-2.9-.81-3.91s-2.52-1.27-3.91-.81c-.67-1.31-1.91-2.19-3.34-2.19s-2.67.88-3.34 2.19c-1.39-.46-2.9-.2-3.91.81s-1.27 2.52-.81 3.91C2.63 9.33 1.75 10.57 1.75 12s.88 2.67 2.19 3.34c-.46 1.39-.2 2.9.81 3.91s2.52 1.27 3.91.81c.67 1.31 1.91 2.19 3.34 2.19s2.67-.88 3.34-2.19c1.39.46 2.9.2 3.91-.81s1.27-2.52.81-3.91c1.31-.67 2.19-1.91 2.19-3.34zm-11.79 3.84l-3.3-3.3 1.41-1.41 1.89 1.89 5.09-5.09 1.41 1.41-6.5 6.5z" />
-      </svg>
+      {activeTier === 'legendary' ? (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+          style={{ filter: "drop-shadow(0 0 3px rgba(255, 0, 85, 0.55))" }}
+          aria-label={tierData ? `Verified ${tierData.name}` : config.label}
+        >
+          <defs>
+            <linearGradient id="legendaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#ff007a" />
+              <stop offset="50%" stopColor="#a855f7" />
+              <stop offset="100%" stopColor="#ff0055" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M12 1L14.7 5.7L20 4.5L18.8 9.8L23 12.5L18.8 15.2L20 20.5L14.7 19.3L12 24L9.3 19.3L4 20.5L5.2 15.2L1 12.5L5.2 9.8L4 4.5L9.3 5.7L12 1Z"
+            fill="url(#legendaryGrad)"
+          />
+          <path
+            d="M9.5 12.5L11 14L15 9.5"
+            stroke="#ffffff"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      ) : (
+        <svg
+          width={size}
+          height={size}
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          aria-label={tierData ? `Verified ${tierData.name}` : config.label}
+        >
+          <path d="M22.25 12c0-1.43-.88-2.67-2.19-3.34.46-1.39.2-2.9-.81-3.91s-2.52-1.27-3.91-.81c-.67-1.31-1.91-2.19-3.34-2.19s-2.67.88-3.34 2.19c-1.39-.46-2.9-.2-3.91.81s-1.27 2.52-.81 3.91C2.63 9.33 1.75 10.57 1.75 12s.88 2.67 2.19 3.34c-.46 1.39-.2 2.9.81 3.91s2.52 1.27 3.91.81c.67 1.31 1.91 2.19 3.34 2.19s2.67-.88 3.34-2.19c1.39.46 2.9.2 3.91-.81s1.27-2.52.81-3.91c1.31-.67 2.19-1.91 2.19-3.34zm-11.79 3.84l-3.3-3.3 1.41-1.41 1.89 1.89 5.09-5.09 1.41 1.41-6.5 6.5z" />
+        </svg>
+      )}
     </span>
   );
 }
@@ -124,9 +203,13 @@ export function ProductCard({ product }: { product: Product }) {
         </button>
       </div>
       <div className="product-meta">
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 3 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           {product.brand || product.store_name}
-          {product.is_official_store && <VerifiedBadge size={13} />}
+          <VerifiedBadge
+            tier={product.is_official_store ? "official" : "starter"}
+            tierData={product.seller_tier}
+            size={13}
+          />
         </span>
         <span>
           <Star size={12} fill="currentColor" />

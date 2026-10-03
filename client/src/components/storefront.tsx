@@ -7,11 +7,17 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
   ArrowUpRight,
+  Calendar,
   Check,
   ChevronRight,
+  Globe,
   Heart,
   Headphones,
   Laptop,
+  Mail,
+  MapPin,
+  MessageCircle,
+  Phone,
   Shirt,
   Smartphone,
   Dumbbell,
@@ -24,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 import { api, categories, money } from "@/lib/api";
-import type { Page, Product } from "@/lib/types";
+import type { Page, Product, PublicStore } from "@/lib/types";
 import {
   Empty,
   ErrorState,
@@ -172,9 +178,17 @@ export function ShopPage() {
     (category) => category.key === params.get("category"),
   );
   const storeId = params.get("store");
+  const storeQuery = useQuery({
+    queryKey: ["public-store", storeId],
+    queryFn: () => api<PublicStore>(`stores/${storeId}/public`),
+    enabled: !!storeId && /^\d+$/.test(storeId),
+  });
+
+  const storeData = storeQuery.data;
+  const storeProfile = storeData?.profile;
   const firstProduct = products.data?.results?.[0];
-  const storeName = firstProduct?.store_name || (storeId ? `Store #${storeId}` : null);
-  const isOfficialStore = Boolean(firstProduct?.is_official_store);
+  const storeName = storeData?.name || firstProduct?.store_name || (storeId ? `Store #${storeId}` : null);
+  const isOfficialStore = Boolean(storeData?.is_official ?? firstProduct?.is_official_store);
 
   const title = storeName
     ? storeName
@@ -213,30 +227,228 @@ export function ShopPage() {
         )}
       </div>
 
-      <div className="shop-heading" style={storeName ? { paddingBottom: "24px" } : undefined}>
-        <div>
-          <span className="eyebrow green">
-            {storeName ? (isOfficialStore ? "OFFICIAL PARTNER STORE" : "FEATURED MERCHANT") : "THE PROACE COLLECTION"}
+      {storeName && storeId ? (
+        <section
+          className="store-profile-header"
+          style={{
+            marginBottom: "28px",
+            border: "1px solid var(--line)",
+            borderRadius: "12px",
+            overflow: "hidden",
+            background: "#fff",
+            boxShadow: "0 1px 4px rgba(0,0,0,0.04)"
+          }}
+        >
+          {/* Header Cover Banner */}
+          <div
+            style={{
+              height: "170px",
+              width: "100%",
+              background: storeProfile?.banner_url
+                ? `url(${storeProfile.banner_url}) center/cover no-repeat`
+                : "linear-gradient(135deg, #1d9bf0 0%, #0e3d29 100%)",
+              position: "relative"
+            }}
+          />
+
+          {/* Profile Details Container */}
+          <div style={{ padding: "0 28px 24px", position: "relative" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-end",
+                flexWrap: "wrap",
+                gap: "16px",
+                marginTop: "-50px",
+                marginBottom: "16px"
+              }}
+            >
+              {/* Circular Avatar */}
+              <div
+                style={{
+                  width: "100px",
+                  height: "100px",
+                  borderRadius: "50%",
+                  border: "4px solid #fff",
+                  overflow: "hidden",
+                  background: "#edf2ea",
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
+                  display: "grid",
+                  placeItems: "center",
+                  position: "relative",
+                  zIndex: 2
+                }}
+              >
+                {storeProfile?.avatar_url ? (
+                  <img
+                    src={storeProfile.avatar_url}
+                    alt={storeName}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
+                ) : (
+                  <span style={{ fontSize: "36px", fontWeight: 700, color: "var(--green)" }}>
+                    {storeName?.[0] || "S"}
+                  </span>
+                )}
+              </div>
+
+              {/* Action and Contact links */}
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {storeProfile?.website && (
+                  <a
+                    href={storeProfile.website}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="button secondary"
+                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                  >
+                    <Globe size={14} /> Website <ArrowUpRight size={12} />
+                  </a>
+                )}
+                {storeProfile?.phone1 && (
+                  <a
+                    href={`tel:${storeProfile.phone1}`}
+                    className="button secondary"
+                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                  >
+                    <Phone size={14} /> {storeProfile.phone1}
+                  </a>
+                )}
+                {storeProfile?.whatsapp && (
+                  <a
+                    href={`https://wa.me/${String(storeProfile.whatsapp).replace(/\D/g, "")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="button secondary"
+                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                  >
+                    <MessageCircle size={14} /> WhatsApp
+                  </a>
+                )}
+              </div>
+            </div>
+
+            {/* Store Name, Verified Badge, Username */}
+            <div style={{ marginBottom: "12px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <h1 style={{ fontSize: "26px", margin: 0, fontWeight: 750, letterSpacing: "-0.02em" }}>
+                  {storeName}
+                </h1>
+                <VerifiedBadge
+                  tier={isOfficialStore ? "official" : "starter"}
+                  tierData={storeData?.seller_tier || firstProduct?.seller_tier}
+                  size={22}
+                />
+                <span
+                  style={{
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    textTransform: "uppercase",
+                    padding: "3px 9px",
+                    borderRadius: "12px",
+                    background: isOfficialStore
+                      ? "#fef3c7"
+                      : (storeData?.seller_tier?.tier === "legendary"
+                          ? "#ffe4e6"
+                          : storeData?.seller_tier?.tier === "mega"
+                            ? "#e0f2fe"
+                            : storeData?.seller_tier?.tier === "power"
+                              ? "#d1fae5"
+                              : storeData?.seller_tier?.tier === "accelerator"
+                                ? "#ede9fe"
+                                : storeData?.seller_tier?.tier === "booster"
+                                  ? "#f1f5f9"
+                                  : "#e0f2fe"),
+                    color: isOfficialStore
+                      ? "#b45309"
+                      : (storeData?.seller_tier?.tier === "booster"
+                          ? "#475569"
+                          : storeData?.seller_tier?.badge_hex || "#1d9bf0"),
+                    border: storeData?.seller_tier?.tier === "legendary" ? "1px solid #fecdd3" : "none",
+                    letterSpacing: "0.05em"
+                  }}
+                >
+                  {isOfficialStore
+                    ? "Official Partner Store (Gold)"
+                    : (storeData?.seller_tier?.name
+                        ? `${storeData.seller_tier.name}`
+                        : "Verified Merchant")}
+                </span>
+              </div>
+              <p className="muted" style={{ fontSize: "13px", margin: "4px 0 0" }}>
+                @{storeData?.username || firstProduct?.store_username || "store"}
+              </p>
+            </div>
+
+            {/* Bio */}
+            {(storeProfile?.bio || isOfficialStore) && (
+              <p style={{ fontSize: "13px", lineHeight: 1.6, maxWidth: "780px", color: "var(--ink)", margin: "0 0 16px" }}>
+                {storeProfile?.bio ||
+                  "Official direct brand flagship. High quality catalog with guaranteed authentic products and direct marketplace fulfillment."}
+              </p>
+            )}
+
+            {/* Info Badges (Location, Email, Joined date, Total listings) */}
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "14px 22px",
+                fontSize: "12px",
+                color: "var(--muted)",
+                paddingTop: "12px",
+                borderTop: "1px solid var(--line)"
+              }}
+            >
+              {storeData?.address && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                  <MapPin size={14} />
+                  {[storeData.address.city, storeData.address.state, storeData.address.country]
+                    .filter(Boolean)
+                    .join(", ")}
+                </span>
+              )}
+              {storeProfile?.email && (
+                <a
+                  href={`mailto:${storeProfile.email}`}
+                  style={{ display: "inline-flex", alignItems: "center", gap: "5px", color: "inherit" }}
+                >
+                  <Mail size={14} />
+                  {storeProfile.email}
+                </a>
+              )}
+              {storeData?.created && (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                  <Calendar size={14} />
+                  Joined{" "}
+                  {new Date(storeData.created).toLocaleDateString("en-US", {
+                    month: "short",
+                    year: "numeric"
+                  })}
+                </span>
+              )}
+              <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontWeight: 600, color: "var(--ink)" }}>
+                <strong>{products.data?.count ?? 0}</strong> Listings
+              </span>
+            </div>
+          </div>
+        </section>
+      ) : (
+        <div className="shop-heading">
+          <div>
+            <span className="eyebrow green">THE PROACE COLLECTION</span>
+            <h1>{title}</h1>
+            <p>Considered essentials. Unexpected favourites.</p>
+          </div>
+          <span className="result-total">
+            {products.data?.count ?? "…"} products
           </span>
-          <h1 style={{ display: "inline-flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            {title}
-            {storeName && isOfficialStore && <VerifiedBadge size={24} />}
-          </h1>
-          <p>
-            {storeName
-              ? isOfficialStore
-                ? "Official brand catalog. Authenticity guaranteed with direct marketplace fulfillment."
-                : `Browse the curated catalog and collections from ${storeName}.`
-              : "Considered essentials. Unexpected favourites."}
-          </p>
         </div>
-        <span className="result-total">
-          {products.data?.count ?? "…"} products
-        </span>
-      </div>
+      )}
 
       {storeName && (
-        <div style={{ display: "flex", gap: "8px", overflowX: "auto", padding: "14px 0", borderBottom: "1px solid var(--line)", marginBottom: "10px" }}>
+        <div style={{ display: "flex", gap: "8px", overflowX: "auto", padding: "14px 0", borderBottom: "1px solid var(--line)", marginBottom: "16px" }}>
           <button
             className={`button secondary ${!params.has("category") ? "active" : ""}`}
             style={{
@@ -527,7 +739,11 @@ export function ProductPage({ id }: { id: string }) {
         <div className="product-information">
           <span className="eyebrow green" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
             {product.brand || product.store_name}
-            {product.is_official_store && <VerifiedBadge size={14} />}
+            <VerifiedBadge
+              tier={product.is_official_store ? "official" : "starter"}
+              tierData={product.seller_tier}
+              size={14}
+            />
           </span>
           <h1>{product.title}</h1>
           <div className="rating-line">
@@ -640,7 +856,11 @@ export function ProductPage({ id }: { id: string }) {
             <StoreIcon size={19} />
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
               Sold by <strong>{product.store_name}</strong>
-              {product.is_official_store && <VerifiedBadge size={15} />}
+              <VerifiedBadge
+                tier={product.is_official_store ? "official" : "starter"}
+                tierData={product.seller_tier}
+                size={15}
+              />
             </span>
             <ArrowUpRight size={16} />
           </Link>
@@ -686,7 +906,11 @@ export function ProductPage({ id }: { id: string }) {
                   <dt>Sold by</dt>
                   <dd style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                     {product.store_name}
-                    {product.is_official_store && <VerifiedBadge size={14} />}
+                    <VerifiedBadge
+                      tier={product.is_official_store ? "official" : "starter"}
+                      tierData={product.seller_tier}
+                      size={14}
+                    />
                   </dd>
                 </div>
               </dl>

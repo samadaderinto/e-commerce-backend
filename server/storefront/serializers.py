@@ -8,6 +8,51 @@ from core.models import Address, Review, User
 from product.models import Product
 from payment.models import Coupon
 from product.policies import is_own_store
+from store.models import Store, StoreInfo, StoreAddress
+from store.services import calculate_store_tier
+
+
+class PublicStoreProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StoreInfo
+        fields = [
+            'email', 'bio', 'avatar_url', 'banner_url', 'website',
+            'instagram', 'twitter', 'facebook', 'whatsapp', 'phone1', 'phone2'
+        ]
+
+
+class PublicStoreAddressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StoreAddress
+        fields = ['city', 'state', 'country']
+
+
+class PublicStoreSerializer(serializers.ModelSerializer):
+    profile = serializers.SerializerMethodField()
+    address = serializers.SerializerMethodField()
+    product_count = serializers.SerializerMethodField()
+    seller_tier = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Store
+        fields = [
+            'id', 'username', 'name', 'is_official', 'seller_tier', 'created',
+            'profile', 'address', 'product_count'
+        ]
+
+    def get_profile(self, obj):
+        info = StoreInfo.objects.filter(store=obj).first()
+        return PublicStoreProfileSerializer(info).data if info else None
+
+    def get_address(self, obj):
+        addr = StoreAddress.objects.filter(store=obj, is_default=True).first()
+        return PublicStoreAddressSerializer(addr).data if addr else None
+
+    def get_product_count(self, obj):
+        return Product.objects.filter(store=obj, visibility=True).count()
+
+    def get_seller_tier(self, obj):
+        return calculate_store_tier(obj)
 
 
 def unit_price(product):
@@ -46,6 +91,7 @@ class AddressSerializer(serializers.ModelSerializer):
 class CatalogSerializer(serializers.ModelSerializer):
     is_own_store = serializers.SerializerMethodField()
     is_official_store = serializers.BooleanField(source='store.is_official', read_only=True, default=False)
+    seller_tier = serializers.SerializerMethodField()
     image = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()
     sale_price = serializers.SerializerMethodField()
@@ -58,8 +104,11 @@ class CatalogSerializer(serializers.ModelSerializer):
         model = Product
         fields = ['id', 'title', 'description', 'category', 'brand', 'price', 'sale_price',
                   'discount', 'available', 'average_rating', 'rating_count', 'store',
-                  'store_name', 'store_username', 'is_official_store', 'image', 'images', 'tags', 'created',
+                  'store_name', 'store_username', 'is_official_store', 'seller_tier', 'image', 'images', 'tags', 'created',
                   'is_own_store', 'weight', 'is_digital']
+
+    def get_seller_tier(self, obj):
+        return calculate_store_tier(obj.store)
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_own_store(self, obj):

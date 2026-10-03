@@ -11,28 +11,39 @@ from store.models import (
 )
 
 
+from store.services import calculate_store_tier
+
+
 class StoreSerializer(serializers.ModelSerializer):
+    seller_tier = serializers.SerializerMethodField()
+
     class Meta:
         model = Store
         fields = [
-            'id', 'user', 'username', 'name', 'status', 'is_official', 'blocked_reason',
-            'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
+            'id', 'user', 'username', 'name', 'status', 'is_official', 'seller_tier',
+            'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated',
         ]
         read_only_fields = [
-            'id', 'user', 'status', 'is_official', 'blocked_reason', 'blocked_at',
-            'blocked_by', 'verified_at', 'verified_by', 'created', 'updated',
+            'id', 'user', 'status', 'is_official', 'seller_tier',
+            'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
+            'created', 'updated',
         ]
         extra_kwargs = {'username': {'required': False}}
+
+    def get_seller_tier(self, obj):
+        return calculate_store_tier(obj)
 
 
 class StoreInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = StoreInfo
-        fields = ['email', 'bio', 'instagram', 'twitter', 'facebook',
+        fields = ['email', 'bio', 'avatar_url', 'banner_url', 'website',
+                  'instagram', 'twitter', 'facebook',
                   'whatsapp', 'phone1', 'phone2']
         extra_kwargs = {field: {'required': False, 'allow_blank': True}
-                        for field in ['bio', 'instagram', 'twitter', 'facebook']}
+                        for field in ['bio', 'avatar_url', 'banner_url', 'website',
+                                      'instagram', 'twitter', 'facebook']}
 
 
 class StoreAddressSerializer(serializers.ModelSerializer):
