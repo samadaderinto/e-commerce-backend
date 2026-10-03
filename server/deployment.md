@@ -1,108 +1,131 @@
-# Server ingress
+# HostGator VPS deployment
 
-See [Nginx security and deployment](nginx/README.md) for IP blocking, suspected-IP
-limits, operator whitelisting, proxy trust, logging, and host/Kubernetes setup.
+Production runs on a HostGator VPS or dedicated server with root/SSH access.
+Shared hosting is not supported because the application requires Docker,
+long-running worker processes, PostgreSQL, Redis, Elasticsearch, and the
+observability services.
 
-See [Monitoring and observability](monitoring/README.md) for health probes,
-database/cache checks, Prometheus metrics, Grafana dashboards, traces, logs, and
-local/production profiling.
+The production topology is:
 
-The application container, official Redis cache, official PostgreSQL database and
-Elasticsearch search service are defined in
-`server/compose.yaml`. For local development, copy `.env.example` to `.env` or
-use the included local `.env`, then run from `server/`:
+- Caddy on ports 80/443, with automatic TLS for
+  `proaceintlshoppingmall.com` and its `www` name.
+- Next.js as the public storefront and same-origin `/api/*` gateway.
+- Django API and Celery notification worker on the private Docker network.
+- PostgreSQL, Redis, and Elasticsearch with persistent Docker volumes and
+  loopback-only host bindings.
+- Prometheus, Grafana, Loki, Tempo, Alloy, and exporters. Grafana and
+  Prometheus are loopback-only rather than public.
+
+## Initial VPS preparation
+
+Use a current Linux VPS with at least 4 vCPU, 8 GB RAM, and sufficient SSD
+storage. Elasticsearch and the monitoring stack are memory-intensive; 16 GB RAM
+is preferable for production traffic. In HostGator DNS, point both the apex `A`
+record and `www` record at the VPS public IP. Open inbound TCP 22, 80, and 443,
+and UDP 443. Do not expose 3000, 3002, 5432, 6379, 8000, 9090, or 9200.
+
+If the server was provisioned with cPanel/Apache or another web server already
+using ports 80 and 443, either stop that listener or configure it as the TLS
+proxy instead of Caddy. Do not start this Caddy stack until those ports are free.
+
+Install Docker Engine, the Docker Compose plugin, `rsync`, and `curl`. Add the
+deployment user to the Docker group, create a dedicated SSH key, and confirm:
 
 ```sh
-docker compose -f compose.yaml up --build -d api redis postgres elasticsearch
-docker compose -f compose.yaml exec api python manage.py rebuild_product_index
+docker version
+docker compose version
 ```
 
-The API is available at `http://127.0.0.1:8000`; Redis and PostgreSQL are bound
-to localhost only. The API container runs migrations on startup, stores
-PostgreSQL data in the `postgres-data` volume, stores local uploads in
-`media-data`, stores product search data in `elasticsearch-data`, and uses
-`redis://redis:6379/0` and `http://elasticsearch:9200` inside Compose. Local
-Compose does not depend on MinIO or any external object-storage registry.
+## Production environment
 
-For production, do not create `.env.prod` or service-specific env files. Set
-production values through GitHub Actions secrets or the deployment platform
-secret manager. Required production values include `DJANGO_DEBUG=false`,
-`SECRET_KEY`, `ALLOWED_HOSTS`, `FRONTEND_URL`, PostgreSQL credentials,
-`CACHE_URL`, `OBSERVABILITY_TOKEN`, `ELASTICSEARCH_URL`, and object-storage
-credentials when `OBJECT_STORAGE_ENABLED=true`. Set `RUN_MIGRATIONS=false` when
-more than one API replica starts at once. Run migrations and
-`rebuild_product_index` as release jobs, then start the API replicas.
+Copy `deploy/hostgator/.env.example` to a local file outside Git, replace every
+placeholder, and retain it securely. `POSTGRES_PASSWORD` and
+`POSTGRES_EXPORTER_PASSWORD` must match. The file is deployed to
+`deploy/hostgator/.env` with mode 0600 and is ignored by Git.
 
-## Render deployment
+Before enabling production email, set a Resend API key and a sender whose domain
+has been verified. For durable uploaded media across hosts, enable the existing
+S3-compatible storage settings; a single-server deployment can use the Docker
+media volume but must include it in an off-server backup policy.
 
-The GitHub Actions deploy job is Render-specific. It reads production values from
-GitHub Actions secrets, syncs them to the Render service through the Render API,
-then triggers the Render deploy hook. Do not commit production env files.
+Encode the completed environment file for GitHub Actions:
 
-Required Render control secrets:
+```sh
+base64 < hostgator-production.env | tr -d '\n'
+```
+
+## GitHub production secrets
+
+Configure these secrets in the repository's `production` environment:
 
 | Secret | Purpose |
 | --- | --- |
-| `RENDER_API_KEY` | Render API token used to update service environment variables |
-| `RENDER_SERVICE_ID` | Render service ID for the backend service |
-| `RENDER_WORKER_SERVICE_ID` | Render service ID for the notification worker |
-| `RENDER_DEPLOY_HOOK_URL` | Render deploy hook URL for that service |
+| `HOSTGATOR_HOST` | VPS hostname or IP address |
+| `HOSTGATOR_PORT` | SSH port; defaults to `22` |
+| `HOSTGATOR_USER` | Non-root deployment user with Docker access |
+| `HOSTGATOR_DEPLOY_PATH` | Absolute remote path, such as `/opt/proace-commerce` |
+| `HOSTGATOR_SSH_PRIVATE_KEY` | Private deployment key |
+| `HOSTGATOR_SSH_KNOWN_HOSTS` | Verified `known_hosts` entry for the VPS |
+| `HOSTGATOR_ENV_B64` | Base64-encoded production environment file |
 
-Required production app secrets:
+Obtain the verified host-key entry from a trusted machine or the HostGator
+console. Do not populate it from an unauthenticated `ssh-keyscan` during CI.
 
-| Secret | Render env var |
-| --- | --- |
-| `PROD_API_URL` | `API_URL` |
-| `PROD_SECRET_KEY` | `SECRET_KEY` |
-| `PROD_ALLOWED_HOSTS` | `ALLOWED_HOSTS` |
-| `PROD_FRONTEND_URL` | `FRONTEND_URL` |
-| `PROD_DEFAULT_ADMIN_EMAIL` | `DEFAULT_ADMIN_EMAIL` |
-| `PROD_DEFAULT_ADMIN_PASSWORD` | `DEFAULT_ADMIN_PASSWORD` |
-| `PROD_DEFAULT_ADMIN_FIRST_NAME` | `DEFAULT_ADMIN_FIRST_NAME` |
-| `PROD_DEFAULT_ADMIN_LAST_NAME` | `DEFAULT_ADMIN_LAST_NAME` |
-| `PROD_DEFAULT_ADMIN_GENDER` | `DEFAULT_ADMIN_GENDER` |
-| `PROD_DEFAULT_ADMIN_PHONE` | `DEFAULT_ADMIN_PHONE` |
-| `PROD_POSTGRES_HOST` | `POSTGRES_HOST` |
-| `PROD_POSTGRES_DB` | `POSTGRES_DB` |
-| `PROD_POSTGRES_USER` | `POSTGRES_USER` |
-| `PROD_POSTGRES_PASSWORD` | `POSTGRES_PASSWORD` |
-| `PROD_CACHE_URL` | `CACHE_URL` |
-| `PROD_CELERY_BROKER_URL` | `CELERY_BROKER_URL` |
-| `PROD_OBSERVABILITY_TOKEN` | `OBSERVABILITY_TOKEN` |
-| `PROD_S3_BUCKET_NAME` | `MINIO_BUCKET_NAME` |
-| `PROD_S3_ACCESS_KEY` | `MINIO_ACCESS_KEY` |
-| `PROD_S3_SECRET_KEY` | `MINIO_SECRET_KEY` |
+On a push to `main` or `master`, CI runs backend, frontend, security, and CodeQL
+checks. It then uploads the repository and environment, builds the images on the
+VPS, starts dependencies, runs migrations/static collection/search indexing,
+starts all application and monitoring containers, and verifies the public home
+and live-health endpoints over HTTPS.
 
-Required when Elasticsearch is enabled:
+## Manual deployment
 
-| Secret | Render env var |
-| --- | --- |
-| `PROD_ELASTICSEARCH_URL` | `ELASTICSEARCH_URL` |
+After uploading the repository and production environment to the VPS:
 
-`PROD_CELERY_BROKER_URL` must point to the production Redis broker and is
-synced to both the API and worker. Configure the worker service to run
-`celery -A codematics worker --beat --loglevel=INFO`. Email uses Resend; set
-`PROD_RESEND_API_KEY` and `PROD_RESEND_FROM_EMAIL` to a Resend API key and a
-sender address verified with Resend. FCM credentials are required as
-`PROD_FIREBASE_PROJECT_ID` and `PROD_FIREBASE_CREDENTIALS_JSON` only when
-`PROD_FCM_ENABLED=true`. Production app configuration is sourced from GitHub
-Actions secrets and synchronized to Render. The default admin fields are sent
-only to the API service; the API creates that active superuser after migrations
-if the email does not already exist. Choose a strong password. Re-deploying does
-not reset an existing admin password, and a configured email already owned by a
-non-superuser stops startup rather than promoting that account.
+```sh
+cd /opt/proace-commerce
+chmod +x deploy/hostgator/deploy.sh deploy/hostgator/backup.sh
+deploy/hostgator/deploy.sh
+```
 
-For local setup, copy `server/.env.example` to `server/.env` and fill in all six
-`DEFAULT_ADMIN_*` fields. The API creates the superuser at startup. Leave all
-six empty to skip provisioning. Grafana has a separate login configured with
-`GRAFANA_ADMIN_PASSWORD`; it is independent of the application superuser.
+The deployment script is safe to rerun. Docker named volumes retain database,
+search, uploads, Caddy certificates, and monitoring data.
 
-Optional production secrets such as `PROD_POSTGRES_PORT`,
-`PROD_DB_REQUIRE_SSL`, `PROD_OBJECT_STORAGE_ENABLED`, `PROD_S3_ENDPOINT_URL`,
-`PROD_S3_PUBLIC_URL`, `PROD_S3_REGION`, OpenTelemetry, Kafka and Celery
-settings are also synced when present.
+## Monitoring access
 
-The local image does not install AWS SDK packages because local uploads use the
-`media-data` volume. For an S3-compatible production deployment, set
-`OBJECT_STORAGE_ENABLED=true` and `INSTALL_OBJECT_STORAGE=true` before building;
-the matching AWS SDK pair is then installed from `requirements-storage.txt`.
+Prometheus continues to scrape the API, PostgreSQL, Redis, Elasticsearch,
+Docker, the VPS host, Grafana, Loki, and Tempo every 15 seconds. Access Grafana
+without exposing it publicly by creating an SSH tunnel:
+
+```sh
+ssh -L 3002:127.0.0.1:3002 HOSTGATOR_USER@HOSTGATOR_HOST
+```
+
+Then open `http://127.0.0.1:3002`. Use the configured default admin email and
+password. Prometheus can be reached similarly with local port 9090.
+
+## Backups
+
+Run a daily PostgreSQL backup and copy the result to storage outside the VPS.
+For example, install a root crontab entry:
+
+```cron
+17 2 * * * HOSTGATOR_BACKUP_DIR=/var/backups/proace-commerce /opt/proace-commerce/deploy/hostgator/backup.sh >> /var/log/proace-backup.log 2>&1
+```
+
+The script retains 14 days by default. Database-only backups do not protect
+Docker media, Elasticsearch, Grafana, or Caddy volumes. Add encrypted off-server
+volume backups and test restoration before launch.
+
+## Operational checks
+
+```sh
+cd /opt/proace-commerce
+docker compose --env-file deploy/hostgator/.env -f server/compose.yaml ps
+docker compose --env-file deploy/hostgator/.env -f client/compose.yaml ps
+docker compose --env-file deploy/hostgator/.env -f server/monitoring/compose.yaml ps
+docker compose --env-file deploy/hostgator/.env -f deploy/hostgator/compose.yaml ps
+curl --fail https://proaceintlshoppingmall.com/health/live/
+```
+
+If a deployment fails, inspect `docker compose ... logs`, fix the configuration,
+and rerun the deployment script. Never delete Docker volumes as a rollback.

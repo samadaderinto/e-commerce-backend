@@ -52,8 +52,9 @@ Metric config files:
 
 ## Dashboards and alerts
 
-Grafana is available locally at `http://127.0.0.1:3002`. The local admin
-password is `GRAFANA_ADMIN_PASSWORD` in `server/.env`.
+Grafana is available locally at `http://127.0.0.1:3002`. Its admin username and
+password are `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` in
+`server/.env`, matching the Django admin superuser.
 
 The dashboard is provisioned from
 `server/monitoring/grafana/dashboards/commerce-overview.json` and includes:

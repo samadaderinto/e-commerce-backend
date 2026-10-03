@@ -339,7 +339,8 @@ def cart_data(cart, request):
              and item.product.visibility and item.product.store.status == Store.STATUS_ACTIVE
              and item.product.store.verified_at is not None and item.quantity <= item.product.available} for item in items]
     subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
-    shipping = Decimal('0') if subtotal >= 100000 or not rows else Decimal('2500')
+    has_physical_items = any(not row['product']['is_digital'] for row in rows)
+    shipping = Decimal('0') if subtotal >= 100000 or not rows or not has_physical_items else Decimal('2500')
     return {'id': cart.pk, 'items': rows, 'subtotal': str(subtotal), 'shipping': str(shipping), 'total': str(subtotal + shipping)}
 
 
@@ -414,6 +415,16 @@ class OrderDetailView(APIView):
 
 
 class CheckoutView(APIView):
+    @staticmethod
+    def _validate_service_area(address, snapshots):
+        country = ''.join(character for character in address.country.lower() if character.isalnum())
+        us_names = {'us', 'usa', 'unitedstates', 'unitedstatesofamerica'}
+        if any(not row['is_digital'] for row in snapshots) and country not in us_names:
+            raise ValidationError({
+                'address': 'Physical products are currently delivered only within the United States. '
+                           'Digital products remain available worldwide.',
+            })
+
     def _lines(self, request, lock=False):
         cart = active_cart(request.user)
         items = list(cart.cart_items.order_by('product_id'))
@@ -429,7 +440,9 @@ class CheckoutView(APIView):
                 raise ValidationError({'detail': f'{product.title} is unavailable in the requested quantity.'})
             price = unit_price(product)
             snapshots.append({'product': product.pk, 'store': product.store_id, 'title': product.title,
-                              'image': product.image_url, 'quantity': item.quantity, 'unit_price': str(price)})
+                              'image': product.image_url, 'quantity': item.quantity, 'unit_price': str(price),
+                              'is_digital': product.is_digital,
+                              'download_url': product.digital_file_url if product.is_digital else ''})
             coupon_lines.append({'product': product, 'quantity': item.quantity, 'unit_price': price})
         subtotal = sum((Decimal(row['unit_price']) * row['quantity'] for row in snapshots), Decimal('0'))
         if subtotal > Decimal('99999999.99'):
@@ -444,6 +457,7 @@ class CheckoutView(APIView):
                 raise ValidationError({'detail': 'Invalid checkout reference.'})
             return existing
         cart, snapshots, coupon_lines, subtotal = self._lines(request, lock=True)
+        self._validate_service_area(address, snapshots)
         coupon = None
         discount = Decimal('0')
         if code:
@@ -458,7 +472,8 @@ class CheckoutView(APIView):
             product.sales += item.quantity
             product.save(update_fields=['available', 'sales', 'updated'])
             transaction.on_commit(lambda product=product: invalidate_catalog(product))
-        shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
+        has_physical_items = any(not row['is_digital'] for row in snapshots)
+        shipping = Decimal('0') if subtotal >= 100000 or not has_physical_items else Decimal('2500')
         delivery = DeliveryInfo.objects.create(user=request.user, address=address, method='home delivery',
                                                 delivery_type='standard', total=int(shipping))
         order = Order.objects.create(
@@ -503,12 +518,14 @@ class WalletCheckoutSessionView(CheckoutView):
                                      user=request.user)
         code = str(request.data.get('coupon', '')).strip()
         cart, snapshots, coupon_lines, subtotal = self._lines(request)
+        self._validate_service_area(address, snapshots)
         coupon = None
         discount = Decimal('0')
         if code:
             coupon = Coupon.objects.filter(code__iexact=code, active=True, valid_from__lte=timezone.now(), valid_to__gte=timezone.now()).first()
             discount = calculate_coupon_discount(coupon, request.user, coupon_lines, subtotal, reserve=False)
-        shipping = Decimal('0') if subtotal >= 100000 else Decimal('2500')
+        has_physical_items = any(not row['is_digital'] for row in snapshots)
+        shipping = Decimal('0') if subtotal >= 100000 or not has_physical_items else Decimal('2500')
         total = subtotal - discount + shipping
         methods = [
             configured_method.strip()

@@ -14,6 +14,7 @@ opentelemetry-sdk>=1.32,<2
 opentelemetry-exporter-otlp-proto-http>=1.32,<2
 django-redis>=5.4,<7
 gunicorn>=23,<26
+whitenoise>=6.8,<7
 psycopg[binary]>=3.2,<4
 kafka-python>=2.0,<3
 celery>=5.4,<6

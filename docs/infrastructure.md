@@ -7,7 +7,7 @@ observability.
 The repository contains two deployable apps:
 
 - `client/`: frontend, deployable to a frontend host or as `client/Dockerfile`.
-- `server/`: backend API, deployable to Render with service dependencies.
+- `server/`: backend API, deployable to the HostGator VPS with service dependencies.
 
 The bridge between them is `API_URL` on the frontend and `FRONTEND_URL` on the
 backend.
@@ -28,59 +28,66 @@ deployment platform should receive values as environment variables or managed
 secrets. Do not recreate `server/.env.prod`, `server/monitoring/.env`, or
 `server/monitoring/secrets/metrics-token`.
 
-For Render, the deploy workflow uses these control secrets:
-
-- `RENDER_API_KEY`;
-- `RENDER_SERVICE_ID`;
-- `RENDER_WORKER_SERVICE_ID`;
-- `RENDER_DEPLOY_HOOK_URL`.
-
-The workflow syncs production `PROD_*` GitHub Actions secrets into the Render
-service environment variables before triggering the deploy hook. The sync script
-is `.github/scripts/render-sync-env.py`. For the complete required and optional
-secret inventory and deployment sequence, see
+For HostGator, the deploy workflow uses SSH connection secrets and a base64
+encoded production environment file. It uploads the repository, rebuilds the
+containers, and verifies HTTPS after deployment. For the complete secret
+inventory and deployment sequence, see
 [`server/deployment.md`](../server/deployment.md).
 
 The API superuser is provisioned from the six `DEFAULT_ADMIN_*` environment
 fields on startup after database migrations. Locally, set them in `server/.env`;
 in production, configure the corresponding `PROD_DEFAULT_ADMIN_*` secrets in
 the GitHub Actions `production` environment. These credentials are sent only to
-the API service, not the notification worker. Grafana uses a separate login.
+the API service, not the notification worker. Grafana is provisioned with the
+same superuser email and password.
 
-## Local containers
+## Local container stacks
 
+The application is structured into three independent, modular container stacks sharing the `commerce-network` Docker network:
+
+### 1. Server stack (`server/compose.yaml`)
 From `server/`:
-
 ```sh
 ../.venv/bin/python monitoring/init_local.py
 docker compose -f compose.yaml up --build -d api redis postgres elasticsearch
-docker compose -f monitoring/compose.yaml up -d
 docker compose -f compose.yaml exec api python manage.py rebuild_product_index
 ```
 
-Run the frontend container separately from the repository root:
+Contains:
+- `api`: Django/Gunicorn API service built from `server/Dockerfile`.
+- `notification-worker`: Celery worker & beat for email and event processing.
+- `postgres`: PostgreSQL 17 database.
+- `redis`: Redis 7.4 cache & Celery broker.
+- `elasticsearch`: Elasticsearch 8.15 product search index.
 
+### 2. Monitoring stack (`server/monitoring/compose.yaml`)
+From `server/`:
+```sh
+docker compose -f monitoring/compose.yaml up -d
+```
+
+Contains:
+- `grafana`: Metrics dashboards and Explore UI.
+- `prometheus`: Scrapes metrics from API and exporter sidecars.
+- `loki` & `alloy`: Centralized container log ingestion.
+- `tempo`: Distributed tracing store.
+- Exporter sidecars: `postgres-exporter`, `redis-exporter`, `elasticsearch-exporter`, `docker-exporter`.
+
+### 3. Frontend stack (`client/compose.yaml`)
+From the repository root:
 ```sh
 docker compose -f client/compose.yaml up --build -d
 ```
 
-Application services:
+Contains:
+- `client`: Next.js production SSR/standalone application built from `client/Dockerfile`. Communicates with the API over `commerce-network` at `http://api:8000/api/v1` or host gateway.
 
-- `api`: Django/Gunicorn container built from `server/Dockerfile`.
-- `postgres`: official `postgres:17-alpine`, persisted in `postgres-data`.
-- `redis`: official `redis:7.4-alpine`, persisted in `redis-data`.
-- `elasticsearch`: official Elasticsearch `8.15.5`, persisted in
-  `elasticsearch-data`.
-- `media-data`: local uploaded media volume.
-- `prometheus-multiproc`: Prometheus multiprocess metrics directory for Gunicorn.
+## Production / HostGator deployment
 
-Monitoring services:
-
-- `prometheus`: metrics scraping and alert evaluation.
-- `grafana`: dashboards and Explore UI.
-- `loki`: log storage.
-- `alloy`: Docker log collector for Loki.
-- `tempo`: local trace storage.
+The three application stacks run on the HostGator VPS and share the private
+`commerce-network`. Caddy provides automatic HTTPS and is the only public web
+entry point. Production orchestration lives in `deploy/hostgator/`; see the
+[deployment guide](../server/deployment.md).
 
 ## Tool and config inventory
 
@@ -103,7 +110,8 @@ Monitoring and operations files:
 - `server/monitoring/compose.yaml`: Prometheus, Grafana, Loki, Alloy, Tempo and
   optional messaging/exporter services.
 - `server/monitoring/init_local.py`: ensures local `OBSERVABILITY_TOKEN` and
-  `GRAFANA_ADMIN_PASSWORD` values exist in `server/.env`.
+  `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` values exist in
+  `server/.env`; the same credentials are passed to Grafana.
 - `server/monitoring/prometheus.yml`: scrape configuration.
 - `server/monitoring/alerts.yml`: alert rules, including p95 and p99 latency.
 - `server/monitoring/alloy.alloy`: Docker log collection into Loki.

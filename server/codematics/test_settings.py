@@ -8,7 +8,8 @@ SIMPLE_JWT = {**SIMPLE_JWT, 'SIGNING_KEY': SECRET_KEY}  # noqa: F405
 DEBUG = False
 ALLOWED_HOSTS = ['testserver', 'localhost']
 INSTALLED_APPS = [
-    'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
+    'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes',
+    'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles',
     'rest_framework', 'taggit', 'core', 'store', 'product', 'cart', 'payment',
     'notification.apps.EventNotificationConfig',
     'observability.apps.ObservabilityConfig',

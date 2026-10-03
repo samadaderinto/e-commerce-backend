@@ -88,7 +88,7 @@ class StorefrontTests(TestCase):
         self.seller = User.objects.create_user(email='seller@test.com', password='Strong-test-password-123')
         self.store = Store.objects.create(user=self.seller, name='Test store', status=Store.STATUS_ACTIVE, verified_at=timezone.now())
         self.product = Product.objects.create(store=self.store, title='A speaker', description='Portable', category='electronics', price='10000.00', discount=15, available=5)
-        self.address = Address.objects.create(user=self.buyer, address='12 Test Road', city='Lagos', state='Lagos', country='Nigeria', zip='100001')
+        self.address = Address.objects.create(user=self.buyer, address='12 Test Road', city='Tampa', state='Florida', country='United States', zip='33601')
         self.client = APIClient()
         self.client.force_authenticate(self.buyer)
 
@@ -164,6 +164,35 @@ class StorefrontTests(TestCase):
         self.assertEqual(self.add(6).status_code, 400)
         self.assertEqual(self.add(1.5).status_code, 400)
         self.assertEqual(CartItem.objects.count(), 0)
+
+    def test_physical_checkout_rejects_non_us_delivery_address(self):
+        self.address.country = 'Nigeria'
+        self.address.save(update_fields=['country'])
+        self.add(1)
+
+        response = self.checkout()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('only within the United States', str(response.data))
+        self.assertEqual(Order.objects.count(), 0)
+
+    def test_digital_checkout_is_worldwide_free_and_exposes_download_in_order(self):
+        self.address.country = 'Nigeria'
+        self.address.save(update_fields=['country'])
+        self.product.is_digital = True
+        self.product.digital_file_url = 'https://downloads.example.com/book.pdf'
+        self.product.save(update_fields=['is_digital', 'digital_file_url'])
+        self.add(1)
+
+        response = self.checkout()
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['total'], '8500.00')
+        self.assertTrue(response.data['items'][0]['is_digital'])
+        self.assertEqual(
+            response.data['items'][0]['download_url'],
+            'https://downloads.example.com/book.pdf',
+        )
 
     def test_cannot_add_products_from_any_owned_store_even_with_spoofed_user(self):
         for name in ['First store', 'Second store']:

@@ -17,27 +17,50 @@ ADMIN_ENV_FIELDS = {
     "phone1": "DEFAULT_ADMIN_PHONE",
 }
 
+STAFF_ENV_FIELDS = {
+    "email": "DEFAULT_STAFF_EMAIL",
+    "password": "DEFAULT_STAFF_PASSWORD",
+    "first_name": "DEFAULT_STAFF_FIRST_NAME",
+    "last_name": "DEFAULT_STAFF_LAST_NAME",
+    "gender": "DEFAULT_STAFF_GENDER",
+    "phone1": "DEFAULT_STAFF_PHONE",
+}
+
 
 class Command(BaseCommand):
-    help = "Create the configured default application superuser if it does not exist."
+    help = "Create the configured default application superuser and staff user if they do not exist."
 
     def handle(self, *args, **options):
+        self._provision_user(
+            ADMIN_ENV_FIELDS,
+            role="admin",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self._provision_user(
+            STAFF_ENV_FIELDS,
+            role="staff",
+            is_staff=True,
+            is_superuser=False,
+        )
+
+    def _provision_user(self, env_fields, *, role, is_staff, is_superuser):
         values = {
             field: os.environ.get(env_name, "")
-            for field, env_name in ADMIN_ENV_FIELDS.items()
+            for field, env_name in env_fields.items()
         }
         if not any(value.strip() for value in values.values()):
-            self.stdout.write("Default admin is not configured; skipping.")
+            self.stdout.write(f"Default {role} is not configured; skipping.")
             return
 
         missing = [
             env_name
-            for field, env_name in ADMIN_ENV_FIELDS.items()
+            for field, env_name in env_fields.items()
             if not values[field].strip()
         ]
         if missing:
             raise CommandError(
-                "Set all default admin environment fields; missing: "
+                f"Set all default {role} environment fields; missing: "
                 + ", ".join(missing)
             )
 
@@ -46,14 +69,14 @@ class Command(BaseCommand):
             values[field] = values[field].strip()
         values["gender"] = values["gender"].lower()
         if values["gender"] not in dict(User.GENDER_STATUS):
-            raise CommandError("DEFAULT_ADMIN_GENDER must be 'male' or 'female'.")
+            raise CommandError(f"DEFAULT_{role.upper()}_GENDER must be 'male' or 'female'.")
 
         try:
             with transaction.atomic():
                 existing = User.objects.filter(email=values["email"]).first()
                 if existing:
-                    self._require_superuser(existing)
-                    self.stdout.write("Configured default admin already exists.")
+                    self._check_flags(existing, role, is_staff, is_superuser)
+                    self.stdout.write(f"Configured default {role} already exists.")
                     return
 
                 candidate = User(
@@ -62,8 +85,8 @@ class Command(BaseCommand):
                     last_name=values["last_name"],
                     gender=values["gender"],
                     phone1=values["phone1"],
-                    is_staff=True,
-                    is_superuser=True,
+                    is_staff=is_staff,
+                    is_superuser=is_superuser,
                     is_active=True,
                 )
                 try:
@@ -72,26 +95,46 @@ class Command(BaseCommand):
                 except ValidationError as error:
                     raise CommandError("; ".join(error.messages)) from error
 
-                User.objects.create_superuser(
-                    email=values["email"],
-                    password=values["password"],
-                    first_name=values["first_name"],
-                    last_name=values["last_name"],
-                    gender=values["gender"],
-                    phone1=values["phone1"],
-                )
+                if is_superuser:
+                    User.objects.create_superuser(
+                        email=values["email"],
+                        password=values["password"],
+                        first_name=values["first_name"],
+                        last_name=values["last_name"],
+                        gender=values["gender"],
+                        phone1=values["phone1"],
+                    )
+                else:
+                    User.objects.create_staffuser(
+                        email=values["email"],
+                        password=values["password"],
+                        first_name=values["first_name"],
+                        last_name=values["last_name"],
+                        gender=values["gender"],
+                        phone1=values["phone1"],
+                    )
         except IntegrityError:
             # Another API instance may provision the same account at the same time.
             existing = User.objects.filter(email=values["email"]).first()
             if existing is None:
                 raise
-            self._require_superuser(existing)
+            self._check_flags(existing, role, is_staff, is_superuser)
 
-        self.stdout.write(self.style.SUCCESS("Configured default admin is ready."))
+        self.stdout.write(self.style.SUCCESS(f"Configured default {role} is ready."))
 
     @staticmethod
-    def _require_superuser(user):
-        if not (user.is_active and user.is_staff and user.is_superuser):
+    def _check_flags(user, role, is_staff, is_superuser):
+        if not user.is_active:
             raise CommandError(
-                "DEFAULT_ADMIN_EMAIL belongs to an account that is not an active superuser."
+                f"DEFAULT_{role.upper()}_EMAIL belongs to an inactive account."
+            )
+        if is_superuser and not (user.is_staff and user.is_superuser):
+            raise CommandError(
+                f"DEFAULT_{role.upper()}_EMAIL belongs to an account "
+                "that is not an active superuser."
+            )
+        if not is_superuser and not user.is_staff:
+            raise CommandError(
+                f"DEFAULT_{role.upper()}_EMAIL belongs to an account "
+                "that does not have staff status."
             )

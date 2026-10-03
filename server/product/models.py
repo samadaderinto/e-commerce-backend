@@ -63,6 +63,16 @@ class Product(DatesMixin):
     tags = TaggableManager()
     sales = models.IntegerField(validators=[MinValueValidator(0)], default=0)
     sponsored = models.BooleanField(default=False)
+    is_digital = models.BooleanField(
+        default=False,
+        help_text='Digital products are delivered online and may be sold worldwide.',
+    )
+    digital_file_url = models.URLField(
+        blank=True,
+        default='',
+        max_length=1000,
+        help_text='Private fulfillment link shown only in the customer order.',
+    )
 
     @property
     def sale_price(self):

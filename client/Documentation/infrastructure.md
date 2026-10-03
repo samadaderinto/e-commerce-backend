@@ -2,7 +2,7 @@
 
 The frontend can run locally with Node or as its own container. It is intentionally
 separate from the backend container so it can be hosted on a frontend platform
-while the backend runs on Render.
+while the backend runs on the same HostGator VPS private Docker network.
 
 ## Files
 

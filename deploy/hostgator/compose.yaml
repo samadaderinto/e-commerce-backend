@@ -1,0 +1,27 @@
+name: commerce-edge
+
+services:
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-proaceintlshoppingmall.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - commerce-network
+
+networks:
+  commerce-network:
+    external: true
+    name: ${COMMERCE_NETWORK:-commerce-network}
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -48,8 +48,8 @@ class Command(BaseCommand):
         buyer, seller = users
         store, _ = Store.objects.get_or_create(username='proace-select', defaults={'user': seller, 'name': 'Proace Select'})
         StoreInfo.objects.get_or_create(store=store, defaults={'email': 'seller@proace.local', 'bio': 'Considered essentials for everyday life.'})
-        StoreAddress.objects.get_or_create(store=store, is_default=True, defaults={'address': '14 Admiralty Way', 'city': 'Lekki', 'state': 'Lagos', 'country': 'Nigeria', 'zip': '105102'})
-        address, _ = Address.objects.get_or_create(user=buyer, address='12 Marina Road', defaults={'city': 'Lagos Island', 'state': 'Lagos', 'country': 'Nigeria', 'zip': '101001'})
+        StoreAddress.objects.get_or_create(store=store, is_default=True, defaults={'address': '401 E Jackson Street', 'city': 'Tampa', 'state': 'Florida', 'country': 'United States', 'zip': '33602'})
+        address, _ = Address.objects.get_or_create(user=buyer, address='100 N Tampa Street', defaults={'city': 'Tampa', 'state': 'Florida', 'country': 'United States', 'zip': '33602'})
         products = []
         for index, (title, brand, category, price, discount, image, description) in enumerate(PRODUCTS):
             product, _ = Product.objects.get_or_create(store=store, title=title, defaults={

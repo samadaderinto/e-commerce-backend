@@ -106,7 +106,7 @@ is ready for production:
 The client and server can be hosted separately. Configure the frontend's
 `API_URL` to the deployed backend `/api/v1` endpoint and configure the backend's
 `FRONTEND_URL` to the exact deployed frontend origin. The current CI/CD deploy
-job targets Render and is gated on pushes to `main` or `master` after the test,
+job targets HostGator and is gated on pushes to `main` or `master` after the test,
 security, CodeQL and frontend build jobs pass.
 
 Treat [`server/deployment.md`](../server/deployment.md) as the detailed

@@ -7,7 +7,7 @@ client/                 Next.js frontend app, client docs and client container
 client/Documentation/   Frontend-local docs
 server/                 Django API and backend containers
 docs/                   Root architecture and cross-project docs
-.github/                CI/CD, Render env sync and deploy workflow
+.github/                CI/CD and HostGator VPS deployment workflow
 package.json            npm workspace and root frontend commands
 ```
 
@@ -44,7 +44,7 @@ This is one codebase with two separately hostable apps:
 
 - `client/`: Next.js frontend. Host on a frontend platform or as its own
   container. It talks to the backend through `API_URL`.
-- `server/`: Django API. Deploy to Render. It owns data, auth, search,
+- `server/`: Django API. Deploy to the HostGator VPS. It owns data, auth, search,
   observability and background/service integrations.
 
 The browser calls the Next.js `/api/*` proxy. The proxy forwards to the Django
@@ -133,15 +133,13 @@ queue-consumer work with:
 docker compose -f monitoring/compose.yaml --profile messaging up -d kafka rabbitmq
 ```
 
-For production, set these values as GitHub Actions secrets or deployment-platform
-environment variables, not checked-in env files. Use a managed PostgreSQL database
-and S3-compatible object storage, and run migrations as a release job before
-starting multiple API replicas. Full deployment details are in [`server/deployment.md`](server/deployment.md) and
+For production, use the HostGator VPS environment and GitHub Actions secrets,
+not checked-in env files. Full deployment details are in [`server/deployment.md`](server/deployment.md) and
 [`server/monitoring/README.md`](server/monitoring/README.md).
 
-The GitHub Actions deploy job targets Render. It validates Render control secrets,
-syncs production secrets to the Render service environment, then triggers the
-Render deploy hook.
+The GitHub Actions deploy job targets the HostGator VPS. It validates SSH and
+environment secrets, uploads the release, rebuilds the containers, and verifies
+the public HTTPS health endpoints.
 
 ### Sample Accounts
 

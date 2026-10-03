@@ -59,6 +59,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "average_rating",
             "likes_count",
             "is_liked",
+            "is_digital",
             # "uploaded_images",
             "label",
             # "specifications"
@@ -105,6 +106,7 @@ class ProductCardSerializer(serializers.ModelSerializer):
             "average_rating",
             "likes_count",
             "is_liked",
+            "is_digital",
         ]
 
     def get_likes_count(self, product):

@@ -11,7 +11,7 @@ export const business = {
   privacyEmail: 'admin@proaceintl.com',
   legalEmail: 'admin@proaceintl.com',
   supportSchedule: 'Monday–Sunday, 9:00 AM–5:00 PM Eastern Time',
-  serviceArea: 'International',
+  serviceArea: 'United States for physical products; worldwide for digital downloads',
   paymentMethods: 'PayPal, Cash App, major credit cards and Stripe',
 } as const;
 

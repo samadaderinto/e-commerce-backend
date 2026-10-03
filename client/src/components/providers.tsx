@@ -42,7 +42,7 @@ function ShopProvider({ children }: { children: ReactNode }) {
   const cartQuery = useQuery({ queryKey: ['cart', user?.id], queryFn: () => api<Cart>('cart'), enabled: !!user, retry: false });
   const savedQuery = useQuery({ queryKey: ['saved', user?.id], queryFn: () => api<Product[]>('wishlist'), enabled: !!user });
   const subtotal = guest.reduce((sum, row) => sum + Number(row.product.sale_price) * row.quantity, 0);
-  const shipping = subtotal >= 100000 || !guest.length ? 0 : 2500;
+  const shipping = subtotal >= 100000 || !guest.length || guest.every(row => row.product.is_digital) ? 0 : 2500;
   const guestCart = { items: guest, subtotal: String(subtotal), shipping: String(shipping), total: String(subtotal + shipping) };
   const cart = user ? cartQuery.data || { items: [], subtotal: '0', shipping: '0', total: '0' } : guestCart;
 

@@ -49,12 +49,12 @@ e-commerce-backend/
     compose.yaml          API and data-service containers
     monitoring/           Prometheus, Grafana, Loki, Alloy and Tempo
   docs/                   Canonical cross-project documentation
-  .github/workflows/      CI, security checks and Render deployment
+  .github/workflows/      CI, security checks and HostGator deployment
 ```
 
 The frontend and backend share one repository but are deployable separately. The
-frontend host sets `API_URL` to the backend `/api/v1` URL. The backend deploys to
-Render and receives production configuration from GitHub Actions secrets. See
+frontend host sets `API_URL` to the backend `/api/v1` URL. Both apps deploy to
+HostGator and receive production configuration from GitHub Actions secrets. See
 [Architecture and API map](architecture.md) before changing how those apps
 communicate.
 
@@ -85,6 +85,5 @@ Keep environment files simple:
 
 Do not add `.env.prod`, per-service env files, or hidden env files under
 `server/monitoring/`. Production values belong in GitHub Actions secrets or the
-deployment platform secret manager. For Render, the CD workflow syncs GitHub
-Actions secrets to Render service environment variables before triggering the
-Render deploy hook.
+deployment platform secret manager. For HostGator, the CD workflow uploads the
+encrypted production configuration over SSH and runs the deployment script.

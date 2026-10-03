@@ -16,7 +16,8 @@ API_URL=http://host.docker.internal:8000/api/v1
 ```
 
 Production should set `API_URL` to the deployed backend API, for example the
-Render backend URL ending in `/api/v1`.
+backend URL ending in `/api/v1`; production uses the private Docker address
+`http://api:8000/api/v1` on HostGator.
 
 The proxy keeps access and refresh tokens in HTTP-only cookies, refreshes expired
 access tokens, hides raw tokens from browser JSON responses, and enforces

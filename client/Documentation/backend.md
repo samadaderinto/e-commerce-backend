@@ -24,11 +24,11 @@ Browser component
 
 ## Production bridge
 
-When the backend is hosted on Render and the frontend is hosted elsewhere, set the
+When the backend and frontend run in the HostGator Docker network, set the
 frontend host's `API_URL` environment variable to:
 
 ```env
-API_URL=https://your-render-backend.example.com/api/v1
+API_URL=http://api:8000/api/v1
 ```
 
 For the local frontend container on Docker Desktop, use:

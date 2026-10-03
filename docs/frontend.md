@@ -79,7 +79,7 @@ on the frontend host to the deployed backend URL ending in `/api/v1`.
 Production example:
 
 ```env
-API_URL=https://your-render-backend.example.com/api/v1
+API_URL=http://api:8000/api/v1
 ```
 
 Local frontend container example:

@@ -57,7 +57,8 @@ class CatalogSerializer(serializers.ModelSerializer):
         model = Product
         fields = ['id', 'title', 'description', 'category', 'brand', 'price', 'sale_price',
                   'discount', 'available', 'average_rating', 'rating_count', 'store',
-                  'store_name', 'store_username', 'image', 'images', 'tags', 'created', 'is_own_store']
+                  'store_name', 'store_username', 'image', 'images', 'tags', 'created',
+                  'is_own_store', 'is_digital']
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_own_store(self, obj):
@@ -198,6 +199,8 @@ class OrderItemSnapshotSerializer(serializers.Serializer):
     image = serializers.CharField(allow_blank=True)
     quantity = serializers.IntegerField()
     unit_price = serializers.DecimalField(max_digits=15, decimal_places=2)
+    is_digital = serializers.BooleanField(required=False, default=False)
+    download_url = serializers.URLField(required=False, allow_blank=True)
 
 
 class OrderSerializer(serializers.Serializer):

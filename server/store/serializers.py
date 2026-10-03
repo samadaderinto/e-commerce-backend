@@ -95,7 +95,7 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         fields = ['id', 'store', 'title', 'description', 'category', 'price', 'brand', 'image_url',
                   'discount', 'sale_price', 'available', 'visibility', 'label',
                   'tags', 'images', 'specifications', 'sales', 'average_rating',
-                  'sponsored', 'created', 'updated']
+                  'sponsored', 'is_digital', 'digital_file_url', 'created', 'updated']
         read_only_fields = ['id', 'store', 'sales', 'average_rating', 'sponsored',
                             'created', 'updated']
         extra_kwargs = {
@@ -104,6 +104,17 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             'available': {'default': 0},
             'visibility': {'default': False},
         }
+
+    def validate(self, attrs):
+        is_digital = attrs.get('is_digital', getattr(self.instance, 'is_digital', False))
+        file_url = attrs.get('digital_file_url', getattr(self.instance, 'digital_file_url', ''))
+        if is_digital and not file_url:
+            raise serializers.ValidationError({
+                'digital_file_url': 'Add a download URL for a digital product.',
+            })
+        if not is_digital:
+            attrs['digital_file_url'] = ''
+        return attrs
 
 
 class InventorySerializer(serializers.Serializer):

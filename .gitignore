@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 .env
 .env.local
+deploy/hostgator/.env
 *.sqlite3
 *.sqlite3-*
 server/media/

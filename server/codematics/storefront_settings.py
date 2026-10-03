@@ -8,18 +8,22 @@ if not DEBUG and SECRET_KEY == 'local-proace-development-key-do-not-deploy':
     raise ImproperlyConfigured('Set SECRET_KEY before running with DJANGO_DEBUG=false.')
 ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '127.0.0.1,localhost,testserver').split(',')
 INSTALLED_APPS = [
-    'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
+    'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes',
+    'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles',
     'rest_framework', 'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular', 'taggit',
-    'core', 'store', 'product', 'cart', 'payment', 'affiliates', 'notification', 'storefront',
+    'core', 'store', 'product', 'cart', 'payment', 'affiliates', 'notification',
+    'observability', 'staff', 'storefront',
     'django_cleanup.apps.CleanupConfig',
 ]
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 ROOT_URLCONF = 'storefront.urls'
@@ -64,6 +68,17 @@ RESEND_FROM_EMAIL = os.environ.get(
 DEFAULT_FROM_EMAIL = RESEND_FROM_EMAIL
 APPLICATION_EMAIL = RESEND_FROM_EMAIL
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'true').lower() == 'true'
+    SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '31536000'))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
 FCM_ENABLED = os.environ.get('FCM_ENABLED', 'false').lower() == 'true'
 FIREBASE_PROJECT_ID = os.environ.get('FIREBASE_PROJECT_ID', '')
 FIREBASE_CREDENTIALS_JSON = os.environ.get('FIREBASE_CREDENTIALS_JSON', '')
@@ -77,8 +92,15 @@ STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 
 STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'usd')
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
 SECURE_CONTENT_TYPE_NOSNIFF = True
 PASSWORD_RESET_TIMEOUT = 3600
 MEDIA_ROOT = BASE_DIR / 'media'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    **STORAGES,
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
+}
 
 configure_observability(globals())

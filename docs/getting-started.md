@@ -78,8 +78,8 @@ The Django process reads `server/.env` when present; Next.js reads
 `client/.env`. Both are ignored by Git.
 
 Production configuration is not stored in these files. The GitHub Actions
-workflow reads deployment values from Actions secrets and synchronizes backend
-values to Render. Follow [server/deployment.md](../server/deployment.md) for the
+workflow reads deployment values from Actions secrets and deploys all containers
+to HostGator over SSH. Follow [server/deployment.md](../server/deployment.md) for the
 required secret names and deployment procedure. Never commit real credentials.
 
 ## Check your setup

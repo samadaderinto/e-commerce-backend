@@ -87,3 +87,43 @@ def test_ensure_default_admin_does_not_promote_existing_regular_user():
     with patch.dict(os.environ, admin_values):
         with pytest.raises(CommandError, match="not an active superuser"):
             call_command("ensure_default_admin")
+
+
+@pytest.mark.django_db
+def test_ensure_default_admin_creates_staff_user_that_can_log_into_admin(client):
+    staff_values = {
+        "DEFAULT_STAFF_EMAIL": "staff@example.com",
+        "DEFAULT_STAFF_PASSWORD": "A-Strong-Staff-Password-123!",
+        "DEFAULT_STAFF_FIRST_NAME": "Store",
+        "DEFAULT_STAFF_LAST_NAME": "Staff",
+        "DEFAULT_STAFF_GENDER": "male",
+        "DEFAULT_STAFF_PHONE": "+12015550124",
+    }
+    with patch.dict(os.environ, staff_values):
+        call_command("ensure_default_admin")
+
+    user = User.objects.get(email=staff_values["DEFAULT_STAFF_EMAIL"])
+    assert user.is_active and user.is_staff and not user.is_superuser
+    assert client.login(
+        email=staff_values["DEFAULT_STAFF_EMAIL"],
+        password=staff_values["DEFAULT_STAFF_PASSWORD"],
+    )
+
+
+@pytest.mark.django_db
+def test_provisioned_superuser_can_log_into_admin(client):
+    admin_values = {
+        "DEFAULT_ADMIN_EMAIL": "admin-login@example.com",
+        "DEFAULT_ADMIN_PASSWORD": "A-Strong-Admin-Password-123!",
+        "DEFAULT_ADMIN_FIRST_NAME": "Site",
+        "DEFAULT_ADMIN_LAST_NAME": "Admin",
+        "DEFAULT_ADMIN_GENDER": "female",
+        "DEFAULT_ADMIN_PHONE": "+12015550125",
+    }
+    with patch.dict(os.environ, admin_values):
+        call_command("ensure_default_admin")
+
+    assert client.login(
+        email=admin_values["DEFAULT_ADMIN_EMAIL"],
+        password=admin_values["DEFAULT_ADMIN_PASSWORD"],
+    )

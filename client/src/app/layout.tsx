@@ -4,7 +4,7 @@ import { Shell } from '@/components/shell';
 import './globals.css';
 import './admin.css';
 
-export const metadata: Metadata = { title: { default: 'ProAce — International marketplace', template: '%s | ProAce' }, description: 'Shop products and digital goods from independent sellers around the world with ProAce International Consulting and Conglomerate.' };
+export const metadata: Metadata = { title: { default: 'ProAce — US marketplace and worldwide digital goods', template: '%s | ProAce' }, description: 'Shop physical products delivered within the United States and digital downloads available worldwide.' };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="en"><body><Providers><Shell>{children}</Shell></Providers></body></html>;
