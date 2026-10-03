@@ -87,9 +87,9 @@ required secret names and deployment procedure. Never commit real credentials.
 These root npm scripts delegate to the client workspace:
 
 ```sh
-npm run typecheck
+npm run typecheck              # or npm --prefix client run typecheck
 npm run test:unit
-npm run build
+npm run build                  # or npm --prefix client run build
 ```
 
 Backend test settings are isolated from the local development database:

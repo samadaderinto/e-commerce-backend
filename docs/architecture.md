@@ -105,6 +105,9 @@ is ready for production:
 | Use a same-origin Next.js proxy for browser API traffic. | JWTs stay in HTTP-only cookies and frontend components share one API/error-handling helper. Do not bypass the proxy for browser calls or put tokens in local storage. |
 | Keep integrated and legacy Django configurations separate. | `storefront_settings` and `storefront.urls` are the current entry points; the legacy core API surface is removed while shared core domain models remain in use. |
 | Derive ownership from authenticated users and validate purchases on the server. | Do not trust client-supplied customer, seller, store or order ownership fields. |
+| Restrict product reviews to verified purchasers with up to 3 attached photos. | Only buyers with confirmed completed orders for an item can submit/edit a review, preventing review spoofing and ensuring authentic social proof. |
+| Dynamic 6-tier seller milestone hierarchy and official store verification tick. | Store ranks (Starter, Booster, Accelerator, Power, Mega, Legendary) are calculated automatically based on gross volume milestones. |
+| JSON-backed product variants with dedicated price modifiers and inventory. | Allows merchants to define options (Size, Color, Material) with independent stock tracking and pricing without relational database overhead. |
 | Make Elasticsearch optional and retain a database search fallback. | Local development can run without search, while indexing failures do not become the only path to catalog results. |
 | Separate application database from logging infrastructure. | Application emits structured JSON to stdout; Grafana Alloy ships logs to Loki for aggregation in Grafana. |
 | Implement 7-day buyer refund review escrow and 4% platform commission. | Merchant earnings from orders placed within the 7-day refund window are held in review before unlocking for withdrawal requests. |

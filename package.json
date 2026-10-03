@@ -8,6 +8,9 @@
     "typecheck": "npm run typecheck --workspace=client",
     "test:unit": "npm run test:unit --workspace=client",
     "test:integration": "npm run test:integration --workspace=client",
-    "test:e2e": "npm run test:e2e --workspace=client"
+    "test:e2e": "npm run test:e2e --workspace=client",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down"
   }
 }

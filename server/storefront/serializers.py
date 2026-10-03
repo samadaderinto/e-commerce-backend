@@ -16,7 +16,7 @@ class PublicStoreProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = StoreInfo
         fields = [
-            'email', 'bio', 'avatar_url', 'banner_url', 'website',
+            'email', 'bio', 'announcement', 'pinned_products', 'avatar_url', 'banner_url', 'website',
             'instagram', 'twitter', 'facebook', 'whatsapp', 'phone1', 'phone2'
         ]
 
@@ -103,7 +103,7 @@ class CatalogSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = ['id', 'title', 'description', 'category', 'brand', 'price', 'sale_price',
-                  'discount', 'available', 'average_rating', 'rating_count', 'store',
+                  'discount', 'available', 'sales', 'flash_sale_end', 'variants', 'average_rating', 'rating_count', 'store',
                   'store_name', 'store_username', 'is_official_store', 'seller_tier', 'image', 'images', 'tags', 'created',
                   'is_own_store', 'weight', 'is_digital']
 
@@ -141,11 +141,33 @@ class CatalogSerializer(serializers.ModelSerializer):
 
 class ReviewSerializer(serializers.ModelSerializer):
     author = serializers.CharField(source='user.first_name', read_only=True)
+    is_verified_buyer = serializers.SerializerMethodField()
+    is_own_review = serializers.SerializerMethodField()
+    images = serializers.ListField(child=serializers.CharField(), required=False, default=list)
 
     class Meta:
         model = Review
-        fields = ['id', 'author', 'rating', 'label', 'comment', 'created']
-        extra_kwargs = {'rating': {'min_value': 1, 'max_value': 5}}
+        fields = ['id', 'author', 'rating', 'label', 'comment', 'images', 'created', 'is_verified_buyer', 'is_own_review']
+        extra_kwargs = {
+            'rating': {'min_value': 1, 'max_value': 5},
+            'label': {'max_length': 120},
+            'comment': {'max_length': 1000},
+        }
+
+    def validate_images(self, value):
+        if len(value) > 3:
+            raise serializers.ValidationError('You can attach up to 3 photos with your review.')
+        return value
+
+    def get_is_verified_buyer(self, obj):
+        from storefront.views import check_is_verified_buyer
+        return check_is_verified_buyer(obj.user, obj.product) or getattr(obj.user, 'is_staff', False) or getattr(obj.user, 'is_superuser', False)
+
+    def get_is_own_review(self, obj):
+        request = self.context.get('request')
+        if request and request.user and request.user.is_authenticated:
+            return obj.user_id == request.user.id
+        return False
 
 
 class CatalogPageSerializer(serializers.Serializer):

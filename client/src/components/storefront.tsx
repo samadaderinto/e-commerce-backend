@@ -30,11 +30,12 @@ import {
   X,
 } from "lucide-react";
 import { api, categories, money } from "@/lib/api";
-import type { Page, Product, PublicStore } from "@/lib/types";
+import type { Page, Product, PublicStore, Review } from "@/lib/types";
 import {
   Empty,
   ErrorState,
   Field,
+  FlashCountdown,
   Loading,
   ProductGrid,
   ProductImage,
@@ -251,6 +252,26 @@ export function ShopPage() {
             }}
           />
 
+          {/* Announcement Bar */}
+          {storeProfile?.announcement && (
+            <div
+              style={{
+                background: "linear-gradient(90deg, #ecfdf5 0%, #f0fdf4 100%)",
+                borderBottom: "1px solid #a7f3d0",
+                padding: "8px 24px",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                fontSize: "12px",
+                fontWeight: 600,
+                color: "#065f46"
+              }}
+            >
+              <span>📢</span>
+              <span>{storeProfile.announcement}</span>
+            </div>
+          )}
+
           {/* Profile Details Container */}
           <div style={{ padding: "0 28px 24px", position: "relative" }}>
             <div
@@ -295,6 +316,15 @@ export function ShopPage() {
 
               {/* Action and Contact links */}
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {storeProfile?.email && (
+                  <a
+                    href={`mailto:${storeProfile.email}?subject=Inquiry regarding ${storeName}`}
+                    className="button secondary"
+                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                  >
+                    <Mail size={14} /> Message Store
+                  </a>
+                )}
                 {storeProfile?.website && (
                   <a
                     href={storeProfile.website}
@@ -640,15 +670,6 @@ export function ShopPage() {
   );
 }
 
-type Review = {
-  id: number;
-  author: string;
-  rating: number;
-  label: string;
-  comment: string;
-  created: string;
-};
-
 export function ProductPage({ id }: { id: string }) {
   const { add, notify, toggleSave, saved, user } = useShop();
   const client = useQueryClient();
@@ -671,6 +692,7 @@ export function ProductPage({ id }: { id: string }) {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("details");
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [selectedVariantIdx, setSelectedVariantIdx] = useState<number>(0);
   if (productQuery.isLoading) return <Loading />;
   if (productQuery.error)
     return (
@@ -680,6 +702,11 @@ export function ProductPage({ id }: { id: string }) {
       />
     );
   const product = productQuery.data!;
+  const activeVariant = product.variants && product.variants.length > 0 ? product.variants[selectedVariantIdx] : null;
+  const effectiveStock = activeVariant && typeof activeVariant.available === 'number' ? activeVariant.available : product.available;
+  const variantPriceDelta = activeVariant?.price_delta ? Number(activeVariant.price_delta) : 0;
+  const effectiveSalePrice = (Number(product.sale_price) + variantPriceDelta).toFixed(2);
+  const effectiveOriginalPrice = (Number(product.price) + variantPriceDelta).toFixed(2);
   const liked = saved.some((row) => row.id === product.id);
   async function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -687,7 +714,17 @@ export function ProductPage({ id }: { id: string }) {
     const data = Object.fromEntries(new FormData(form));
     setReviewBusy(true);
     try {
-      await api(`products/${id}/reviews`, "POST", data);
+      const imagesRaw = (data.images as string || "")
+        .split(/[\n,]/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0 && (s.startsWith("http://") || s.startsWith("https://") || s.startsWith("data:image/")));
+
+      await api(`products/${id}/reviews`, "POST", {
+        rating: Number(data.rating),
+        label: data.label,
+        comment: data.comment,
+        images: imagesRaw.slice(0, 3),
+      });
       await client.invalidateQueries({ queryKey: ["reviews", id] });
       await client.invalidateQueries({ queryKey: ["product", id] });
       notify("Thanks for sharing your experience");
@@ -746,54 +783,118 @@ export function ProductPage({ id }: { id: string }) {
             />
           </span>
           <h1>{product.title}</h1>
-          <div className="rating-line">
-            <Star size={16} fill="currentColor" />
-            <strong>
-              {Number(product.average_rating) > 0
-                ? Number(product.average_rating).toFixed(1)
-                : "New arrival"}
-            </strong>
+          <div className="rating-line" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <Star size={16} fill="currentColor" />
+              <strong>
+                {Number(product.average_rating) > 0
+                  ? Number(product.average_rating).toFixed(1)
+                  : "New arrival"}
+              </strong>
+            </span>
+            <span style={{ color: "var(--line)" }}>•</span>
             <button className="text-button" onClick={() => setTab("reviews")}>
-              {reviews.data?.length || 0} reviews
+              {reviews.data?.length || product.rating_count || 0} reviews
             </button>
-          </div>
-          <div className="detail-price">
-            <strong>{money(product.sale_price)}</strong>
-            {product.discount > 0 && (
+            {typeof product.sales === "number" && product.sales > 0 && (
               <>
-                <del>{money(product.price)}</del>
-                <span>
-                  You save{" "}
-                  {money(Number(product.price) - Number(product.sale_price))}
+                <span style={{ color: "var(--line)" }}>•</span>
+                <span style={{ fontSize: "12px", color: "var(--muted)", fontWeight: 500 }}>
+                  <strong style={{ color: "var(--ink)", fontWeight: 700 }}>{product.sales}</strong> sold
                 </span>
               </>
             )}
           </div>
+          <div className="detail-price" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <strong>{money(effectiveSalePrice)}</strong>
+            {product.discount > 0 && (
+              <>
+                <del>{money(effectiveOriginalPrice)}</del>
+                <span>
+                  You save{" "}
+                  {money(Number(effectiveOriginalPrice) - Number(effectiveSalePrice))}
+                </span>
+              </>
+            )}
+            {product.flash_sale_end && (
+              <FlashCountdown end={product.flash_sale_end} />
+            )}
+          </div>
           <p className="description">{product.description}</p>
-          <div className={`stock ${product.available ? "" : "sold-out"}`}>
+
+          {product.variants && product.variants.length > 0 && (
+            <div className="product-variants" style={{ margin: "16px 0" }}>
+              <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--ink)", display: "block", marginBottom: "8px" }}>
+                Option: <strong style={{ color: "var(--green)" }}>{activeVariant?.name || "Select"}</strong>
+              </span>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {product.variants.map((variant, idx) => {
+                  const isSelected = selectedVariantIdx === idx;
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => setSelectedVariantIdx(idx)}
+                      style={{
+                        padding: "6px 14px",
+                        borderRadius: "8px",
+                        border: isSelected ? "2px solid var(--green)" : "1px solid var(--line)",
+                        background: isSelected ? "#f0fdf4" : "#fff",
+                        color: isSelected ? "var(--green)" : "var(--ink)",
+                        fontWeight: isSelected ? 600 : 500,
+                        fontSize: "13px",
+                        cursor: "pointer",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 6,
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <span>{variant.name}</span>
+                      {variant.price_delta && (
+                        <span style={{ fontSize: "11px", opacity: 0.85 }}>
+                          ({variant.price_delta.startsWith("+") || variant.price_delta.startsWith("-") ? variant.price_delta : `+$${variant.price_delta}`})
+                        </span>
+                      )}
+                      {typeof variant.available === "number" && variant.available <= 0 && (
+                        <span style={{ fontSize: "11px", color: "var(--muted)" }}>(Sold out)</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className={`stock ${effectiveStock ? "" : "sold-out"}`}>
             <span />
-            {product.available > 5
+            {effectiveStock > 5
               ? "In stock. Ready for your everyday."
-              : product.available
-                ? `Only ${product.available} left in stock`
+              : effectiveStock
+                ? `Only ${effectiveStock} left in stock`
                 : "Currently out of stock"}
           </div>
           <label className="field">
             <span>Quantity</span>
             <Quantity
               value={quantity}
-              max={product.available}
+              max={effectiveStock}
               onChange={setQuantity}
             />
           </label>
           <div className="purchase-actions">
             <button
               className="button"
-              disabled={busy || !product.available || product.is_own_store}
+              disabled={busy || !effectiveStock || product.is_own_store}
               onClick={async () => {
                 setBusy(true);
                 try {
-                  await add(product, quantity);
+                  await add({
+                    ...product,
+                    title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title,
+                    sale_price: effectiveSalePrice,
+                    price: effectiveOriginalPrice,
+                  }, quantity);
                 } catch (error) {
                   notify((error as Error).message, true);
                 } finally {
@@ -852,17 +953,52 @@ export function ProductPage({ id }: { id: string }) {
               </p>
             </div>
           </div>
-          <Link className="seller-link" href={`/shop?store=${product.store}`}>
-            <StoreIcon size={19} />
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              Sold by <strong>{product.store_name}</strong>
-              <VerifiedBadge
-                tier={product.is_official_store ? "official" : "starter"}
-                tierData={product.seller_tier}
-                size={15}
-              />
-            </span>
-            <ArrowUpRight size={16} />
+          <Link
+            className="seller-link"
+            href={`/shop?store=${product.store}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "12px 16px",
+              background: "#f8fafc",
+              border: "1px solid var(--line)",
+              borderRadius: "10px",
+              textDecoration: "none",
+              color: "inherit",
+              marginTop: "16px"
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div
+                style={{
+                  width: "36px",
+                  height: "36px",
+                  borderRadius: "50%",
+                  background: product.is_official_store ? "#fef3c7" : "#edf2ea",
+                  display: "grid",
+                  placeItems: "center",
+                  color: product.is_official_store ? "#b45309" : "var(--green)",
+                  flexShrink: 0
+                }}
+              >
+                <StoreIcon size={18} />
+              </div>
+              <div>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "13px" }}>
+                  Sold by <strong style={{ color: "var(--ink)" }}>{product.store_name}</strong>
+                  <VerifiedBadge
+                    tier={product.is_official_store ? "official" : "starter"}
+                    tierData={product.seller_tier}
+                    size={16}
+                  />
+                </span>
+                <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
+                  @{product.store_username || "store"} · Visit store & all listings
+                </p>
+              </div>
+            </div>
+            <ArrowUpRight size={18} className="muted" />
           </Link>
         </div>
       </div>
@@ -939,12 +1075,67 @@ export function ProductPage({ id }: { id: string }) {
                 ) : reviews.data?.length ? (
                   reviews.data.map((item) => (
                     <article className="review" key={item.id}>
-                      <span className="review-stars">
-                        {"★".repeat(item.rating)}
-                        {"☆".repeat(5 - item.rating)}
-                      </span>
-                      <h3>{item.label}</h3>
-                      <p>{item.comment}</p>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                        <span className="review-stars">
+                          {"★".repeat(item.rating)}
+                          {"☆".repeat(5 - item.rating)}
+                        </span>
+                        {item.is_verified_buyer && (
+                          <span
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              fontSize: "11px",
+                              fontWeight: 600,
+                              color: "#059669",
+                              background: "#ecfdf5",
+                              padding: "2px 8px",
+                              borderRadius: "12px",
+                              border: "1px solid #a7f3d0"
+                            }}
+                          >
+                            <Check size={12} strokeWidth={2.5} /> Verified Buyer
+                          </span>
+                        )}
+                      </div>
+                      <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {item.label}
+                        {item.is_own_review && (
+                          <span style={{ fontSize: "11px", fontWeight: 500, color: "var(--muted)" }}>
+                            (Your Review · Editable below)
+                          </span>
+                        )}
+                      </h3>
+                      <p style={{ whiteSpace: "pre-wrap" }}>{item.comment}</p>
+                      {item.images && item.images.length > 0 && (
+                        <div style={{ display: "flex", gap: "8px", margin: "10px 0", flexWrap: "wrap" }}>
+                          {item.images.map((imgUrl, idx) => (
+                            <a
+                              key={idx}
+                              href={imgUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Click to view full photo"
+                              style={{
+                                width: "70px",
+                                height: "70px",
+                                borderRadius: "8px",
+                                overflow: "hidden",
+                                border: "1px solid var(--line)",
+                                display: "block",
+                                background: "#f8fafc"
+                              }}
+                            >
+                              <img
+                                src={imgUrl}
+                                alt={`Customer review photo ${idx + 1}`}
+                                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                              />
+                            </a>
+                          ))}
+                        </div>
+                      )}
                       <small>
                         {item.author || "ProAce customer"} ·{" "}
                         {new Date(item.created).toLocaleDateString()}
@@ -952,36 +1143,59 @@ export function ProductPage({ id }: { id: string }) {
                     </article>
                   ))
                 ) : (
-                  <p>No reviews yet. Be the first to share your experience.</p>
+                  <p>No reviews yet. Be the first verified buyer to share your experience.</p>
                 )}
               </div>
               {user ? (
-                <form className="review-form" onSubmit={review}>
-                  <h3>Write a review</h3>
-                  <Field label="Rating">
-                    <select name="rating" defaultValue="5">
-                      {[5, 4, 3, 2, 1].map((value) => (
-                        <option key={value} value={value}>
-                          {value} stars
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <Field label="Review title">
-                    <input name="label" required maxLength={80} />
-                  </Field>
-                  <Field label="Your experience">
-                    <textarea
-                      name="comment"
-                      required
-                      maxLength={60}
-                      placeholder="Up to 60 characters"
-                    />
-                  </Field>
-                  <button className="button" disabled={reviewBusy}>
-                    {reviewBusy ? "Saving…" : "Submit review"}
-                  </button>
-                </form>
+                (() => {
+                  const myReview = reviews.data?.find((r) => r.is_own_review);
+                  return (
+                    <form className="review-form" key={myReview?.id || "new-review"} onSubmit={review}>
+                      <h3>{myReview ? "Edit your review" : "Write a review"}</h3>
+                      <p className="muted" style={{ fontSize: "12px", margin: "-6px 0 12px" }}>
+                        Only verified buyers who purchased this item can leave a review. Submitting again updates your existing comment.
+                      </p>
+                      <Field label="Rating">
+                        <select name="rating" defaultValue={myReview ? String(myReview.rating) : "5"}>
+                          {[5, 4, 3, 2, 1].map((value) => (
+                            <option key={value} value={value}>
+                              {value} {value === 1 ? "star" : "stars"}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Review title">
+                        <input
+                          name="label"
+                          required
+                          maxLength={120}
+                          defaultValue={myReview?.label || ""}
+                          placeholder="Headline or summary of your experience"
+                        />
+                      </Field>
+                      <Field label="Your experience & feedback">
+                        <textarea
+                          name="comment"
+                          required
+                          maxLength={1000}
+                          defaultValue={myReview?.comment || ""}
+                          placeholder="Tell future buyers about the quality, delivery, fit, or any complaints…"
+                          rows={4}
+                        />
+                      </Field>
+                      <Field label="Photo attachments (Up to 3 image URLs, optional)">
+                        <input
+                          name="images"
+                          defaultValue={myReview?.images?.join(", ") || ""}
+                          placeholder="https://example.com/photo1.jpg, https://example.com/photo2.jpg"
+                        />
+                      </Field>
+                      <button className="button" disabled={reviewBusy}>
+                        {reviewBusy ? "Saving…" : myReview ? "Update review" : "Submit review"}
+                      </button>
+                    </form>
+                  );
+                })()
               ) : (
                 <Link
                   className="button secondary"

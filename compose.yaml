@@ -1,0 +1,175 @@
+name: proace-commerce
+
+services:
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    restart: unless-stopped
+    ports:
+      - '${CLIENT_BIND_ADDRESS:-127.0.0.1}:${CLIENT_PORT:-3000}:3000'
+    env_file:
+      - path: client/.env
+        required: false
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      API_URL: ${API_URL:-http://api:8000/api/v1}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - commerce-network
+
+  api: &app
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+      args:
+        INSTALL_OBJECT_STORAGE: ${INSTALL_OBJECT_STORAGE:-false}
+    restart: unless-stopped
+    init: true
+    ports:
+      - '${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000'
+    env_file:
+      - path: server/.env
+        required: false
+    environment: &app_environment
+      DJANGO_SETTINGS_MODULE: codematics.storefront_settings
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
+      SECRET_KEY: ${SECRET_KEY:-local-container-secret-change-me}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost},api,client
+      FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3000}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
+      SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-false}
+      SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-0}
+      DATABASE_ENGINE: postgres
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-commerce}
+      POSTGRES_USER: ${POSTGRES_USER:-commerce}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+      DB_REQUIRE_SSL: 'false'
+      CACHE_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
+      OBSERVABILITY_TOKEN: ${OBSERVABILITY_TOKEN:-local-observability-token-change-me}
+      OTEL_TRACING_ENABLED: ${OTEL_TRACING_ENABLED:-false}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-commerce-api}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://tempo:4318}
+      NOTIFICATION_DELIVERY_MAX_ATTEMPTS: ${NOTIFICATION_DELIVERY_MAX_ATTEMPTS:-8}
+      NOTIFICATION_DELIVERY_STALE_SECONDS: ${NOTIFICATION_DELIVERY_STALE_SECONDS:-300}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Proace <notifications@example.com>}
+      FCM_ENABLED: ${FCM_ENABLED:-false}
+      STRIPE_SECRET: ${STRIPE_SECRET:-}
+      PUBLISHER_KEY: ${PUBLISHER_KEY:-}
+      STRIPE_WALLET_PAYMENT_METHODS: ${STRIPE_WALLET_PAYMENT_METHODS:-cashapp}
+      STRIPE_CURRENCY: ${STRIPE_CURRENCY:-usd}
+      ELASTICSEARCH_ENABLED: ${ELASTICSEARCH_ENABLED:-true}
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_PRODUCTS_INDEX: ${ELASTICSEARCH_PRODUCTS_INDEX:-commerce-products}
+      GUNICORN_BIND: 0.0.0.0:8000
+      PROMETHEUS_MULTIPROC_DIR: /tmp/prometheus
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
+      RUN_COLLECTSTATIC: ${RUN_COLLECTSTATIC:-false}
+    volumes:
+      - media-data:/app/media
+      - prometheus-multiproc:/tmp/prometheus
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - commerce-network
+
+  notification-worker:
+    <<: *app
+    ports: []
+    environment:
+      <<: *app_environment
+      RUN_MIGRATIONS: 'false'
+      RUN_COLLECTSTATIC: 'false'
+      DEFAULT_ADMIN_EMAIL: ''
+      DEFAULT_ADMIN_PASSWORD: ''
+    command: ['celery', '-A', 'codematics', 'worker', '--beat', '--loglevel=INFO']
+    networks:
+      - commerce-network
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ['redis-server', '--appendonly', 'yes', '--save', '60', '1000']
+    ports:
+      - '${REDIS_BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - commerce-network
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    ports:
+      - '${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT_HOST:-5432}:5432'
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-commerce}
+      POSTGRES_USER: ${POSTGRES_USER:-commerce}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - commerce-network
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.5
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: 'false'
+      xpack.security.http.ssl.enabled: 'false'
+      ES_JAVA_OPTS: ${ELASTICSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
+    ports:
+      - '${ELASTICSEARCH_BIND_ADDRESS:-127.0.0.1}:${ELASTICSEARCH_PORT:-9200}:9200'
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ['CMD-SHELL', 'curl --silent --fail http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 18
+    networks:
+      - commerce-network
+
+volumes:
+  media-data:
+  redis-data:
+  postgres-data:
+  elasticsearch-data:
+  prometheus-multiproc:
+
+networks:
+  commerce-network:
+    name: ${COMMERCE_NETWORK:-commerce-network}

@@ -80,6 +80,16 @@ class Product(DatesMixin):
         max_length=1000,
         help_text='Private fulfillment link shown only in the customer order.',
     )
+    flash_sale_end = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text='Optional expiration timestamp for limited-time flash deals.',
+    )
+    variants = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='List of product variant options (e.g. size, color, stock, price delta).',
+    )
 
     @property
     def sale_price(self) -> str:

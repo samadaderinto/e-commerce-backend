@@ -51,6 +51,22 @@ publish products, update pricing/stock/specifications and review seller-specific
 orders. Store moderation can block publishing. Product creation and update logic
 validates owner, store state, price and stock server-side.
 
+### Seller Tier Ranks & Milestone Verification
+Stores automatically earn tier rankings based on cumulative gross sales, dynamically resolved by `calculate_store_tier()` in `server/store/services.py`:
+- **Starter** ($0 – $999): Blue checkmark badge (`#2563eb`).
+- **Booster** ($1,000 – $4,999): Silver badge (`#94a3b8`).
+- **Accelerator** ($5,000 – $49,999): Purple badge (`#8b5cf6`).
+- **Power Seller** ($50,000 – $499,999): Emerald badge (`#059669`).
+- **Mega Seller** ($500,000 – $999,999): Diamond badge (`#0ea5e9`).
+- **Legendary Seller** ($1,000,000+): Gold Crown badge (`#d97706`).
+- **Official Brand Store**: Dedicated Golden Tick (`#eab308`).
+
+### Product Variants & Flash Sales
+- **Product Variants (`Product.variants`)**: JSON-based array storing option names (e.g. Size, Color), price deltas (`price_delta`), and dedicated stock allocation (`available`).
+- **Flash Deals (`Product.flash_sale_end`)**: Optional expiration timestamp powering urgency badges and live countdown timers across storefronts.
+- **Store Announcements (`StoreInfo.announcement`)**: Marquee banner text displayed on the public store showcase page.
+- **Verified Buyer Reviews (`Review.images`)**: Restricts review posting to verified purchasers and validates up to 3 attached photo URLs.
+
 ### Merchant escrow and payouts
 - **Platform Commission (4%)**: Automatically items and deducts a 4% platform fee (`PLATFORM_FEE_PERCENT = 4.00`) from gross item sales.
 - **7-Day Review Escrow**: Net sales from customer orders placed within the 7-day refund window (`REFUND_WINDOW_DAYS = 7`) are held in `in_review` status.

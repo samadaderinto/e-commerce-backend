@@ -10,21 +10,23 @@ TypeScript, React 19, React Query and shared UI components.
   account, merchant, admin, and help views.
 - `client/src/app/api/*`: same-origin API proxy routes that talk to Django.
 - `client/src/components/shell.tsx`: shared navigation, search bar, and layout shell.
-- `client/src/components/storefront.tsx`: catalog, product detail and shopping
-  storefront views.
+- `client/src/components/storefront.tsx`: catalog, product detail with selectable variant chips,
+  photo review gallery with lightbox, flash deal countdowns, store profiles with marquee announcements,
+  and quick "Message Store" customer action.
 - `client/src/components/cart.tsx`: cart and multi-method checkout UI (COD, ProAce Wallet, Stripe).
 - `client/src/components/account.tsx`: auth, profile, addresses, ProAce Wallet ledger,
   order details with live USPS package tracking, and 7-day refund submission form.
-- `client/src/components/merchant.tsx`: seller onboarding, dashboard with daily order trend
-  charts, 7-day escrow financial breakdown, 4% platform fee calculation, payout requests,
-  products, inventory health, and order fulfillment modal.
+- `client/src/components/merchant.tsx`: seller onboarding, dashboard with milestone celebration banners,
+  product editor with variant option configuration, bulk CSV catalog importer, 7-day escrow financial breakdown,
+  4% platform fee calculation, payout requests, inventory health, and order fulfillment modal.
 - `client/src/components/admin.tsx`: `AdminDashboardPage` (platform-wide business insights,
   order fulfillment distribution bar chart, store leaderboards) and `AdminStaffPage`
   (staff account creation, permission controls, and blocking).
-- `client/src/components/ui.tsx`: reusable controls, product cards, loading spinners, and small primitives.
+- `client/src/components/ui.tsx`: reusable controls, product cards, `VerifiedBadge` (seller rank tier icons),
+  `FlashCountdown` (real-time sale expiration timer), loading spinners, and small primitives.
 - `client/src/lib/api.ts`: browser API helper, error normalization, money
   formatting and category constants.
-- `client/src/lib/types.ts`: shared frontend DTO and domain types.
+- `client/src/lib/types.ts`: shared frontend DTO and domain types (`SellerTier`, `ProductVariant`, `Product`, etc.).
 - `client/tests/`: unit, integration and Playwright end-to-end tests.
 
 ## API access
@@ -98,9 +100,22 @@ email links and browser flows aligned after the apps are split across hosts.
 
 The frontend also has its own container setup:
 
-- `client/Dockerfile`: standalone Next.js image.
-- `client/compose.yaml`: local frontend container runner.
-- `client/.dockerignore`: keeps local artifacts and env files out of the image.
+- `client/Dockerfile`: standalone multi-stage Next.js production image (`node:22-alpine`).
+- `client/compose.yaml`: modular frontend container runner.
+- `compose.yaml` (root): unified full-stack compose running frontend and backend together.
+- `client/.dockerignore`: keeps local artifacts, caches, and env files out of the image.
+
+### Building & Running the Frontend Container
+
+To build and run the frontend container individually:
+```sh
+docker compose -f client/compose.yaml up --build -d
+```
+
+To build and run the full stack (Frontend + Backend API + Datastores):
+```sh
+docker compose up --build -d
+```
 
 ## UI conventions
 
@@ -120,11 +135,22 @@ From the repository root:
 ```sh
 npm ci
 npm run dev
-npm run build
-npm run typecheck
+npm run build                  # or npm --prefix client run build
+npm run typecheck              # or npm --prefix client run typecheck
 npm run test:unit
 npm run test:integration
 npm run test:e2e
+npm run docker:build           # builds all compose services
+npm run docker:up              # starts all compose services in background
+npm run docker:down            # stops all compose services
+```
+
+From `client/`:
+
+```sh
+npm run dev
+npm run build
+npm run start
 ```
 
 The development app runs at `http://127.0.0.1:3000`. The frontend defaults to

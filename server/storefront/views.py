@@ -266,6 +266,28 @@ class PublicStoreView(APIView):
         return Response(PublicStoreSerializer(store).data)
 
 
+def check_is_verified_buyer(user, product) -> bool:
+    if not user or not user.is_authenticated:
+        return False
+    from payment.models import Order
+    from cart.models import CartItem
+
+    orders = Order.objects.filter(
+        user=user,
+        ordered=True,
+    ).exclude(status__in=['cancelled', 'refunded'])
+
+    prod_id = product.pk if hasattr(product, 'pk') else int(product)
+    for order in orders:
+        if order.items_snapshot:
+            for item in order.items_snapshot:
+                if item.get('product') == prod_id or str(item.get('product')) == str(prod_id):
+                    return True
+        if order.cart_id and CartItem.objects.filter(cart_id=order.cart_id, product_id=prod_id).exists():
+            return True
+    return False
+
+
 class ReviewsView(APIView):
     def get_permissions(self):
         return [AllowAny()] if self.request.method == 'GET' else super().get_permissions()
@@ -273,18 +295,27 @@ class ReviewsView(APIView):
     @extend_schema(responses=ReviewSerializer(many=True), auth=[])
     def get(self, request, pk):
         product = get_object_or_404(catalog(), pk=pk)
-        return Response(ReviewSerializer(Review.objects.filter(product=product).select_related('user')[:50], many=True).data)
+        reviews = Review.objects.filter(product=product).select_related('user').order_by('-created')[:50]
+        return Response(ReviewSerializer(reviews, many=True, context={'request': request}).data)
 
-    @extend_schema(request=ReviewSerializer, responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT})
+    @extend_schema(request=ReviewSerializer, responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT})
     def post(self, request, pk):
         product = get_object_or_404(catalog(), pk=pk)
+        
+        # Verify user is a verified buyer or staff
+        if not check_is_verified_buyer(request.user, product) and not (request.user.is_staff or request.user.is_superuser):
+            return Response(
+                {'detail': 'Only verified buyers who have purchased this product can leave a review.'},
+                status=403,
+            )
+
         instance = Review.objects.filter(user=request.user, product=product).first()
-        serializer = ReviewSerializer(instance, data=request.data)
+        serializer = ReviewSerializer(instance, data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         review = serializer.save(user=request.user, product=product)
         review.set_avg_rating()
         invalidate_catalog(product)
-        return Response(serializer.data, status=201)
+        return Response(serializer.data, status=200 if instance else 201)
 
 
 class WishlistView(APIView):

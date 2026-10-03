@@ -58,6 +58,6 @@ The container listens on `127.0.0.1:3000` by default and reads `API_URL` from
 
 ## Documentation
 
-Client-local docs live in [`Documentation/`](Documentation/README.md). Update
-them whenever frontend routing, proxy behavior, client deployment, or frontend
+Frontend documentation lives in [`../docs/frontend.md`](../docs/frontend.md).
+Update it whenever frontend routing, proxy behavior, client deployment, or frontend
 tests change.

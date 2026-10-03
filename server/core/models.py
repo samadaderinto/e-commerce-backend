@@ -82,15 +82,17 @@ class Address(DatesMixin):
 class Review(DatesMixin):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    label = models.CharField(max_length=80)
-    comment = models.TextField(max_length=60)
-    rating = models.IntegerField(default=0, validators=[MinValueValidator(0), MaxValueValidator(5)])
+    label = models.CharField(max_length=120)
+    comment = models.TextField(max_length=1000)
+    rating = models.IntegerField(default=5, validators=[MinValueValidator(1), MaxValueValidator(5)])
+    images = models.JSONField(default=list, blank=True)
 
     def set_avg_rating(self) -> None:
         average = Review.objects.filter(product=self.product).aggregate(
             models.Avg('rating')
         )['rating__avg'] or 0
-        self.product.average_rating = average
+        from decimal import Decimal
+        self.product.average_rating = Decimal(str(round(float(average), 2)))
         self.product.save(update_fields=["average_rating", "updated"])
 
     def num_of_reviews(self) -> int:

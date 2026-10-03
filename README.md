@@ -21,7 +21,7 @@ not replaced. The runnable commerce configuration is
 Backend and cross-project documentation is centralized in [`docs/`](docs/README.md).
 The client also has frontend-local docs:
 
-- client docs: [`client/Documentation/`](client/Documentation/README.md)
+- client docs: [`client/README.md`](client/README.md)
 
 New contributors should start with the
 [getting-started guide](docs/getting-started.md), then read the
@@ -80,12 +80,23 @@ Set `FRONTEND_URL=http://127.0.0.1:3000` to keep email links on that exact host.
 
 ## Run The Container Stack
 
-The container stack runs the Django API, official Redis cache, official
-PostgreSQL database, Elasticsearch search engine, and the local monitoring tools.
-Local Compose uses the persistent `media-data` volume for uploads, so it does not
-require MinIO or another object-storage registry.
+You can run the entire application (Next.js frontend, Django API, Celery worker, PostgreSQL, Redis, and Elasticsearch) with the unified Compose stack, or run individual stacks independently:
 
+### Option A: Full Application Stack (Frontend + Backend + Datastores)
 From the repository root:
+
+```sh
+# Build and run the entire stack
+docker compose up --build -d
+
+# Check services status
+docker compose ps
+```
+
+The Next.js storefront will be available at <http://127.0.0.1:3000>, and the Django API at <http://127.0.0.1:8000>.
+
+### Option B: Backend Stack Only
+From the `server/` directory:
 
 ```sh
 cd server
@@ -93,6 +104,13 @@ cd server
 docker compose --env-file .env -f compose.yaml up --build -d api redis postgres elasticsearch
 docker compose --env-file .env -f monitoring/compose.yaml up -d
 docker compose --env-file .env -f compose.yaml exec api python manage.py rebuild_product_index
+```
+
+### Option C: Frontend Stack Only
+From the repository root:
+
+```sh
+docker compose -f client/compose.yaml up --build -d
 ```
 
 The API uses `redis://redis:6379/0` inside Compose. The API is available at
@@ -156,11 +174,13 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 
 ## Customer Experience
 
-## Customer Experience
-
 - Storefront with product photography, categories, deals, and Elasticsearch fuzzy search.
 - Search, category/price filters, sorting, and pagination.
-- Product details, photo gallery, stock availability, and customer reviews.
+- **Product Variants**: Selectable size, color, and material options with real-time price delta and inventory updates.
+- **Verified Reviews & Photos**: In-place review submission and 1–3 photo uploads exclusively for verified product purchasers, with real-time rating updates and photo gallery lightbox.
+- **Flash Deals & Live Countdowns**: Urgency badges and real-time countdown clocks on limited-time discounts.
+- **Store Profiles & Announcements**: Dedicated merchant showcase pages with marquee announcements, pinned items, and direct "Message Store" contact actions.
+- **Seller Tier Badges**: Dynamic verification tick and rank badges (Starter 🔵, Booster ⚪, Accelerator 🟣, Power 🟢, Mega 💎, Legendary 👑, and Official 🟡).
 - Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
 - Email-verified registration, sign-in, password reset, and session management.
 - Profile, delivery addresses, order history, and detailed order pages.
@@ -171,11 +191,12 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 ## Seller Experience
 
 Visit `/merchant` after signing in:
-- **Seller Workspace Dashboard**: Daily order activity trend bar charts, low-stock inventory alerts, and top-selling products.
+- **Seller Workspace Dashboard**: Daily order activity trend bar charts, low-stock inventory alerts, top-selling products, and tier milestone celebration banners.
+- **Product Management & Variants**: Create physical and digital goods, define customizable variant options with price deltas and individual stock allocations, set flash sale timers, and upload image galleries.
+- **Bulk CSV Catalog Import**: High-volume merchant catalog batch upload with automatic variant and tag parsing.
+- **Storefront Customization**: Configure store announcement banner, banner covers, avatars, bio, and direct customer inquiry channels.
 - **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`).
-- **Product Management**: Create physical and digital goods, upload product image galleries, manage pricing/discounts, toggle draft/published status, and export product catalogs to CSV.
 - **Order Fulfillment**: Review store-specific customer orders, assign carrier & tracking numbers, update fulfillment milestones, and trigger instant buyer notifications.
-- **Store Configuration**: Edit store branding, opening schedules, and warehouse origin ZIP code for live shipping postage calculations.
 
 ## Admin & Staff Experience
 
@@ -204,25 +225,30 @@ Swagger UI at `/api/docs/` and ReDoc at `/api/redoc/`. Authenticated API operati
 use a JWT bearer access token; the browser storefront keeps those tokens in HTTP-only
 cookies and calls the API through its same-origin Next.js proxy.
 
-## Verification
+## Verification & Testing
 
 ```sh
-npm run build
+# Frontend build & typechecks (from root or via prefix)
+npm run build                     # or npm --prefix client run build
 npm run typecheck
 npm run test:unit
-PYTHONPATH=server .venv/bin/pytest server/
+
+# Backend test suite (Django & Pytest)
+PYTHONPATH=server .venv/bin/pytest server/storefront/tests.py server/store/tests.py
 ```
 
 Unit tests exercise frontend API serialization/error handling, currency formatting,
 categories, and backend price rounding without making external service calls.
 Backend tests cover authentication, permissions, cart atomicity, coupon redemption,
-wallet transactions, 7-day refund escrow, USPS tracking, and merchant payouts.
+wallet transactions, 7-day refund escrow, USPS tracking, review photo validations,
+variants serialization, flash sale countdowns, and merchant payouts.
 
 ## Deployment Boundaries
 
 - Set `DJANGO_DEBUG=false`, a strong `SECRET_KEY`, `ALLOWED_HOSTS`, `FRONTEND_URL`,
   Resend API/sender configuration, and persistent media/database storage. Build
-  the client with `npm run build` and run `npm run start --workspace=client`
+  the client with `npm run build` (or `npm --prefix client run build`) and run `npm run start --workspace=client`
+  behind HTTPS.
   behind HTTPS.
 - Dedicated monitoring stack (Grafana Loki, Alloy, Prometheus, Tempo) runs via
   `server/monitoring/compose.yaml` with centralized dashboards at `http://127.0.0.1:3002`.

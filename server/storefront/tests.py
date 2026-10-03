@@ -601,6 +601,105 @@ class StorefrontTests(TestCase):
         self.assertEqual(admin_track_resp.status_code, 200)
         self.assertEqual(admin_track_resp.data['tracking_number'], '9400100000000000000001')
 
+    def test_verified_buyer_product_review_lifecycle(self):
+        other_user = User.objects.create(email='unverified_random@proace.com', is_active=True)
+        self.client.force_authenticate(other_user)
+
+        # 1. Unverified user who hasn't bought product is rejected
+        post_resp = self.client.post(f'/api/v1/products/{self.product.pk}/reviews/', {
+            'rating': 5,
+            'label': 'Fake review',
+            'comment': 'I did not buy this item.',
+        }, format='json')
+        self.assertEqual(post_resp.status_code, 403)
+        self.assertIn('verified buyers', post_resp.data['detail'].lower())
+
+        # 2. Buyer purchases the product
+        self.client.force_authenticate(self.buyer)
+        self.add(1)
+        checkout_resp = self.checkout()
+        self.assertEqual(checkout_resp.status_code, 201)
+
+        # 3. Verified buyer posts a review
+        review_resp = self.client.post(f'/api/v1/products/{self.product.pk}/reviews/', {
+            'rating': 4,
+            'label': 'Great product',
+            'comment': 'High quality material and fast delivery.',
+        }, format='json')
+        self.assertEqual(review_resp.status_code, 201)
+        self.assertTrue(review_resp.data['is_verified_buyer'])
+        self.assertTrue(review_resp.data['is_own_review'])
+
+        # 4. Check that product average_rating updated
+        self.product.refresh_from_db()
+        self.assertEqual(float(self.product.average_rating), 4.0)
+
+        # 5. Buyer edits their review (updates in place, single comment per buyer)
+        update_resp = self.client.post(f'/api/v1/products/{self.product.pk}/reviews/', {
+            'rating': 5,
+            'label': 'Updated: Excellent product',
+            'comment': 'After a week of use, it is a 5-star product.',
+        }, format='json')
+        self.assertEqual(update_resp.status_code, 200)
+        self.assertEqual(update_resp.data['id'], review_resp.data['id'])
+        self.assertEqual(update_resp.data['rating'], 5)
+
+        # Average rating recalculates
+        self.product.refresh_from_db()
+        self.assertEqual(float(self.product.average_rating), 5.0)
+
+        # 6. Listing reviews shows the verified buyer tag
+        get_resp = self.client.get(f'/api/v1/products/{self.product.pk}/reviews/')
+        self.assertEqual(get_resp.status_code, 200)
+        self.assertEqual(len(get_resp.data), 1)
+        self.assertTrue(get_resp.data[0]['is_verified_buyer'])
+
+    def test_review_photos_and_validation(self):
+        self.client.force_authenticate(self.buyer)
+        self.add(1)
+        self.checkout()
+
+        # Valid 2 photos
+        review_resp = self.client.post(f'/api/v1/products/{self.product.pk}/reviews/', {
+            'rating': 5,
+            'label': 'With Photos',
+            'comment': 'Here are pictures of the item.',
+            'images': ['https://example.com/photo1.jpg', 'https://example.com/photo2.jpg'],
+        }, format='json')
+        self.assertEqual(review_resp.status_code, 201)
+        self.assertEqual(len(review_resp.data['images']), 2)
+
+        # Rejects more than 3 photos
+        too_many_resp = self.client.post(f'/api/v1/products/{self.product.pk}/reviews/', {
+            'rating': 5,
+            'label': 'Too many photos',
+            'comment': 'Attempting 4 photos',
+            'images': [
+                'https://example.com/1.jpg',
+                'https://example.com/2.jpg',
+                'https://example.com/3.jpg',
+                'https://example.com/4.jpg',
+            ],
+        }, format='json')
+        self.assertEqual(too_many_resp.status_code, 400)
+        self.assertIn('up to 3 photos', str(too_many_resp.data))
+
+    def test_product_variants_and_flash_sale_serialization(self):
+        self.product.variants = [
+            {'name': 'Size: Small', 'price_delta': '0.00', 'available': 10},
+            {'name': 'Size: Large', 'price_delta': '5.00', 'available': 5},
+        ]
+        self.product.flash_sale_end = timezone.now() + timedelta(days=2)
+        self.product.save()
+
+        resp = self.client.get(f'/api/v1/products/{self.product.pk}/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data['variants']), 2)
+        self.assertEqual(resp.data['variants'][1]['name'], 'Size: Large')
+        self.assertIsNotNone(resp.data['flash_sale_end'])
+
+
+
 
 
 

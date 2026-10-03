@@ -2,11 +2,11 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { FormEvent, useState } from 'react';
+import { FormEvent, useState, useEffect } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, ChartNoAxesCombined, Check, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, LayoutDashboard, Package, Plus, Search, Settings, ShoppingBag, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
-import type { Dashboard, MerchantProduct, Page, Store, StorePayout, TrackingEvent } from '@/lib/types';
+import type { Dashboard, MerchantProduct, Page, ProductVariant, Store, StorePayout, TrackingEvent } from '@/lib/types';
 import { useShop } from './providers';
 import { Gate } from './account';
 import { Empty, ErrorState, Field, Loading, ProductImage, Status, VerifiedBadge } from './ui';
@@ -82,9 +82,67 @@ function MerchantDashboard({ store }: { store: Store }) {
   }
 
   const isOfficial = Boolean(store.is_official || user?.is_superuser);
+  const currentTier = store.seller_tier?.tier;
+  const [showCelebration, setShowCelebration] = useState(false);
+
+  useEffect(() => {
+    if (currentTier && currentTier !== 'starter' && currentTier !== 'official') {
+      const storageKey = `celebrated_tier_${store.id}_${currentTier}`;
+      if (!localStorage.getItem(storageKey)) {
+        setShowCelebration(true);
+      }
+    }
+  }, [currentTier, store.id]);
+
+  function dismissCelebration() {
+    if (currentTier) {
+      localStorage.setItem(`celebrated_tier_${store.id}_${currentTier}`, 'true');
+    }
+    setShowCelebration(false);
+  }
 
   return (
     <>
+      {showCelebration && (
+        <div
+          style={{
+            background: "linear-gradient(135deg, #1e293b 0%, #0f172a 100%)",
+            color: "#fff",
+            borderRadius: "12px",
+            padding: "20px 24px",
+            marginBottom: "24px",
+            boxShadow: "0 10px 25px rgba(0,0,0,0.15)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "16px",
+            flexWrap: "wrap",
+            border: "1px solid rgba(255,255,255,0.1)"
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+            <div style={{ fontSize: "32px" }}>🎉</div>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <h3 style={{ margin: 0, fontSize: "17px", color: "#fff" }}>
+                  Congratulations! You unlocked {store.seller_tier?.name} Rank
+                </h3>
+                <VerifiedBadge tierData={store.seller_tier} size={20} />
+              </div>
+              <p style={{ margin: "4px 0 0", fontSize: "13px", color: "#94a3b8" }}>
+                Your cumulative sales have passed {money(store.seller_tier?.min_sales || 0)}. Your store profile and products now display the verified {store.seller_tier?.name} badge!
+              </p>
+            </div>
+          </div>
+          <button
+            className="button"
+            style={{ background: store.seller_tier?.badge_hex || "#1d9bf0", borderColor: "transparent", color: "#fff" }}
+            onClick={dismissCelebration}
+          >
+            Claim & Continue
+          </button>
+        </div>
+      )}
       {store.status === 'pending' && !isOfficial && (
         <p className="muted" role="status">
           Your store is awaiting staff verification. You can prepare product drafts while we review it; products cannot be published until approval.
@@ -213,7 +271,72 @@ function MerchantProducts({ store }: { store: Store }) {
   const query = new URLSearchParams({ search, limit: '15', offset: String(offset) }); if (filter) query.set('visibility', filter);
   const products = useQuery({ queryKey: ['merchant-products', store.id, query.toString()], queryFn: () => api<Page<MerchantProduct>>(`stores/${store.id}/products?${query}`) });
   async function toggle(product: MerchantProduct) { setBusy(product.id); try { await api(`stores/${store.id}/products/${product.id}`, 'PATCH', { visibility: !product.visibility }); await client.invalidateQueries({ queryKey: ['merchant-products'] }); await client.invalidateQueries({ queryKey: ['dashboard'] }); await client.invalidateQueries({ queryKey: ['products'] }); notify(product.visibility ? 'Product unpublished' : 'Your product is live'); } catch (error) { notify((error as Error).message, true); } finally { setBusy(null); } }
-  return <><div className="merchant-heading"><div><h1>Your products</h1><p>A collection worth discovering.</p></div><div className="form-actions"><button className="button secondary" title="Export current page" disabled={!products.data?.results.length} onClick={() => exportRows(products.data!.results)}><ArrowDownToLine size={17} />Export page</button><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div></div><div className="merchant-toolbar"><div className="tabs">{[['', 'All products'], ['true', 'Published'], ['false', 'Drafts']].map(([value, label]) => <button className={filter === value ? 'active' : ''} key={value} onClick={() => { setFilter(value); setOffset(0); }}>{label}</button>)}</div><div className="search-box"><Search size={17} /><input aria-label="Search your products" placeholder="Search products…" value={search} onChange={event => { setSearch(event.target.value); setOffset(0); }} /></div></div>{products.isLoading ? <Loading /> : products.error ? <ErrorState error={products.error} retry={() => products.refetch()} /> : !products.data?.results.length ? <Empty title={search ? 'Nothing matches just yet' : 'Your first product starts here'} text={search ? 'Try another search or change the filter.' : 'Add your first listing and give your customers something to discover.'} href="/merchant/products/new" label="Add product" /> : <><div className="table-scroll"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Inventory</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{products.data.results.map(product => <tr key={product.id}><td><Link className="table-product" href={`/merchant/products/${product.id}`}><ProductImage src={product.images[0]?.image || product.image_url} alt={product.title} /><span><strong>{product.title}</strong><small style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>#{String(product.id).padStart(5, '0')} · {product.brand || store.name}<VerifiedBadge tier={store.is_official ? 'official' : 'starter'} tierData={store.seller_tier} size={12} /></small></span></Link></td><td>{categories.find(category => category.key === product.category)?.name || product.category}</td><td className="table-price">{money(product.price)}</td><td><span className={product.available <= 5 ? 'low-stock' : ''}>{product.available} in stock</span></td><td><button className={`publish-toggle ${product.visibility ? 'on' : ''}`} disabled={busy === product.id} role="switch" aria-checked={product.visibility} aria-label={`Publish ${product.title}`} onClick={() => toggle(product)}><span />{product.visibility ? 'Published' : 'Draft'}</button></td><td><Link className="icon-button" title="Edit product" aria-label={`Edit ${product.title}`} href={`/merchant/products/${product.id}`}><ArrowUpRight size={18} /></Link></td></tr>)}</tbody></table></div><div className="table-pagination"><span>Showing {offset + 1}–{Math.min(offset + 15, products.data.count)} of {products.data.count} products</span><div><button className="icon-button" aria-label="Previous page" disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 15))}><ChevronLeft size={18} /></button><button className="icon-button" aria-label="Next page" disabled={offset + 15 >= products.data.count} onClick={() => setOffset(value => value + 15)}><ChevronRight size={18} /></button></div></div></>}</>;
+
+  async function handleCsvImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter(line => line.trim().length > 0);
+    if (lines.length < 2) {
+      notify('CSV file is empty or missing rows.', true);
+      return;
+    }
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''));
+    let count = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',').map(v => v.trim().replace(/^["']|["']$/g, ''));
+      if (values.length < 2 || !values[0]) continue;
+      const row: Record<string, string> = {};
+      headers.forEach((header, idx) => {
+        row[header] = values[idx] || '';
+      });
+      const title = row['title'] || row['product'] || values[0];
+      const price = Number(row['price'] || values[1] || 10);
+      const category = row['category'] || 'sports';
+      const available = Number(row['stock'] || row['available'] || values[2] || 10);
+      const description = row['description'] || `${title} - Quality listing`;
+      const brand = row['brand'] || store.name;
+      const imageUrl = row['image_url'] || row['image'] || '';
+      let variantsList: ProductVariant[] = [];
+      if (row['variants']) {
+        try {
+          if (row['variants'].startsWith('[')) {
+            variantsList = JSON.parse(row['variants']);
+          } else {
+            variantsList = row['variants'].split(';').map(part => {
+              const [vName, vDelta, vStock] = part.split(':');
+              return { name: vName?.trim() || '', price_delta: vDelta?.trim() || '0.00', available: Number(vStock || 10) };
+            }).filter(v => v.name);
+          }
+        } catch (_) {}
+      }
+      try {
+        await api(`stores/${store.id}/products`, 'POST', {
+          title,
+          price,
+          category,
+          available,
+          description,
+          brand,
+          image_url: imageUrl,
+          discount: Number(row['discount'] || 0),
+          variants: variantsList,
+          visibility: true,
+          tags: ['imported'],
+        });
+        count++;
+      } catch (err) {
+        console.error(err);
+      }
+    }
+    await client.invalidateQueries({ queryKey: ['merchant-products'] });
+    await client.invalidateQueries({ queryKey: ['dashboard'] });
+    await client.invalidateQueries({ queryKey: ['products'] });
+    notify(`Imported ${count} products from CSV!`);
+    event.target.value = '';
+  }
+
+  return <><div className="merchant-heading"><div><h1>Your products</h1><p>A collection worth discovering.</p></div><div className="form-actions"><label className="button secondary" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} title="Bulk import products from CSV"><Upload size={17} />Import CSV<input type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={handleCsvImport} /></label><button className="button secondary" title="Export current page" disabled={!products.data?.results.length} onClick={() => exportRows(products.data!.results)}><ArrowDownToLine size={17} />Export page</button><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div></div><div className="merchant-toolbar"><div className="tabs">{[['', 'All products'], ['true', 'Published'], ['false', 'Drafts']].map(([value, label]) => <button className={filter === value ? 'active' : ''} key={value} onClick={() => { setFilter(value); setOffset(0); }}>{label}</button>)}</div><div className="search-box"><Search size={17} /><input aria-label="Search your products" placeholder="Search products…" value={search} onChange={event => { setSearch(event.target.value); setOffset(0); }} /></div></div>{products.isLoading ? <Loading /> : products.error ? <ErrorState error={products.error} retry={() => products.refetch()} /> : !products.data?.results.length ? <Empty title={search ? 'Nothing matches just yet' : 'Your first product starts here'} text={search ? 'Try another search or change the filter.' : 'Add your first listing and give your customers something to discover.'} href="/merchant/products/new" label="Add product" /> : <><div className="table-scroll"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Inventory</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{products.data.results.map(product => <tr key={product.id}><td><Link className="table-product" href={`/merchant/products/${product.id}`}><ProductImage src={product.images[0]?.image || product.image_url} alt={product.title} /><span><strong>{product.title}</strong><small style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>#{String(product.id).padStart(5, '0')} · {product.brand || store.name}<VerifiedBadge tier={store.is_official ? 'official' : 'starter'} tierData={store.seller_tier} size={12} /></small></span></Link></td><td>{categories.find(category => category.key === product.category)?.name || product.category}</td><td className="table-price">{money(product.price)}</td><td><span className={product.available <= 5 ? 'low-stock' : ''}>{product.available} in stock</span></td><td><button className={`publish-toggle ${product.visibility ? 'on' : ''}`} disabled={busy === product.id} role="switch" aria-checked={product.visibility} aria-label={`Publish ${product.title}`} onClick={() => toggle(product)}><span />{product.visibility ? 'Published' : 'Draft'}</button></td><td><Link className="icon-button" title="Edit product" aria-label={`Edit ${product.title}`} href={`/merchant/products/${product.id}`}><ArrowUpRight size={18} /></Link></td></tr>)}</tbody></table></div><div className="table-pagination"><span>Showing {offset + 1}–{Math.min(offset + 15, products.data.count)} of {products.data.count} products</span><div><button className="icon-button" aria-label="Previous page" disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 15))}><ChevronLeft size={18} /></button><button className="icon-button" aria-label="Next page" disabled={offset + 15 >= products.data.count} onClick={() => setOffset(value => value + 15)}><ChevronRight size={18} /></button></div></div></>}</>;
 }
 
 function ProductEditor({ store, id }: { store: Store; id: string }) {
@@ -221,14 +344,42 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   const product = useQuery({ queryKey: ['merchant-product', store.id, id], queryFn: () => api<MerchantProduct>(`stores/${store.id}/products/${id}`), enabled: !isNew });
   const [isDigital, setIsDigital] = useState<boolean | null>(null);
   const effectiveIsDigital = isDigital ?? product.data?.is_digital ?? false;
+  const [variants, setVariants] = useState<ProductVariant[] | null>(null);
+
+  const effectiveVariants = variants ?? product.data?.variants ?? [];
+
+  function addVariant() {
+    setVariants([...effectiveVariants, { name: '', price_delta: '0.00', available: 10 }]);
+  }
+
+  function updateVariant(index: number, field: keyof ProductVariant, value: any) {
+    const next = [...effectiveVariants];
+    next[index] = { ...next[index], [field]: value };
+    setVariants(next);
+  }
+
+  function removeVariant(index: number) {
+    setVariants(effectiveVariants.filter((_, i) => i !== index));
+  }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(''); const form = Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>;
     const digital = form.is_digital === 'on';
+    const flashEnd = form.flash_sale_end ? new Date(form.flash_sale_end).toISOString() : null;
+    const validVariants = effectiveVariants
+      .filter(v => v.name && v.name.trim().length > 0)
+      .map(v => ({
+        name: v.name.trim(),
+        price_delta: v.price_delta || '0.00',
+        available: typeof v.available === 'number' ? v.available : Number(v.available || 0),
+      }));
+
     const data = {
       ...form,
       available: Number(form.available),
       discount: Number(form.discount),
+      flash_sale_end: flashEnd,
+      variants: validVariants,
       weight: digital ? '0.00' : (form.weight || '1.00'),
       visibility: form.visibility === 'on',
       is_digital: digital,
@@ -249,7 +400,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     }
   }
   if (!isNew && product.isLoading) return <Loading />; if (product.error) return <ErrorState error={product.error} />; const data = product.data;
-  return <><Link className="text-link" href="/merchant/products"><ArrowLeft size={16} />All products</Link><div className="merchant-heading"><div><h1>{isNew ? 'Something new to discover.' : 'The details make it yours.'}</h1><p>{isNew ? 'Give your next best-seller a good start.' : `Editing ${data?.title}`}</p></div>{data?.visibility && <Link className="button secondary" href={`/products/${id}`}><Eye size={16} />View listing</Link>}</div><form className="product-editor" onSubmit={save}><section className="form-stack"><h2>Product information</h2><Field label="Product title"><input name="title" defaultValue={data?.title} required maxLength={225} placeholder="A clear, descriptive name" /></Field><Field label="Description"><textarea name="description" defaultValue={data?.description} required rows={5} placeholder="What makes this product a good find?" /></Field><div className="form-row"><Field label="Brand"><input name="brand" maxLength={80} defaultValue={data?.brand} /></Field><Field label="Category"><select name="category" defaultValue={data?.category || ''} required><option value="" disabled>Select a category</option>{categories.map(category => <option value={category.key} key={category.key}>{category.name}</option>)}</select></Field></div><label className="check-row"><input type="checkbox" name="is_digital" checked={effectiveIsDigital} onChange={e => setIsDigital(e.target.checked)} />Digital download / e-book (available worldwide, 0 lbs weight)</label>{effectiveIsDigital ? <Field label="Download URL"><input name="digital_file_url" type="url" maxLength={1000} defaultValue={data?.digital_file_url} placeholder="https://…" required /></Field> : <div className="form-row"><Field label="Shipping weight (lbs)"><input name="weight" type="number" min="0.01" max="999.99" step="0.01" defaultValue={data?.weight || '1.00'} required placeholder="e.g. 1.25" /></Field></div>}<p className="fine-print">{effectiveIsDigital ? 'Digital products are fulfilled automatically worldwide with $0.00 shipping.' : 'Physical products are shipped within the US with live USPS rate calculation.'}</p><Field label="Tags"><input name="tags" defaultValue={data?.tags?.join(', ')} placeholder="Audio, wireless, everyday" /></Field><h2>Product photography</h2><Field label="Image URL"><input name="image_url" type="url" maxLength={1000} defaultValue={data?.image_url} placeholder="https://…" /></Field>{data?.image_url && <div className="editor-image"><ProductImage src={data.image_url} alt={data.title} /></div>}</section><aside className="editor-aside"><section><h2>Pricing & stock</h2><Field label="Price (USD)"><input name="price" type="number" min="0.01" step="0.01" required defaultValue={data?.price} /></Field><div className="form-row"><Field label="Discount (%)"><input type="number" name="discount" min="0" max="60" step="1" required defaultValue={data?.discount || 0} /></Field><Field label="Stock quantity"><input name="available" type="number" min="0" step="1" required defaultValue={data?.available || 0} /></Field></div><hr /><h3>Availability</h3><label className="check-row"><input type="checkbox" name="visibility" defaultChecked={data?.visibility || false} />Publish to the marketplace</label>{error && <p className="form-error">{error}</p>}<button className="button" disabled={busy}>{busy ? 'Saving…' : isNew ? 'Create product' : 'Save changes'}<Check size={17} /></button><Link className="button secondary" href="/merchant/products">Back to products</Link></section></aside></form>{!isNew && <ProductAssets store={store} product={data!} />}</>;
+  return <><Link className="text-link" href="/merchant/products"><ArrowLeft size={16} />All products</Link><div className="merchant-heading"><div><h1>{isNew ? 'Something new to discover.' : 'The details make it yours.'}</h1><p>{isNew ? 'Give your next best-seller a good start.' : `Editing ${data?.title}`}</p></div>{data?.visibility && <Link className="button secondary" href={`/products/${id}`}><Eye size={16} />View listing</Link>}</div><form className="product-editor" onSubmit={save}><section className="form-stack"><h2>Product information</h2><Field label="Product title"><input name="title" defaultValue={data?.title} required maxLength={225} placeholder="A clear, descriptive name" /></Field><Field label="Description"><textarea name="description" defaultValue={data?.description} required rows={5} placeholder="What makes this product a good find?" /></Field><div className="form-row"><Field label="Brand"><input name="brand" maxLength={80} defaultValue={data?.brand} /></Field><Field label="Category"><select name="category" defaultValue={data?.category || ''} required><option value="" disabled>Select a category</option>{categories.map(category => <option value={category.key} key={category.key}>{category.name}</option>)}</select></Field></div><label className="check-row"><input type="checkbox" name="is_digital" checked={effectiveIsDigital} onChange={e => setIsDigital(e.target.checked)} />Digital download / e-book (available worldwide, 0 lbs weight)</label>{effectiveIsDigital ? <Field label="Download URL"><input name="digital_file_url" type="url" maxLength={1000} defaultValue={data?.digital_file_url} placeholder="https://…" required /></Field> : <div className="form-row"><Field label="Shipping weight (lbs)"><input name="weight" type="number" min="0.01" max="999.99" step="0.01" defaultValue={data?.weight || '1.00'} required placeholder="e.g. 1.25" /></Field></div>}<p className="fine-print">{effectiveIsDigital ? 'Digital products are fulfilled automatically worldwide with $0.00 shipping.' : 'Physical products are shipped within the US with live USPS rate calculation.'}</p><Field label="Tags"><input name="tags" defaultValue={data?.tags?.join(', ')} placeholder="Audio, wireless, everyday" /></Field><h2>Product options & variants</h2><p className="fine-print">Define size, color, or material options with custom price adjustments and stock counts.</p>{effectiveVariants.length > 0 && <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>{effectiveVariants.map((v, i) => <div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr 1fr auto', gap: '8px', alignItems: 'center' }}><input placeholder="Option name (e.g. Size: Large)" value={v.name} onChange={e => updateVariant(i, 'name', e.target.value)} required /><input placeholder="Price delta (e.g. +5.00)" value={v.price_delta || ''} onChange={e => updateVariant(i, 'price_delta', e.target.value)} /><input type="number" min="0" placeholder="Stock" value={v.available ?? ''} onChange={e => updateVariant(i, 'available', Number(e.target.value))} /><button type="button" className="icon-button" aria-label="Remove variant" onClick={() => removeVariant(i)}><X size={16} /></button></div>)}</div>}<button type="button" className="button secondary" onClick={addVariant} style={{ width: 'fit-content', marginBottom: '16px' }}><Plus size={15} />Add variant</button><h2>Product photography</h2><Field label="Image URL"><input name="image_url" type="url" maxLength={1000} defaultValue={data?.image_url} placeholder="https://…" /></Field>{data?.image_url && <div className="editor-image"><ProductImage src={data.image_url} alt={data.title} /></div>}</section><aside className="editor-aside"><section><h2>Pricing & stock</h2><Field label="Price (USD)"><input name="price" type="number" min="0.01" step="0.01" required defaultValue={data?.price} /></Field><div className="form-row"><Field label="Discount (%)"><input type="number" name="discount" min="0" max="60" step="1" required defaultValue={data?.discount || 0} /></Field><Field label="Stock quantity"><input name="available" type="number" min="0" step="1" required defaultValue={data?.available || 0} /></Field></div><Field label="Flash Deal Expiration (Optional)"><input name="flash_sale_end" type="datetime-local" defaultValue={data?.flash_sale_end ? new Date(data.flash_sale_end).toISOString().slice(0, 16) : ''} /></Field><hr /><h3>Availability</h3><label className="check-row"><input type="checkbox" name="visibility" defaultChecked={data?.visibility || false} />Publish to the marketplace</label>{error && <p className="form-error">{error}</p>}<button className="button" disabled={busy}>{busy ? 'Saving…' : isNew ? 'Create product' : 'Save changes'}<Check size={17} /></button><Link className="button secondary" href="/merchant/products">Back to products</Link></section></aside></form>{!isNew && <ProductAssets store={store} product={data!} />}</>;
 }
 
 function ProductAssets({ store, product }: { store: Store; product: MerchantProduct }) {
@@ -321,6 +472,7 @@ function MerchantSettings({ store }: { store: Store }) {
       await api(`stores/${store.id}/profile`, 'PATCH', {
         email: data.email,
         bio: data.bio,
+        announcement: data.announcement,
         avatar_url: data.avatar_url,
         banner_url: data.banner_url,
         website: data.website,
@@ -384,6 +536,14 @@ function MerchantSettings({ store }: { store: Store }) {
               />
             </Field>
           </div>
+          <Field label="Store Announcement Bar (Promotional Banner)">
+            <input
+              name="announcement"
+              defaultValue={profile.data?.announcement || ''}
+              placeholder="e.g. Free shipping on all orders over $50 · Holiday sale now live!"
+              maxLength={255}
+            />
+          </Field>
 
           {(effectiveAvatar || effectiveBanner) && (
             <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--line)', background: '#fafbf8', marginBottom: '15px' }}>

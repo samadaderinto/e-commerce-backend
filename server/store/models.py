@@ -78,6 +78,8 @@ class StoreInfo(DatesMixin):
     store = models.ForeignKey('Store', on_delete=models.CASCADE)
     email = models.EmailField(null=True, blank=True)
     bio = models.TextField(blank=True, default='')
+    announcement = models.CharField(max_length=255, blank=True, default='')
+    pinned_products = models.JSONField(default=list, blank=True)
     avatar_url = models.URLField(max_length=1000, null=True, blank=True)
     banner_url = models.URLField(max_length=1000, null=True, blank=True)
     website = models.URLField(max_length=500, null=True, blank=True)

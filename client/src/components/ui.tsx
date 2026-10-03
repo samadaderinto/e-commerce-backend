@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useState, ReactNode } from "react";
+import { useState, useEffect, ReactNode } from "react";
 import {
   AlertCircle,
   ArrowRight,
@@ -152,6 +152,54 @@ export function ProductImage({
     </div>
   );
 }
+export function FlashCountdown({ end }: { end?: string | null }) {
+  const [timeLeft, setTimeLeft] = useState<{ hours: number; minutes: number; seconds: number; expired: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!end) return;
+    function calculate() {
+      const diff = new Date(end!).getTime() - new Date().getTime();
+      if (diff <= 0) {
+        setTimeLeft({ hours: 0, minutes: 0, seconds: 0, expired: true });
+        return;
+      }
+      const hours = Math.floor(diff / (1000 * 60 * 60));
+      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      setTimeLeft({ hours, minutes, seconds, expired: false });
+    }
+    calculate();
+    const interval = setInterval(calculate, 1000);
+    return () => clearInterval(interval);
+  }, [end]);
+
+  if (!timeLeft || timeLeft.expired) return null;
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  return (
+    <span
+      className="flash-deal-badge"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        background: "#fee2e2",
+        color: "#dc2626",
+        padding: "1px 6px",
+        borderRadius: "8px",
+        fontSize: "10px",
+        fontWeight: 700,
+        letterSpacing: "0.02em"
+      }}
+      title="Limited-time Flash Deal"
+    >
+      <span>⚡</span>
+      <span>{timeLeft.hours > 0 ? `${pad(timeLeft.hours)}:` : ''}{pad(timeLeft.minutes)}:{pad(timeLeft.seconds)}</span>
+    </span>
+  );
+}
+
 export function ProductCard({ product }: { product: Product }) {
   const { saved, toggleSave, add, notify } = useShop();
   const [busy, setBusy] = useState(false);
@@ -165,9 +213,14 @@ export function ProductCard({ product }: { product: Product }) {
         >
           <ProductImage src={product.image} alt={product.title} />
         </Link>
-        {product.discount > 0 && (
-          <span className="discount">−{product.discount}%</span>
-        )}
+        <div style={{ position: "absolute", top: 8, left: 8, display: "flex", flexDirection: "column", gap: 4, zIndex: 1 }}>
+          {product.discount > 0 && (
+            <span className="discount">−{product.discount}%</span>
+          )}
+          {product.flash_sale_end && (
+            <FlashCountdown end={product.flash_sale_end} />
+          )}
+        </div>
         <button
           className={`icon-button save-button ${liked ? "saved" : ""}`}
           aria-label={`${liked ? "Unsave" : "Save"} ${product.title}`}

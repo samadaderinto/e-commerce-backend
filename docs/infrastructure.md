@@ -43,7 +43,14 @@ same superuser email and password.
 
 ## Local container stacks
 
-The application is structured into three independent, modular container stacks sharing the `commerce-network` Docker network:
+The application can be run as a unified multi-service stack or as modular, independent container stacks sharing the `commerce-network` Docker network:
+
+### 0. Unified Full Stack (`compose.yaml`)
+From the repository root:
+```sh
+docker compose up --build -d
+```
+Contains the complete application environment (Next.js client, Django API, Celery worker, PostgreSQL, Redis, and Elasticsearch) connected over the `commerce-network`.
 
 ### 1. Server stack (`server/compose.yaml`)
 From `server/`:

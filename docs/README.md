@@ -26,7 +26,7 @@ workflows and calls out what is not production-ready.
 
 Frontend-local documentation:
 
-- [Client docs](../client/Documentation/README.md): frontend bridge, frontend container and client hosting.
+- [Client docs](../client/README.md): frontend bridge, frontend container and client hosting.
 
 The pages in this `docs/` directory are the canonical backend and cross-project
 guides. Avoid maintaining a second, conflicting copy of the same setup or

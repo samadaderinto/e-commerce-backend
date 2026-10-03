@@ -38,11 +38,11 @@ class StoreSerializer(serializers.ModelSerializer):
 class StoreInfoSerializer(serializers.ModelSerializer):
     class Meta:
         model = StoreInfo
-        fields = ['email', 'bio', 'avatar_url', 'banner_url', 'website',
+        fields = ['email', 'bio', 'announcement', 'pinned_products', 'avatar_url', 'banner_url', 'website',
                   'instagram', 'twitter', 'facebook',
                   'whatsapp', 'phone1', 'phone2']
         extra_kwargs = {field: {'required': False, 'allow_blank': True}
-                        for field in ['bio', 'avatar_url', 'banner_url', 'website',
+                        for field in ['bio', 'announcement', 'avatar_url', 'banner_url', 'website',
                                       'instagram', 'twitter', 'facebook']}
 
 
@@ -108,7 +108,7 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         model = Product
         fields = ['id', 'store', 'title', 'description', 'category', 'price', 'brand', 'image_url',
                   'discount', 'sale_price', 'available', 'visibility', 'label',
-                  'tags', 'images', 'specifications', 'sales', 'average_rating',
+                  'tags', 'images', 'specifications', 'sales', 'flash_sale_end', 'variants', 'average_rating',
                   'sponsored', 'weight', 'is_digital', 'digital_file_url', 'created', 'updated']
         read_only_fields = ['id', 'store', 'sales', 'average_rating', 'sponsored',
                             'created', 'updated']
