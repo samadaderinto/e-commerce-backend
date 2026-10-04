@@ -8,6 +8,11 @@ from django.db import transaction
 from notification.models import NotificationDelivery
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def _schedule_delivery(delivery: NotificationDelivery) -> NotificationDelivery:
     transaction.on_commit(
         lambda: _dispatch_delivery(delivery.pk),
@@ -15,7 +20,7 @@ def _schedule_delivery(delivery: NotificationDelivery) -> NotificationDelivery:
     return delivery
 
 
-def _dispatch_delivery(delivery_id: int) -> None:
+def _dispatch_delivery(delivery_id: int) -> bool:
     from notification.tasks import deliver_notification_task
 
     updated = NotificationDelivery.objects.filter(
@@ -23,18 +28,27 @@ def _dispatch_delivery(delivery_id: int) -> None:
         status=NotificationDelivery.STATUS_PENDING,
     ).update(status=NotificationDelivery.STATUS_QUEUED)
     if not updated:
-        return
+        return False
     try:
         deliver_notification_task.apply_async(
             args=(delivery_id,),
             queue=settings.CELERY_TASK_DEFAULT_QUEUE,
         )
-    except Exception:
+        return True
+    except Exception as exc:
         NotificationDelivery.objects.filter(
             pk=delivery_id,
             status=NotificationDelivery.STATUS_QUEUED,
-        ).update(status=NotificationDelivery.STATUS_PENDING)
-        raise
+        ).update(
+            status=NotificationDelivery.STATUS_PENDING,
+            last_error=f"Queue dispatch failed: {exc}",
+        )
+        logger.warning(
+            "Could not dispatch notification delivery %s immediately; left pending for retry: %s",
+            delivery_id,
+            exc,
+        )
+        return False
 
 
 def queue_email_delivery(

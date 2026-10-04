@@ -52,9 +52,13 @@ Metric config files:
 
 ## Dashboards and alerts
 
-Grafana is available locally at `http://127.0.0.1:3002`. Its admin username and
-password are `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` in
-`server/.env`, matching the Django admin superuser.
+Grafana is available locally at `http://127.0.0.1:3002`. It is configured with
+**automatic anonymous admin access** (`GF_AUTH_ANONYMOUS_ENABLED=true`,
+`GF_AUTH_ANONYMOUS_ORG_ROLE=Admin`), so visiting Grafana directly or launching it
+from the app's Admin Dashboard (`/admin`) logs you in immediately with full
+administrator privileges. For explicit logins, the credentials are
+`DEFAULT_ADMIN_EMAIL` (`admin@proace.local`) and `DEFAULT_ADMIN_PASSWORD`
+(`local-grafana-admin-change-me`) in `server/.env`.
 
 The dashboard is provisioned from
 `server/monitoring/grafana/dashboards/commerce-overview.json` and includes:

@@ -59,7 +59,6 @@ SIMPLE_JWT = {
     'ROTATE_REFRESH_TOKENS': False,
     'CHECK_REVOKE_TOKEN': True,
 }
-EMAIL_BACKEND = 'notification.email_backend.ResendEmailBackend'
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 RESEND_FROM_EMAIL = os.environ.get(
     'RESEND_FROM_EMAIL',
@@ -67,6 +66,17 @@ RESEND_FROM_EMAIL = os.environ.get(
 )
 DEFAULT_FROM_EMAIL = RESEND_FROM_EMAIL
 APPLICATION_EMAIL = RESEND_FROM_EMAIL
+default_email_backend = (
+    'notification.email_backend.ResendEmailBackend'
+    if (RESEND_API_KEY or not DEBUG)
+    else 'django.core.mail.backends.console.EmailBackend'
+)
+EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', default_email_backend)
+CELERY_TASK_ALWAYS_EAGER = os.environ.get(
+    'CELERY_TASK_ALWAYS_EAGER',
+    'true' if DEBUG else 'false',
+).lower() == 'true'
+CELERY_TASK_EAGER_PROPAGATES = CELERY_TASK_ALWAYS_EAGER
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()

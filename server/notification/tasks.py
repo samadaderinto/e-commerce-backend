@@ -234,12 +234,15 @@ def recover_notification_deliveries():
         try:
             from notification.delivery import _dispatch_delivery
 
-            _dispatch_delivery(delivery_id)
+            dispatched = _dispatch_delivery(delivery_id)
         except Exception:
+            dispatched = False
             logger.exception(
                 "Could not enqueue notification delivery %s for recovery",
                 delivery_id,
             )
+
+        if not dispatched:
             NotificationDelivery.objects.filter(
                 pk=delivery_id,
                 status=NotificationDelivery.STATUS_PENDING,

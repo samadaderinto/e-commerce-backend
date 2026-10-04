@@ -1,13 +1,17 @@
 .git
+.venv
+server/.venv
 node_modules
-client/node_modules
-client/.next
+**/node_modules
+.next
+**/.next
+client/tests
 client/test-results
 client/playwright-report
-server/.venv
 server/media
 server/*.sqlite3
 server/*.sqlite3-*
+server/minio
 artifacts
 .env
 .env.local
@@ -16,3 +20,6 @@ client/.env
 __pycache__
 *.py[cod]
 *.tsbuildinfo
+docs
+.benchmarks
+.playwright-mcp

@@ -4,7 +4,9 @@ import { FormEvent, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  Activity,
   ArrowRight,
+  ArrowUpRight,
   ChartNoAxesCombined,
   DollarSign,
   LockKeyhole,
@@ -52,7 +54,18 @@ export function AdminDashboardPage() {
           <h1>Admin & Staff Overview</h1>
           <p>Real-time platform commerce insights, store activity, and order fulfillment.</p>
         </div>
-        <div className="form-actions">
+        <div className="form-actions" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <a
+            className="button secondary"
+            href={process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}
+            target="_blank"
+            rel="noreferrer"
+            title="Open Grafana Live Telemetry & Metrics (Auto-login enabled)"
+          >
+            <Activity size={17} />
+            Live Metrics (Grafana)
+            <ArrowUpRight size={14} />
+          </a>
           {user.is_superuser && (
             <Link className="button secondary" href="/admin/staff">
               <UsersRound size={17} />
@@ -256,6 +269,64 @@ export function AdminDashboardPage() {
               </div>
             )}
           </section>
+
+          <section className="analytics-panel" style={{ marginTop: '2rem' }}>
+            <div className="section-heading">
+              <div>
+                <h2>System Telemetry & Monitoring (Grafana)</h2>
+                <p>Live server health, database connection pools, response latencies, and container logs.</p>
+              </div>
+              <span className="status active" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                <Activity size={13} /> Auto-login as Admin
+              </span>
+            </div>
+            <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', marginTop: '1rem' }}>
+              <a
+                href={`${process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}/d/commerce-overview/commerce-api-overview`}
+                target="_blank"
+                rel="noreferrer"
+                className="stat-item stat-0"
+                style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600 }}>API Overview Dashboard</span>
+                  <ArrowUpRight size={17} />
+                </div>
+                <strong style={{ fontSize: '1.2rem', marginTop: '0.5rem', display: 'block' }}>HTTP & DB Traffic</strong>
+                <small>Request rates, p95/p99 latency, error rates, and query durations</small>
+              </a>
+
+              <a
+                href={`${process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}/d/commerce-infrastructure/commerce-infrastructure`}
+                target="_blank"
+                rel="noreferrer"
+                className="stat-item stat-1"
+                style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600 }}>Infrastructure & DB</span>
+                  <ArrowUpRight size={17} />
+                </div>
+                <strong style={{ fontSize: '1.2rem', marginTop: '0.5rem', display: 'block' }}>Postgres & Redis</strong>
+                <small>Connection pools, memory usage, CPU load, and Elasticsearch</small>
+              </a>
+
+              <a
+                href={`${process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}/explore`}
+                target="_blank"
+                rel="noreferrer"
+                className="stat-item stat-2"
+                style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600 }}>Loki Central Logs</span>
+                  <ArrowUpRight size={17} />
+                </div>
+                <strong style={{ fontSize: '1.2rem', marginTop: '0.5rem', display: 'block' }}>Log Explorer</strong>
+                <small>Search live structured JSON logs and container stderr in real time</small>
+              </a>
+            </div>
+          </section>
         </>
       )}
     </div>
@@ -294,7 +365,18 @@ export function AdminStaffPage() {
           <h1>Staff management</h1>
           <p>Add trusted team members and control their access.</p>
         </div>
-        <div className="form-actions">
+        <div className="form-actions" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          <a
+            className="button secondary"
+            href={process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}
+            target="_blank"
+            rel="noreferrer"
+            title="Open Grafana Live Telemetry & Metrics (Auto-login enabled)"
+          >
+            <Activity size={17} />
+            Live Metrics (Grafana)
+            <ArrowUpRight size={14} />
+          </a>
           <Link className="button secondary" href="/admin">
             <ChartNoAxesCombined size={17} />
             Platform Dashboard

@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const API = process.env.API_URL || 'http://127.0.0.1:8000/api/v1';
+function getCandidateApis(): string[] {
+  const configured = (process.env.API_URL || 'http://127.0.0.1:8000/api/v1').trim();
+  const list = [configured];
+  if (configured.includes('host.docker.internal')) {
+    list.push(configured.replace('host.docker.internal', '127.0.0.1'));
+  } else if (configured.includes('127.0.0.1:8000')) {
+    list.push(configured.replace('127.0.0.1:8000', 'localhost:8000'));
+  }
+  return [...new Set(list)];
+}
 
 async function handler(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const isSecure = request.nextUrl.protocol === 'https:' || request.headers.get('x-forwarded-proto') === 'https';
@@ -20,17 +29,56 @@ async function handler(request: NextRequest, { params }: { params: Promise<{ pat
   let body: ArrayBuffer | string | undefined = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.arrayBuffer();
   if (route === 'auth/logout') { body = JSON.stringify({ refresh }); headers['Content-Type'] = 'application/json'; }
   if (route === 'auth/refresh') return NextResponse.json({ detail: 'Not found.' }, { status: 404 });
+
+  const candidateApis = getCandidateApis();
+  let upstream: Response | undefined;
+  let activeApi = candidateApis[0];
+  let lastError: unknown;
+
   try {
-    const url = `${API}/${route}/${request.nextUrl.search}`;
-    const run = () => fetch(url, { method: request.method, body, headers, cache: 'no-store', signal: AbortSignal.timeout(20000) });
-    let upstream = await run();
+    for (const baseApi of candidateApis) {
+      const url = `${baseApi}/${route}/${request.nextUrl.search}`;
+      const payload = typeof body === 'string' ? body : body ? body.slice(0) : undefined;
+      try {
+        upstream = await fetch(url, {
+          method: request.method,
+          body: payload,
+          headers,
+          cache: 'no-store',
+          signal: AbortSignal.timeout(20000),
+        });
+        activeApi = baseApi;
+        break;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    if (!upstream) {
+      throw lastError || new Error('All candidate backend APIs failed to respond.');
+    }
+
     let newAccess: string | undefined;
     if (upstream.status === 401 && refresh && !route.startsWith('auth/')) {
-      const renewed = await fetch(`${API}/auth/refresh/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh }), cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      const renewed = await fetch(`${activeApi}/auth/refresh/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh }),
+        cache: 'no-store',
+        signal: AbortSignal.timeout(10000),
+      });
       if (renewed.ok) {
         newAccess = (await renewed.json()).access;
         headers.Authorization = `Bearer ${newAccess}`;
-        upstream = await run();
+        const url = `${activeApi}/${route}/${request.nextUrl.search}`;
+        const payload = typeof body === 'string' ? body : body ? body.slice(0) : undefined;
+        upstream = await fetch(url, {
+          method: request.method,
+          body: payload,
+          headers,
+          cache: 'no-store',
+          signal: AbortSignal.timeout(20000),
+        });
       }
     }
     const data = upstream.status === 204 ? null : await upstream.json().catch(() => ({ detail: 'The server could not process this request.' }));
@@ -46,13 +94,18 @@ async function handler(request: NextRequest, { params }: { params: Promise<{ pat
       response.cookies.delete('proace_access'); response.cookies.delete('proace_refresh');
     }
     return response;
-  } catch {
+  } catch (error) {
+    console.error(`[API Proxy Error] Failed to proxy ${request.method} /api/${route}:`, error);
     if (route === 'auth/logout') {
       const response = NextResponse.json(null);
       response.cookies.delete('proace_access'); response.cookies.delete('proace_refresh');
       return response;
     }
-    return NextResponse.json({ detail: 'The shop is temporarily unavailable. Please try again shortly.' }, { status: 503 });
+    const isDev = process.env.NODE_ENV !== 'production';
+    const detail = isDev
+      ? `The backend API server is unreachable. Please verify the Django server is running at ${candidateApis.join(' or ')}. (${(error as Error)?.message || 'connection failed'})`
+      : 'The shop is temporarily unavailable. Please try again shortly.';
+    return NextResponse.json({ detail }, { status: 503 });
   }
 }
 

@@ -9,6 +9,14 @@ const config: NextConfig = {
   ...(isDocker ? {
     output: 'standalone',
     outputFileTracingRoot: path.join(__dirname, '../'),
+    outputFileTracingExcludes: {
+      '*': [
+        'node_modules/@playwright/**',
+        'node_modules/playwright/**',
+        'node_modules/@types/**',
+        'node_modules/typescript/**',
+      ],
+    },
   } : {}),
   typescript: {
     // Dedicated type checking runs via `npm run typecheck` / `tsc --noEmit`

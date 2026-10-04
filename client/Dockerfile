@@ -1,16 +1,25 @@
 FROM node:22-alpine AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY client/package.json ./client/package.json
-RUN npm ci --workspace=client
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --workspace=client --no-audit --prefer-offline
 
 FROM node:22-alpine AS builder
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
-ENV NEXT_TELEMETRY_DISABLED=1 DOCKER_BUILD=true
+ENV NEXT_TELEMETRY_DISABLED=1 \
+    DOCKER_BUILD=true \
+    NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
-COPY client ./client
-RUN npm run build --workspace=client
+COPY client/package.json client/tsconfig.json client/next.config.ts ./client/
+COPY client/public ./client/public
+COPY client/src ./client/src
+RUN --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/app/client/.next/cache \
+    npm run build --workspace=client
 
 FROM node:22-alpine AS runner
 WORKDIR /app

@@ -403,7 +403,6 @@ SIMPLE_JWT = {
 }
 
 
-EMAIL_BACKEND = "notification.email_backend.ResendEmailBackend"
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.environ.get(
     "RESEND_FROM_EMAIL",
@@ -411,6 +410,12 @@ RESEND_FROM_EMAIL = os.environ.get(
 )
 DEFAULT_FROM_EMAIL = RESEND_FROM_EMAIL
 APPLICATION_EMAIL = RESEND_FROM_EMAIL
+default_email_backend = (
+    "notification.email_backend.ResendEmailBackend"
+    if (RESEND_API_KEY or not DEBUG)
+    else "django.core.mail.backends.console.EmailBackend"
+)
+EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", default_email_backend)
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "amqp://guest:guest@127.0.0.1:5672//")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "rpc://")
 CELERY_TASK_DEFAULT_QUEUE = "commerce.notifications"

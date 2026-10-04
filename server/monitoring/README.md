@@ -35,8 +35,14 @@ docker compose --env-file .env -f monitoring/compose.yaml up -d
 The API is at `http://127.0.0.1:8000`, Grafana is at
 `http://127.0.0.1:3002`, and Prometheus is at `http://127.0.0.1:9090`. The API
 uses the official Redis service at `redis://redis:6379/0`. Elasticsearch runs at
-`http://127.0.0.1:9200` in the app stack. The generated Grafana password and
-metrics token are in `server/.env`.
+`http://127.0.0.1:9200` in the app stack.
+
+Grafana is configured with **automatic anonymous admin access**: visiting
+`http://127.0.0.1:3002` (or clicking **Live Metrics (Grafana)** from the app's
+Admin Dashboard at `/admin`) automatically logs you in with full Admin permissions
+without requiring credentials. For manual logins, the admin user is
+`${DEFAULT_ADMIN_EMAIL:-admin@proace.local}` with password
+`${DEFAULT_ADMIN_PASSWORD:-local-grafana-admin-change-me}`.
 
 Both projects share `commerce-network` (override `COMMERCE_NETWORK` in `.env`).
 `monitoring/init_local.py` creates the external network when it is missing.

@@ -1,7 +1,9 @@
 node_modules
 .next
+tests
 test-results
 playwright-report
+playwright.config.ts
 .env
 .env.local
 *.tsbuildinfo
