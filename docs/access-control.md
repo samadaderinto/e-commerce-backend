@@ -32,13 +32,15 @@ Paths below have prefix `/api/v1/`. Staff members have global backoffice access 
 
 | Endpoint / operation | Customer / seller | Staff | Business admin | Technical admin |
 | --- | --- | --- | --- | --- |
-| `auth/login`, `register`, `verify`, `forgot`, `reset`, `refresh`, `logout` | Public action-specific authentication | Same | Same | Same |
+| `auth/login`, `register`, `verify`, `forgot`, `reset`, `refresh`, `logout` | Public action-specific authentication | Same | Same | Same (reset syncs MinIO/Grafana) |
 | `me` GET/PATCH | Own account; no role changes | Same | Same | Same |
-| `password/change` POST | Own account | Own account | Own account | Own account |
+| `password/change` POST | Own account | Own account | Own account | Own account (syncs MinIO/Grafana) |
 | `products`, public store catalog GET | Public | Public preview API | Public preview API | Public preview API |
 | `cart`, `wishlist`, `addresses`, `wallet`, `orders` collection | Own only | Denied | Denied | Denied |
-| `products/{id}/reviews` GET/POST | Authenticated; posting requires verified purchase | Denied | Denied | Denied |
-| `checkout`, shipping rates, wallet session/confirm | Own only | Denied | Denied | Denied |
+| `products/{id}/reviews` GET/POST/DELETE | Authenticated (posting: verified buyer; DELETE: own review) | Moderation DELETE allowed | Moderation DELETE allowed | Moderation DELETE allowed |
+| `checkout/validate-coupon` POST | Cart discount validation | Denied | Denied | Denied |
+| `checkout`, shipping rates, wallet session/confirm | Own only (split-tender allowed) | Denied | Denied | Denied |
+| `orders/{id}/cancel` POST | Own pending/confirmed orders | Denied | Denied | Denied |
 | `orders/{id}/refund` | Own order | Denied | Denied | Denied |
 | `orders/{id}`, `orders/{id}/tracking` GET | Own order | Customer order review | Any order | Any order |
 | `stores` GET and store detail/profile/insights/orders | Owned | Proace official stores (`is_official=True`) | Proace official stores (`is_official=True`) | Proace official stores (`is_official=True`) |
@@ -53,9 +55,11 @@ Paths below have prefix `/api/v1/`. Staff members have global backoffice access 
 | `admin/staff` list/create/detail/block/unblock | Denied | Denied | Staff targets only | Staff targets only |
 | `admin/staff/dashboard`, users, stores, orders, coupons, refund/payout queues GET | Denied | Allowed | Allowed | Allowed |
 | `admin/staff/orders/{id}/status/` POST | Denied | Allowed (override shipping status) | Allowed (override shipping status) | Allowed (override shipping status) |
-| `admin/staff/users/{id}` PATCH | Denied | Denied | Non-admin targets only | Non-admin targets only |
+| `admin/staff/users` GET (directory filters) | Denied | Allowed | Allowed | Allowed |
+| `admin/staff/users/{id}` PATCH (activate/deactivate) | Denied | Denied | Non-admin targets only | Non-admin targets only |
 | `admin/staff/stores/{id}/block` or unblock | Denied | Denied | Allowed | Allowed |
-| Refund and payout `/process` POST | Denied | Allowed (refund processing) | Allowed | Allowed |
+| `admin/staff/payouts` GET / `/process` POST | Denied | Allowed | Allowed | Allowed |
+| Refund `/process` POST | Denied | Allowed (refund processing) | Allowed | Allowed |
 | Store withdrawal requests POST | Owned store only | Denied | Owned official store only | Owned official store only |
 | Notifications | Own recipient inbox | Own inbox (unfiltered global operator notifications) | Own inbox (unfiltered global operator notifications) | Own inbox (unfiltered global operator notifications) |
 | Grafana, Silk technical profiling | Denied | Denied | Denied | Separate technical credentials / root session |

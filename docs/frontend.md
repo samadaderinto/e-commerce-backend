@@ -11,17 +11,22 @@ TypeScript, React 19, React Query and shared UI components.
 - `client/src/app/api/*`: same-origin API proxy routes that talk to Django.
 - `client/src/components/shell.tsx`: shared navigation, search bar, and layout shell.
 - `client/src/components/storefront.tsx`: catalog, product detail with selectable variant chips,
-  photo review gallery with lightbox, flash deal countdowns, store profiles with marquee announcements,
+  technical specifications and dimensions table, photo review gallery with lightbox, verified buyer review submission,
+  review moderation/deletion, flash deal countdowns, store profiles with marquee announcements,
   and quick "Message Store" customer action.
-- `client/src/components/cart.tsx`: cart and multi-method checkout UI (COD, ProAce Wallet, Stripe).
+- `client/src/components/cart.tsx`: cart sheet with live coupon code validation, real-time discount line-item display,
+  split-tender payments (combining ProAce Wallet with Stripe), and multi-method checkout UI (COD, ProAce Wallet, Stripe).
 - `client/src/components/account.tsx`: auth, profile, addresses, ProAce Wallet ledger,
-  order details with live USPS package tracking, and 7-day refund submission form.
+  `WalletTopupModal` with quick preset chips (+$25 to +$500), in-app `PasswordChangeModal`,
+  order details with live USPS package tracking, self-service order cancellation for pending/confirmed orders,
+  and 7-day refund submission form.
 - `client/src/components/merchant.tsx`: seller onboarding, dashboard with milestone celebration banners,
-  product editor with variant option configuration, bulk CSV catalog importer, 7-day escrow financial breakdown,
-  4% platform fee calculation, payout requests, inventory health, and order fulfillment modal.
+  product editor with variant option configuration, RFC 4180-compliant bulk CSV catalog importer (handling quoted fields and multiline data),
+  7-day escrow financial breakdown, 4% platform fee calculation, payout requests, inventory health, and order fulfillment modal.
 - `client/src/components/admin.tsx`: `AdminDashboardPage` (platform-wide business insights,
-  order fulfillment distribution bar chart, store leaderboards) and `AdminStaffPage`
-  (staff account creation, permission controls, and blocking).
+  order fulfillment distribution bar chart, store leaderboards), `AdminPayoutsPage` (merchant withdrawal review, approval,
+  and rejection with audit notes), `AdminUsersPage` (customer and staff directory with role/status filters and activation toggles),
+  and `AdminStaffPage` (staff account creation, permission controls, and blocking).
 - `client/src/components/ui.tsx`: reusable controls, product cards, `VerifiedBadge` (seller rank tier icons),
   `FlashCountdown` (real-time sale expiration timer), loading spinners, and small primitives.
 - `client/src/lib/api.ts`: browser API helper, error normalization, money

@@ -61,22 +61,32 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 - **Legendary Seller** ($1,000,000+): Gold Crown badge (`#d97706`).
 - **Official Brand Store**: Dedicated Golden Tick (`#eab308`).
 
-### Product Variants & Flash Sales
+### Product Variants, Specifications & Flash Sales
+- **Product Specifications (`Product.specifications`)**: Nested technical specifications dictionary exposing dimensions (`height`, `width`, `breadth`, `weight`), `color`, `serial` / part number, and `attributes` string.
 - **Product Variants (`Product.variants`)**: JSON-based array storing option names (e.g. Size, Color), price deltas (`price_delta`), and dedicated stock allocation (`available`).
 - **Flash Deals (`Product.flash_sale_end`)**: Optional expiration timestamp powering urgency badges and live countdown timers across storefronts.
 - **Store Announcements (`StoreInfo.announcement`)**: Marquee banner text displayed on the public store showcase page.
-- **Verified Buyer Reviews (`Review.images`)**: Restricts review posting to verified purchasers and validates up to 3 attached photo URLs.
+- **Verified Buyer Reviews & Moderation**: Restricts review posting to verified purchasers with up to 3 attached photo URLs. Reviews expose `can_moderate` and can be deleted by authors, store owners, and staff via `DELETE /api/v1/products/<pk>/reviews/?review_id=<id>`.
 
 ### Merchant escrow and payouts
 - **Platform Commission (4%)**: Automatically items and deducts a 4% platform fee (`PLATFORM_FEE_PERCENT = 4.00`) from gross item sales.
 - **7-Day Review Escrow**: Net sales from customer orders placed within the 7-day refund window (`REFUND_WINDOW_DAYS = 7`) are held in `in_review` status.
 - **Cleared Balance**: Once orders surpass the 7-day refund deadline, funds unlock to `cleared_net` and become available for merchant withdrawal requests via `/api/v1/stores/<id>/payouts/`.
+- **Admin Payout Processing**: Backoffice staff review and process withdrawal requests via `/api/v1/admin/staff/payouts/` with approve/reject actions and audit notes.
 - **Fulfillment & Carrier Tracking**: Merchants update carrier, tracking number, and milestone descriptions on store orders via `/api/v1/stores/<id>/orders/<order_id>/tracking/`, which triggers customer notifications and provides live tracking links.
 
-## ProAce User Wallet and 7-day refunds
+## ProAce User Wallet, Order Cancellation, and 7-day refunds
 
 - **Customer Wallet (`/api/v1/wallet/`)**: Every registered customer has an integrated store balance for instant 1-click checkout purchases and instant store credit refund resolution.
+- **Wallet Top-Up (`/api/v1/wallet/topup-session/`, `/wallet/topup-confirm/`)**: Customers can top up their wallet balance with preset ($25, $50, $100, $250, $500) or custom ($5–$5,000) amounts.
+- **Split-Tender Payments**: Customers can combine available wallet balances with Stripe payments during checkout, deducting the wallet credit from the card charge.
+- **Order Cancellation (`/api/v1/orders/<id>/cancel/`)**: Customers can cancel orders in `pending` or `confirmed` status. Cancellation automatically restocks physical product inventory, logs an audit entry, and refunds the entire amount directly to the customer's ProAce Wallet as instant store credit (`SOURCE_REFUND`).
 - **7-Day Refund Policy (`/api/v1/orders/<id>/refund/`)**: Customers can request refunds for physical items within 7 days of order placement. Refund destinations can be selected as ProAce Store Credit (instant wallet credit upon admin approval) or original payment method. Digital goods are non-refundable once delivered.
+
+## Technical Super Admin Credential Synchronization
+
+- **Single Point of Rotation**: When the Technical Super Admin (`is_superuser=True` or `TECHNICAL_ADMIN_EMAIL`) changes or resets their password via self-service (`/api/v1/auth/reset/`), in-app settings (`/api/v1/password/change/`), or CLI (`manage.py recover_privileged_user`), `server/core/auth_sync.py` automatically synchronizes the new credentials to **Grafana** (via Grafana Admin API `PUT /api/admin/users/1/password`) and notes credential alignment for **MinIO**.
+- **Isolation for Business Admins**: Business administrators (`is_business_admin=True`) and staff are explicitly excluded from infrastructure password propagation, changing passwords in the web UI without affecting Grafana or MinIO root credentials.
 
 ## USPS Tracking Engine
 

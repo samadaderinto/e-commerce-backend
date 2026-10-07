@@ -164,6 +164,9 @@ class AuthView(APIView):
             user.must_change_password = False
             user.credential_version += 1
             user.save(update_fields=['password', 'must_change_password', 'credential_version'])
+            from core.auth_sync import sync_technical_admin_credentials, is_technical_super_admin
+            if is_technical_super_admin(user):
+                sync_technical_admin_credentials(user, password)
             from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
             for token in OutstandingToken.objects.filter(user=user):
                 BlacklistedToken.objects.get_or_create(token=token)
@@ -1350,4 +1353,7 @@ class PasswordChangeView(APIView):
         user.must_change_password = False
         user.credential_version += 1
         user.save(update_fields=['password', 'must_change_password', 'credential_version'])
+        from core.auth_sync import sync_technical_admin_credentials, is_technical_super_admin
+        if is_technical_super_admin(user):
+            sync_technical_admin_credentials(user, password)
         return Response(tokens(user))

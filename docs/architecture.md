@@ -66,27 +66,32 @@ and permission details rather than inferring them from a prefix.
 
 | Prefix | Purpose |
 | --- | --- |
-| `/api/v1/auth/<action>/` | Login, registration, email verification, password reset, token refresh and logout |
+| `/api/v1/auth/<action>/` | Login, registration, email verification, password reset, token refresh, and logout |
+| `/api/v1/password/change/` | In-app password update (syncs technical super admin to MinIO & Grafana) |
 | `/api/v1/me/` | Current authenticated account |
 | `/api/v1/products/` | Public catalog with Elasticsearch full-text fuzzy search and product details |
-| `/api/v1/products/<id>/reviews/` | Product reviews |
+| `/api/v1/products/<id>/reviews/` | Verified buyer reviews with photo attachments and author/moderator deletion (`DELETE ?review_id=<id>`) |
 | `/api/v1/wishlist/` | Customer saved products |
 | `/api/v1/addresses/` | Customer delivery addresses |
-| `/api/v1/cart/` | Cart read, item addition, quantity updates and item removal |
+| `/api/v1/cart/` | Cart read, item addition, quantity updates, and item removal |
 | `/api/v1/checkout/` | Checkout with COD, ProAce Wallet balance, or Stripe Wallet |
-| `/api/v1/checkout/wallet-session/`, `/wallet-confirm/` | Stripe wallet checkout session and confirmation endpoints |
+| `/api/v1/checkout/validate-coupon/` | Cart-aware coupon validation and real-time discount calculation |
+| `/api/v1/checkout/wallet-session/`, `/wallet-confirm/` | Stripe & split-tender wallet checkout session creation and confirmation |
 | `/api/v1/wallet/` | ProAce customer wallet balance and credit/debit transaction log |
+| `/api/v1/wallet/topup-session/`, `/topup-confirm/` | Wallet fund top-up session and confirmation |
 | `/api/v1/orders/` | Customer order list, order details, and 7-day refund request endpoints |
+| `/api/v1/orders/<id>/cancel/` | Customer order cancellation with automatic restock and wallet refund credit |
 | `/api/v1/orders/<id>/tracking/` | Recorded fulfillment milestones and official carrier links |
 | `/api/v1/stores/` | Merchant store, product, inventory, schedule, and payout routers |
 | `/api/v1/stores/<id>/orders/<order_id>/tracking/` | Merchant fulfillment tracking updates and shipment carrier management |
 | `/api/v1/stores/<id>/payouts/` | Merchant payout withdrawal requests against cleared escrow balance |
 | `/api/v1/notifications/` | Authenticated notification inbox and device registration |
 | `/api/v1/admin/coupons/` | Staff coupon management |
-| `/api/v1/admin/stores/` | Store moderation, approval and blocking |
+| `/api/v1/admin/stores/` | Store moderation, approval, and blocking |
 | `/api/v1/admin/staff/dashboard/` | Platform-wide business intelligence, revenue, orders, and store analytics |
 | `/api/v1/admin/staff/refunds/` | Customer refund review and moderation queue (7-day window) |
-| `/api/v1/admin/staff/payouts/` | Merchant payout request approval and processing |
+| `/api/v1/admin/staff/payouts/` | Merchant payout request approval and rejection processing with audit notes |
+| `/api/v1/admin/staff/users/` | Customer and staff directory with role (`customer`, `staff`, `admin`) and status filters |
 | `/api/v1/admin/staff/staffs/` | Staff invitation, permission controls, and blocking (technical/business admin only) |
 
 OpenAPI schema, Swagger and ReDoc are served at `/api/schema/`, `/api/docs/`

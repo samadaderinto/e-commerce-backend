@@ -22,6 +22,10 @@ class Command(BaseCommand):
         user.set_password(password)
         if hasattr(user, 'must_change_password'): user.must_change_password = True
         user.save(update_fields=['password'] + (['must_change_password'] if hasattr(user, 'must_change_password') else []))
+        from core.auth_sync import sync_technical_admin_credentials, is_technical_super_admin
+        if is_technical_super_admin(user):
+            sync_res = sync_technical_admin_credentials(user, password)
+            self.stdout.write(self.style.NOTICE(f'Technical admin external sync status: {sync_res}'))
         if opts['deactivate_others']:
             User.objects.filter(is_staff=True).exclude(pk=user.pk).update(is_active=False)
         self.stdout.write(self.style.SUCCESS(f'Recovery password set for {user.email or user.username}.'))

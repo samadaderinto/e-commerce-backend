@@ -1,12 +1,26 @@
-# UI components and live events
+## Design system and styling conventions
 
-## Responsive conventions
+- **Typography & Brand Identity**: Clean Swiss-inspired typography utilizing system fonts and high-contrast ink (`--ink: #0a140d`, `--paper: #ffffff`, `--soft: #f4f7f5`). Distinctive forest green accents (`--green: #15803d`, `--green-light: rgba(21, 128, 61, 0.08)`).
+- **Responsive Conventions**: Fluid `.container` layouts with mobile breakpoint at 650px and tablet/split stacking at 1024px. Interactive elements enforce `min-width: 0` with explicit overflow clamping.
+- **Accessible Dialogs & Modals**: Modals utilize backdrop blur, trapped focus, background scroll-lock (`body:has(.dialog-backdrop)`), `Escape` key listeners, and explicit accessible ARIA headings (`role="dialog"`, `aria-modal="true"`).
 
-Use `.container` with fluid width, bounded maximum width, and horizontal padding. Grid and flex content must have `min-width: 0`; icons, controls, and status badges must retain their readable widths. Use two-line title clamping and wrap opaque references/email addresses rather than forcing the page wider. Do not hide overflow at the document level to mask layout errors.
+## Modals & Interactive Primitives
 
-The shared mobile breakpoint is 650px. Tablet and medium desktop checkout layouts stack at 1024px: the summary becomes static below the form. Validate widths 360, 390, 430, 768, 1024, and 1440px. Large tables live in `.table-scroll`, with sticky header and final action column; scrolling is local to the table. Status badges do not break mid-word. Staff dialogs scroll internally, lock background scrolling, trap keyboard focus, close on Escape, and restore focus on exit.
-
-The account store selector uses a 300px maximum-height container and an IntersectionObserver sentinel to load subsequent four-store pages. Counts reflect the API's total, not the loaded page size. Loading and retry states appear within the list. Customers may own ten stores; API enforcement serializes creation by locking the owner row, and the UI removes creation affordances at the limit. Administrators provision official stores separately.
+1. **Wallet Top-Up Modal (`WalletTopupModal`)**:
+   - Offers quick-select amount chips (`+$25`, `+$50`, `+$100`, `+$250`, `+$500`) alongside custom numeric inputs constrained to `$5 – $5,000`.
+   - Directly triggers `/api/v1/wallet/topup-session/` and seamlessly transitions shoppers into payment flows.
+2. **In-App Password-Change Modal (`PasswordChangeModal`)**:
+   - Renders current password, new password, and confirmation fields with inline show/hide visibility toggles (`Eye` / `EyeOff`).
+   - Validates 8-character minimums and matching confirmation locally before posting to `/api/v1/password/change/`.
+3. **Cart Coupon & Split-Tender Controls (`CartSheet`)**:
+   - Instant coupon code input with real-time `/api/v1/checkout/validate-coupon/` validation.
+   - Dynamic discount line-item with one-click removal badge.
+   - Split-tender payment toggles allowing buyers to apply ProAce store wallet credits directly against Stripe checkout charges.
+4. **Order Cancellation & Refund Interactions (`OrderPage`)**:
+   - Eligible orders (`pending`, `confirmed`) expose a destructive "Cancel order" action with confirmation warning.
+   - Orders within the 7-day post-delivery window provide item-by-item return selection, reason capture, and refund destination routing (instant wallet store credit vs. original payment method).
+5. **Robust RFC 4180 CSV Parsing (`MerchantProducts`)**:
+   - Implements a state-machine CSV parser (`parseCsvRows`) supporting multiline records, embedded commas, and escaped quotes (`""`), preventing broken product rows during bulk catalog uploads.
 
 ## Shared pagination
 

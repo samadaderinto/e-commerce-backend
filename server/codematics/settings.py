@@ -122,7 +122,7 @@ WSGI_APPLICATION = "codematics.wsgi.application"
 
 
 DATABASE_ENGINE = os.environ.get("DATABASE_ENGINE", "postgres").lower()
-DATABASE_PATH = os.environ.get("SQLITE_DATABASE_PATH") or os.path.join(BASE_DIR, "main.sqlite3")
+DATABASE_PATH = os.environ.get("SQLITE_DATABASE_PATH") or os.path.join(BASE_DIR, "storefront.sqlite3")
 
 DATABASES = {
     "default": {
