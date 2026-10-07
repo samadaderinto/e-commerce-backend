@@ -71,18 +71,18 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 - **Platform Commission (4%)**: Automatically items and deducts a 4% platform fee (`PLATFORM_FEE_PERCENT = 4.00`) from gross item sales.
 - **7-Day Review Escrow**: Net sales from customer orders placed within the 7-day refund window (`REFUND_WINDOW_DAYS = 7`) are held in `in_review` status.
 - **Cleared Balance**: Once orders surpass the 7-day refund deadline, funds unlock to `cleared_net` and become available for merchant withdrawal requests via `/api/v1/stores/<id>/payouts/`.
-- **Fulfillment & USPS Tracking**: Merchants update carrier, tracking number, and milestone descriptions on store orders via `/api/v1/stores/<id>/orders/<order_id>/tracking/`, which triggers customer notifications and provides live tracking links.
+- **Fulfillment & Carrier Tracking**: Merchants update carrier, tracking number, and milestone descriptions on store orders via `/api/v1/stores/<id>/orders/<order_id>/tracking/`, which triggers customer notifications and provides live tracking links.
 
 ## ProAce User Wallet and 7-day refunds
 
 - **Customer Wallet (`/api/v1/wallet/`)**: Every registered customer has an integrated store balance for instant 1-click checkout purchases and instant store credit refund resolution.
-- **7-Day Refund Policy (`/api/v1/orders/<id>/refund/`)**: Customers can request refunds for physical items within 7 days of order placement. Refund destinations can be selected as ProAce Store Credit (instant wallet credit upon staff approval) or original payment method. Digital goods are non-refundable once delivered.
+- **7-Day Refund Policy (`/api/v1/orders/<id>/refund/`)**: Customers can request refunds for physical items within 7 days of order placement. Refund destinations can be selected as ProAce Store Credit (instant wallet credit upon admin approval) or original payment method. Digital goods are non-refundable once delivered.
 
 ## USPS Tracking Engine
 
-- `server/payment/usps.py`: Integrates with the USPS XML TrackV2 API with simulated fallback for local/offline testing.
+- `server/payment/usps.py`: Development cart estimates and official tracking links. Live rates use OAuth carrier adapters in `server/payment/carriers.py`; retired XML APIs and synthetic scans are not used.
 - Orders dynamically generate live tracking links (`https://tools.usps.com/go/TrackConfirmAction?tLabels=<tracking_number>`).
-- Live tracking milestones are queryable by customers, merchants, staff, and superusers via `/api/v1/orders/<id>/tracking/`.
+- Recorded fulfillment milestones are queryable by customers, merchants, staff, and superusers via `/api/v1/orders/<id>/tracking/`.
 
 ## Search
 
@@ -204,3 +204,8 @@ permissions. The grouped endpoint map is in
 Update this file when changing Django apps, model ownership rules, serializers,
 API responses, permissions, auth, cache/database/media behavior, seed data,
 management commands or backend tests.
+
+## Back-office and carrier checkout
+
+See [role matrix, staff activation, and operator setup](access-control.md) and
+[multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).

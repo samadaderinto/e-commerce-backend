@@ -20,12 +20,12 @@ class StoreSerializer(serializers.ModelSerializer):
     class Meta:
         model = Store
         fields = [
-            'id', 'user', 'username', 'name', 'status', 'is_official', 'seller_tier',
+            'id', 'user', 'username', 'name', 'status', 'is_official', 'seller_tier', 'assigned_staff',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated',
         ]
         read_only_fields = [
-            'id', 'user', 'status', 'is_official', 'seller_tier',
+            'id', 'user', 'status', 'is_official', 'seller_tier', 'assigned_staff',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated',
         ]
@@ -109,7 +109,7 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         fields = ['id', 'store', 'title', 'description', 'category', 'price', 'brand', 'image_url',
                   'discount', 'sale_price', 'available', 'visibility', 'label',
                   'tags', 'images', 'specifications', 'sales', 'flash_sale_end', 'variants', 'average_rating',
-                  'sponsored', 'weight', 'is_digital', 'digital_file_url', 'created', 'updated']
+                  'sponsored', 'weight', 'length', 'width', 'height', 'is_digital', 'digital_file_url', 'digital_preview_watermark', 'created', 'updated']
         read_only_fields = ['id', 'store', 'sales', 'average_rating', 'sponsored',
                             'created', 'updated']
         extra_kwargs = {
@@ -117,7 +117,8 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             'discount': {'default': 0},
             'available': {'default': 0},
             'visibility': {'default': False},
-            'weight': {'min_value': Decimal('0.00'), 'default': Decimal('1.00')},
+            'weight': {'min_value': Decimal('0.01'), 'default': Decimal('1.00')},
+            'length': {'min_value': Decimal('0.01')}, 'width': {'min_value': Decimal('0.01')}, 'height': {'min_value': Decimal('0.01')},
         }
 
     def validate(self, attrs):
@@ -125,6 +126,8 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         file_url = attrs.get('digital_file_url', getattr(self.instance, 'digital_file_url', ''))
         if is_digital:
             attrs['weight'] = Decimal('0.00')
+            attrs['available'] = 0
+            attrs['variants'] = []
             if not file_url:
                 raise serializers.ValidationError({
                     'digital_file_url': 'Add a download URL for a digital product.',
@@ -133,6 +136,10 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             attrs['digital_file_url'] = ''
             if 'weight' not in attrs and not getattr(self.instance, 'weight', None):
                 attrs['weight'] = Decimal('1.00')
+            for field, default_val in (('length', Decimal('6.00')), ('width', Decimal('4.00')), ('height', Decimal('1.00'))):
+                value = attrs.get(field, getattr(self.instance, field, None))
+                if value is None:
+                    attrs[field] = default_val
         return attrs
 
 
@@ -165,10 +172,12 @@ class StoreImgSerializer(serializers.ModelSerializer):
 
 
 class StorePayoutSerializer(serializers.ModelSerializer):
+    store_name = serializers.CharField(source='store.name', read_only=True, default='')
+
     class Meta:
         model = StorePayout
         fields = [
-            'id', 'store', 'wallet', 'amount', 'status', 'payout_method',
+            'id', 'store', 'store_name', 'wallet', 'amount', 'status', 'payout_method',
             'account_details', 'reference', 'processed_at',
             'notes', 'created', 'updated',
         ]
@@ -244,5 +253,3 @@ class MerchantPayoutCreateSerializer(serializers.Serializer):
     account_details = serializers.DictField(required=False, default=dict)
     store_id = serializers.IntegerField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True, default='')
-
-

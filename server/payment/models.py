@@ -21,7 +21,7 @@ class Payment(DatesMixin):
     
     
     stripe_charge_id = models.CharField(max_length=50)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, blank=True, null=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, blank=True, null=True)
     amount = models.FloatField()
     status = models.CharField(choices=PAYMENT_STATUS_CHOICE, max_length=50, default='pending')
 
@@ -48,6 +48,7 @@ class Coupon(DatesMixin):
     product = models.ForeignKey('product.Product', null=True, blank=True, on_delete=models.CASCADE, related_name='coupons')
     category = models.CharField(max_length=100, blank=True, default='')
     minimum_quantity = models.PositiveIntegerField(default=1)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_coupons')
 
     def can_use(self) -> bool:
         from django.utils import timezone
@@ -67,7 +68,7 @@ class Coupon(DatesMixin):
 
 class CouponRedemption(DatesMixin):
     coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE, related_name='redemptions')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='coupon_redemptions')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, blank=True, null=True, related_name='coupon_redemptions')
     order = models.OneToOneField('Order', null=True, blank=True, on_delete=models.SET_NULL, related_name='coupon_redemption')
 
     class Meta:
@@ -82,21 +83,25 @@ class DeliveryInfo(DatesMixin):
 
     DELIVERY_METHOD_CHOICE = (
     ("pick up", "pick up"),
-    ("home delivery", "home delivery"))
+    ("home delivery", "home delivery"),
+    ("digital", "digital"))
     
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     method = models.CharField(choices=DELIVERY_METHOD_CHOICE, max_length=150)
-    address = models.ForeignKey('core.Address', on_delete=models.CASCADE)
-    total = models.IntegerField(default=0, blank=False, null=False)
-    delivery_type = models.CharField(choices=DELIVERY_TYPE_CHOICES, max_length=150)
+    address = models.ForeignKey('core.Address', on_delete=models.SET_NULL, null=True, blank=True)
+    total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    delivery_type = models.CharField(max_length=150)
 
     def get_delivery_info(self) -> tuple:
-        full_delivery_address = '%s, %s %s, %s' % (
-            self.address.address,
-            self.address.state,
-            self.address.country,
-            self.address.zip
-        )
+        if self.address:
+            full_delivery_address = '%s, %s %s, %s' % (
+                self.address.address,
+                self.address.state,
+                self.address.country,
+                self.address.zip
+            )
+        else:
+            full_delivery_address = 'Address archived'
         return (
             self.user,
             full_delivery_address,
@@ -118,20 +123,23 @@ class Order(DatesMixin):
         ("confirmed", "confirmed")
     )
     
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
-    cart = models.ForeignKey(Cart, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    cart = models.ForeignKey(Cart, on_delete=models.SET_NULL, null=True, blank=True)
     orderId = models.CharField(max_length=15, default=generate_order_reference, unique=True, editable=False)
     coupon_code = models.CharField(max_length=50)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     status = models.CharField(choices=ORDER_STATUS_CHOICE, max_length=15)
-    delivery = models.ForeignKey(DeliveryInfo, on_delete=models.CASCADE)
+    delivery = models.ForeignKey(DeliveryInfo, on_delete=models.SET_NULL, null=True, blank=True)
     ordered = models.BooleanField(default=False)
     payment_type = models.CharField(max_length=30, default='card')
     ordered_date = models.DateTimeField(auto_now=True)
     total = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
     subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+    shipping_snapshot = models.JSONField(default=dict, blank=True)
     items_snapshot = models.JSONField(default=list, blank=True)
     address_snapshot = models.JSONField(default=dict, blank=True)
+    buyer_email = models.EmailField(max_length=255, blank=True, default='')
+    buyer_phone = models.CharField(max_length=50, blank=True, default='')
     checkout_key = models.UUIDField(null=True, blank=True, unique=True)
     stripe_session_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
     carrier = models.CharField(max_length=50, default="USPS", blank=True)
@@ -146,7 +154,12 @@ class Order(DatesMixin):
             return ""
         if self.carrier.upper() == "USPS":
             return f"https://tools.usps.com/go/TrackConfirmAction?tLabels={self.tracking_number}"
-        return ""
+        from urllib.parse import quote
+        number = quote(self.tracking_number, safe='')
+        urls = {'UPS': f'https://www.ups.com/track?tracknum={number}',
+                'FEDEX': f'https://www.fedex.com/fedextrack/?trknbr={number}',
+                'DHL': f'https://www.dhl.com/us-en/home/tracking.html?tracking-id={number}'}
+        return urls.get(self.carrier.upper(), '')
     
     def save(self, *args, **kwargs) -> None:
         if not self.orderId:
@@ -160,3 +173,9 @@ class Order(DatesMixin):
         return order_id
 
 
+
+
+class ShippingQuote(DatesMixin):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    cart_fingerprint = models.CharField(max_length=64)
+    rate = models.JSONField(default=dict)

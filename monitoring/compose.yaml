@@ -50,14 +50,14 @@ services:
     restart: unless-stopped
     ports: ['127.0.0.1:3002:3000']
     environment:
-      GF_SECURITY_ADMIN_USER: ${DEFAULT_ADMIN_EMAIL:-admin@proace.local}
-      GF_SECURITY_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-admin@proace.local}
-      GF_SECURITY_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-${GRAFANA_ADMIN_PASSWORD:-local-grafana-admin-change-me}}
+      GF_SECURITY_ADMIN_USER: ${TECHNICAL_ADMIN_EMAIL:-${DEFAULT_ADMIN_EMAIL:-admin@proace.local}}
+      GF_SECURITY_ADMIN_EMAIL: ${TECHNICAL_ADMIN_EMAIL:-${DEFAULT_ADMIN_EMAIL:-admin@proace.local}}
+      GF_SECURITY_ADMIN_PASSWORD: ${TECHNICAL_ADMIN_PASSWORD:-${DEFAULT_ADMIN_PASSWORD:-${GRAFANA_ADMIN_PASSWORD:-local-technical-admin-change-me}}}
       GF_USERS_ALLOW_SIGN_UP: 'false'
-      GF_AUTH_ANONYMOUS_ENABLED: 'true'
-      GF_AUTH_ANONYMOUS_ORG_ROLE: 'Admin'
-      GF_AUTH_ANONYMOUS_ORG_NAME: 'Main Org.'
+      GF_AUTH_ANONYMOUS_ENABLED: 'false'
       GF_AUTH_DISABLE_LOGIN_FORM: 'false'
+      GF_AUTH_BASIC_ENABLED: 'true'
+      GF_SECURITY_DISABLE_GRAVATAR: 'true'
       GF_SECURITY_ALLOW_EMBEDDING: 'true'
       GF_ANALYTICS_REPORTING_ENABLED: 'false'
     volumes:
@@ -76,6 +76,7 @@ services:
     image: grafana/loki:3.5.3
     command: ['-config.file=/etc/loki/local-config.yaml']
     restart: unless-stopped
+    ports: ['127.0.0.1:3100:3100']
     volumes:
       - ./loki.yml:/etc/loki/local-config.yaml:ro
       - loki-data:/loki

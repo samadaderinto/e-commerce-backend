@@ -9,6 +9,9 @@ def is_own_store(product: Any, user: Any) -> bool:
 
 
 def validate_purchase(product: Any, user: Any) -> None:
+    from core.access import is_backoffice
+    if is_backoffice(user):
+        raise ValidationError({"detail": "Administrative accounts cannot purchase products."})
     if is_own_store(product, user):
         raise ValidationError({'detail': 'You cannot buy products from any store you own.'})
 

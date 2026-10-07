@@ -71,3 +71,27 @@ test('uses a safe message when the API returns a non-JSON error', async t => {
       && error.message === 'Something went wrong. Please try again.',
   );
 });
+
+test('returns a readable error when a backend request times out', async t => {
+  t.mock.method(globalThis, 'fetch', async () => {
+    throw new DOMException('Timed out', 'TimeoutError');
+  });
+  await assert.rejects(api('auth/login', 'POST', { email: 'shopper@proace.local' }),
+    error => error instanceof ApiError && error.status === 503
+      && error.message === 'The server took too long to respond. Please try again shortly.');
+});
+
+test('forwards notification query filters including search, store, and category', async t => {
+  let captured;
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    captured = { url, options };
+    return Response.json({ count: 1, results: [] });
+  });
+
+  const query = 'notifications?limit=15&offset=0&category=store&store=3&search=refund';
+  const result = await api(query);
+  assert.equal(captured.url, `/api/${query}`);
+  assert.equal(captured.options.method, 'GET');
+  assert.equal(result.count, 1);
+});
+

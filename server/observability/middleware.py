@@ -81,7 +81,7 @@ class ObservabilityMiddleware:
                 DB_DURATION.labels(route).observe(sql_seconds)
                 INFLIGHT.dec()
                 logger.info('request_complete', extra={
-                    'route': route, 'method': method, 'status_code': status,
+                    'route': route, 'path': request.path, 'method': method, 'status_code': status,
                     'duration_ms': round(elapsed * 1000, 3), 'db_queries': queries,
                     'db_duration_ms': round(sql_seconds * 1000, 3),
                 })

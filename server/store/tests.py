@@ -81,6 +81,47 @@ class MerchantTests(TestCase):
                 self.assertEqual(self.client.get(url).status_code, 401)
         self.assertEqual(self.client.post('/stores/', {'name': 'Anonymous'}).status_code, 401)
 
+    @override_settings(ROOT_URLCONF='store.test_urls')
+    def test_usps_tracking_update_saves_and_notifies_customer(self):
+        from notification.models import Notification
+        order = self.make_order(mixed=True)
+        response = self.client.post(self.url + f'orders/{order.pk}/tracking/', {
+            'carrier': 'USPS', 'tracking_number': '9400100000000000000000', 'status': 'shipped',
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'shipped')
+        self.assertEqual(order.tracking_number, '9400100000000000000000')
+        self.assertIsNotNone(order.shipped_at)
+        self.assertEqual(len(order.tracking_events), 1)
+        self.assertTrue(Notification.objects.filter(
+            recipient=self.other, data__event='order_tracking_update', data__order_id=order.pk,
+        ).exists())
+
+        # Also verify update works using the order reference string (e.g. ORD002399809)
+        ref_response = self.client.post(self.url + f'orders/{order.orderId}/tracking/', {
+            'carrier': 'USPS', 'tracking_number': '9400200000000000000000', 'status': 'delivered',
+        }, format='json')
+        self.assertEqual(ref_response.status_code, 200, ref_response.data)
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'delivered')
+        self.assertEqual(order.tracking_number, '9400200000000000000000')
+
+    @override_settings(ROOT_URLCONF='store.test_urls')
+    def test_tracking_update_rejects_unsupported_carriers_and_foreign_orders(self):
+        order = self.make_order()
+        response = self.client.post(self.url + f'orders/{order.pk}/tracking/', {
+            'carrier': 'Unsupported', 'tracking_number': '12345', 'status': 'shipped',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'confirmed')
+        foreign_order = self.make_order(product=self.foreign_product)
+        response = self.client.post(self.url + f'orders/{foreign_order.pk}/tracking/', {
+            'carrier': 'USPS', 'tracking_number': '12345', 'status': 'shipped',
+        }, format='json')
+        self.assertEqual(response.status_code, 404)
+
     def test_store_onboarding_uses_authenticated_owner(self):
         response = self.client.post('/stores/', {
             'name': 'New shop', 'user': self.other.pk,
@@ -316,6 +357,69 @@ class MerchantTests(TestCase):
         self.assertTrue(product.is_digital)
         self.assertEqual(product.digital_file_url, 'https://downloads.proace.test/ebooks/python-guide.pdf')
 
+    def test_merchant_can_upload_digital_asset_file_to_storage(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Sample Digital Guide',
+            description='E-book download',
+            category='books',
+            price='19.99',
+            discount=0,
+            available=50,
+            is_digital=True,
+            digital_file_url='https://example.com/old.pdf',
+        )
+        fake_pdf = SimpleUploadedFile(
+            'guidebook.pdf',
+            b'%PDF-1.4 Fake PDF Content for Unit Test',
+            content_type='application/pdf',
+        )
+        url = f'{self.products_url}{product.id}/digital-file/'
+        response = self.client.post(url, {'file': fake_pdf}, format='multipart')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn('guidebook.pdf', response.data['file_name'])
+        self.assertTrue(response.data['digital_file_url'])
+
+        product.refresh_from_db()
+        self.assertTrue(product.is_digital)
+        self.assertIn('guidebook.pdf', product.digital_file_url)
+
+    def test_merchant_upload_image_sets_cover_image(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Sample Canvas Art',
+            description='Handmade oil on canvas',
+            category='outwear',
+            price='45.00',
+            discount=0,
+            available=10,
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='blue').save(image_bytes, format='PNG')
+        fake_img = SimpleUploadedFile('cover.png', image_bytes.getvalue(), content_type='image/png')
+
+        url = f'{self.products_url}{product.id}/images/'
+        response = self.client.post(url, {'image': fake_img, 'is_cover': 'true'}, format='multipart')
+        self.assertEqual(response.status_code, 201, response.data)
+
+        product.refresh_from_db()
+        self.assertTrue(product.image_url)
+        self.assertIn('cover', product.image_url)
+
+    def test_customer_can_create_tenth_store_but_not_eleventh(self):
+        for index in range(8):
+            Store.objects.create(user=self.owner, name=f'Shop {index}')
+        response = self.client.post('/stores/create/', {'name': 'Tenth shop'}, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        for endpoint in ['/stores/create/', '/stores/']:
+            response = self.client.post(endpoint, {'name': 'Eleventh shop'}, format='json')
+            self.assertEqual(response.status_code, 400, response.data)
+            self.assertIn('10 stores', str(response.data))
+        self.assertEqual(Store.objects.filter(user=self.owner).count(), 10)
+        self.client.force_authenticate(self.other)
+        response = self.client.post('/stores/create/', {'name': 'Other owner shop'}, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+
     def test_admin_created_store_is_auto_verified_and_official(self):
         admin_user = User.objects.create_superuser(
             email='admin.store@example.com',
@@ -442,5 +546,46 @@ class MerchantTests(TestCase):
         self.assertEqual(final_wallet['total_withdrawn'], '300.00')
         self.assertEqual(final_wallet['available_balance'], '64.80')
 
+    def test_strict_separation_backoffice_vs_internal_store_access(self):
+        admin = User.objects.create_superuser(email='admin.access@proace.test', password='Admin-password-123')
+        staff = User.objects.create_staffuser(email='staff.access@proace.test', password='Staff-password-123')
+        seller = User.objects.create_user(email='thirdparty.seller@example.com', password='Seller-password-123')
+
+        third_party_store = Store.objects.create(user=seller, name='Independent Store', username='indep-store', is_official=False)
+        official_store = Store.objects.create(user=admin, name='Official Proace Store', username='proace-store', is_official=True)
+
+        # 1. Staff and Admin cannot access third-party store in the seller interface
+        for backoffice_user in [staff, admin]:
+            client = APIClient()
+            client.force_authenticate(backoffice_user)
+
+            # Store list in seller interface only returns official store
+            listing = client.get('/stores/')
+            store_ids = [s['id'] for s in listing.data['results']]
+            self.assertIn(official_store.pk, store_ids)
+            self.assertNotIn(third_party_store.pk, store_ids)
+
+            # Accessing third-party store detail/dashboard returns 404
+            self.assertEqual(client.get(f'/stores/{third_party_store.pk}/').status_code, 404)
+            self.assertEqual(client.get(f'/stores/{third_party_store.pk}/dashboard/').status_code, 404)
+
+            # Accessing official store detail/dashboard is allowed
+            self.assertEqual(client.get(f'/stores/{official_store.pk}/').status_code, 200)
+
+        # 2. Third-party seller cannot access official store
+        seller_client = APIClient()
+        seller_client.force_authenticate(seller)
+        seller_listing = seller_client.get('/stores/')
+        seller_store_ids = [s['id'] for s in seller_listing.data['results']]
+        self.assertIn(third_party_store.pk, seller_store_ids)
+        self.assertNotIn(official_store.pk, seller_store_ids)
+        self.assertEqual(seller_client.get(f'/stores/{official_store.pk}/').status_code, 404)
+
+        # 3. Staff assignment is deprecated
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin)
+        assign_resp = admin_client.put(f'/stores/{official_store.pk}/staff/', {'staff_ids': [staff.pk]}, format='json')
+        self.assertEqual(assign_resp.status_code, 200)
+        self.assertIn('deprecated', assign_resp.data['detail'])
 
 

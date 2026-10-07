@@ -1,3 +1,5 @@
+name: commerce-server
+
 services:
   api: &app
     build:
@@ -9,17 +11,22 @@ services:
     init: true
     ports:
       - '${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000'
+    env_file:
+      - path: .env
+        required: false
     environment: &app_environment
       DJANGO_SETTINGS_MODULE: codematics.storefront_settings
       DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
       SECRET_KEY: ${SECRET_KEY:-local-container-secret-change-me}
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost},api
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost},api,client
       FRONTEND_URL: ${FRONTEND_URL:-http://127.0.0.1:3000}
-      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-}
+      CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS:-http://127.0.0.1:3000,http://localhost:3000}
       SECURE_SSL_REDIRECT: ${SECURE_SSL_REDIRECT:-false}
       SECURE_HSTS_SECONDS: ${SECURE_HSTS_SECONDS:-0}
       DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
+      TECHNICAL_ADMIN_EMAIL: ${TECHNICAL_ADMIN_EMAIL:-${DEFAULT_ADMIN_EMAIL:-admin@proace.local}}
+      TECHNICAL_ADMIN_PASSWORD: ${TECHNICAL_ADMIN_PASSWORD:-${DEFAULT_ADMIN_PASSWORD:-local-technical-admin-change-me}}
       DEFAULT_ADMIN_FIRST_NAME: ${DEFAULT_ADMIN_FIRST_NAME:-}
       DEFAULT_ADMIN_LAST_NAME: ${DEFAULT_ADMIN_LAST_NAME:-}
       DEFAULT_ADMIN_GENDER: ${DEFAULT_ADMIN_GENDER:-}
@@ -38,13 +45,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
       DB_REQUIRE_SSL: 'false'
       CACHE_URL: redis://redis:6379/0
-      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
-      MINIO_ENDPOINT_URL: ${MINIO_ENDPOINT_URL:-http://127.0.0.1:9000}
+      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-true}
+      MINIO_ENDPOINT_URL: ${CONTAINER_MINIO_ENDPOINT_URL:-http://minio:9000}
       MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://127.0.0.1:9000}
       MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-commerce-images}
       MINIO_REGION: ${MINIO_REGION:-us-east-1}
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-commerce-media}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-local-minio-media-change-me}
       OBSERVABILITY_TOKEN: ${OBSERVABILITY_TOKEN:-local-observability-token-change-me}
       OTEL_TRACING_ENABLED: ${OTEL_TRACING_ENABLED:-false}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-commerce-api}
@@ -78,6 +85,10 @@ services:
         condition: service_healthy
       elasticsearch:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
 
   notification-worker:
     <<: *app
@@ -98,7 +109,16 @@ services:
       DEFAULT_STAFF_LAST_NAME: ''
       DEFAULT_STAFF_GENDER: ''
       DEFAULT_STAFF_PHONE: ''
-    command: ['celery', '-A', 'codematics', 'worker', '--beat', '--loglevel=INFO']
+    command: ['celery', '-A', 'codematics', 'worker', '--loglevel=INFO']
+
+  celery-beat:
+    <<: *app
+    ports: []
+    environment:
+      <<: *app_environment
+      RUN_MIGRATIONS: 'false'
+      RUN_COLLECTSTATIC: 'false'
+    command: ['celery', '-A', 'codematics', 'beat', '--loglevel=INFO']
 
   redis:
     image: redis:7.4-alpine
@@ -131,6 +151,38 @@ services:
       timeout: 5s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ':9001'
+    ports:
+      - '${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-9000}:9000'
+      - '${MINIO_BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001'
+    environment:
+      MINIO_ROOT_USER: ${TECHNICAL_ADMIN_EMAIL:-${DEFAULT_ADMIN_EMAIL:-commerce-admin}}
+      MINIO_ROOT_PASSWORD: ${TECHNICAL_ADMIN_PASSWORD:-${DEFAULT_ADMIN_PASSWORD:-local-technical-admin-change-me}}
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    environment:
+      MINIO_ROOT_USER: ${TECHNICAL_ADMIN_EMAIL:-${DEFAULT_ADMIN_EMAIL:-commerce-admin}}
+      MINIO_ROOT_PASSWORD: ${TECHNICAL_ADMIN_PASSWORD:-${DEFAULT_ADMIN_PASSWORD:-local-technical-admin-change-me}}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-commerce-images}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-commerce-media}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-local-minio-media-change-me}
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - >-
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 2; done;
+        mc mb --ignore-existing "local/$${MINIO_BUCKET_NAME}";
+        mc admin user add local "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}" 2>/dev/null || true;
+        mc admin policy attach local readwrite --user "$${MINIO_ACCESS_KEY}";
+        mc anonymous set download "local/$${MINIO_BUCKET_NAME}/static" || true
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.5
     restart: unless-stopped
@@ -154,6 +206,7 @@ volumes:
   redis-data:
   postgres-data:
   elasticsearch-data:
+  minio-data:
   prometheus-multiproc:
 
 networks:

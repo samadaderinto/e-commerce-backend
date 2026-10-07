@@ -1,6 +1,6 @@
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
-from django.db import transaction
+from django.db import models, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -67,6 +67,8 @@ def create_notification(recipient, verb, actor=None, target=None, action_object=
         public=public,
     )
     transaction.on_commit(lambda: _send_external_notification(notification))
+    from notification.search import schedule_index_notification
+    schedule_index_notification(notification.pk)
     return notification
 
 
@@ -97,7 +99,7 @@ def notify_users(recipients, verb, actor=None, target=None, action_object=None,
 
 def notify_staff(verb, actor=None, target=None, action_object=None,
                  description="", level="info", data=None):
-    staff = User.objects.filter(is_staff=True, is_active=True)
+    staff = User.objects.filter(models.Q(is_staff=True) | models.Q(is_superuser=True) | models.Q(is_business_admin=True), is_active=True)
     return notify_users(
         staff,
         verb=verb,
@@ -170,6 +172,38 @@ def store_moderation_notification(store, actor=None, blocked=True):
         level=level,
         data={"event": "store_blocked" if blocked else "store_unblocked", "store_id": store.pk},
     )
+def _filter_notifications_by_store(queryset, store_param):
+    if not store_param or store_param == "all":
+        return queryset
+    store_param = str(store_param).strip()
+    from store.models import Store
+    store_ct = ContentType.objects.get_for_model(Store)
+    store_obj = None
+    if store_param.isdigit():
+        target_store_id = int(store_param)
+        store_obj = Store.objects.filter(pk=target_store_id).first()
+    else:
+        store_obj = Store.objects.filter(
+            models.Q(username__iexact=store_param) | models.Q(name__iexact=store_param)
+        ).first()
+        target_store_id = store_obj.pk if store_obj else None
+
+    if target_store_id is not None:
+        store_q = (
+            models.Q(target_content_type=store_ct, target_object_id=str(target_store_id))
+            | models.Q(action_object_content_type=store_ct, action_object_object_id=str(target_store_id))
+            | models.Q(data__store_id=target_store_id)
+            | models.Q(data__store_id=str(target_store_id))
+            | models.Q(data__store=target_store_id)
+            | models.Q(data__store=str(target_store_id))
+        )
+        if store_obj:
+            store_q |= models.Q(verb__icontains=store_obj.name) | models.Q(description__icontains=store_obj.name)
+        return queryset.filter(store_q)
+    else:
+        return queryset.filter(
+            models.Q(verb__icontains=store_param) | models.Q(description__icontains=store_param)
+        )
 
 
 class NotificationViewSet(
@@ -190,7 +224,11 @@ class NotificationViewSet(
             "action_object_content_type",
         )
         include_archived = self.request.query_params.get("include_archived") == "true"
-        if not include_archived and self.action != "archived":
+        if not include_archived and self.action not in {
+            "archived", "archive", "archive_alias", "retrieve", "destroy",
+            "restore", "mark_read", "mark_unread", "mark_all_read",
+            "mark_read_alias", "mark_unread_alias", "mark_all_read_alias"
+        }:
             queryset = queryset.filter(deleted=False)
 
         state = self.request.query_params.get("state")
@@ -208,6 +246,93 @@ class NotificationViewSet(
         event = self.request.query_params.get("event")
         if event:
             queryset = queryset.filter(data__event=event)
+
+        # Full-text-like search across verb, description, and level keywords
+        search = (
+            self.request.query_params.get("search")
+            or self.request.query_params.get("q")
+        )
+        if search:
+            search = search.strip()
+            search_q = (
+                models.Q(verb__icontains=search)
+                | models.Q(description__icontains=search)
+            )
+            if search.lower() in ["success", "info", "warning", "error"]:
+                search_q |= models.Q(level__iexact=search.lower())
+            queryset = queryset.filter(search_q)
+
+        # Category filter: store, affiliates, order, refund, payout, general
+        category = self.request.query_params.get("category")
+        if category and category != "all":
+            category = category.lower().strip()
+            if category == "store":
+                queryset = queryset.filter(
+                    models.Q(data__category="store")
+                    | models.Q(data__event__icontains="store")
+                    | models.Q(verb__icontains="store")
+                    | models.Q(target_content_type__model="store")
+                    | models.Q(action_object_content_type__model="store")
+                )
+            elif category == "affiliates":
+                queryset = queryset.filter(
+                    models.Q(data__category="affiliates")
+                    | models.Q(data__event__icontains="referral")
+                    | models.Q(data__event__icontains="affiliate")
+                    | models.Q(verb__icontains="referral")
+                    | models.Q(verb__icontains="affiliate")
+                )
+            elif category == "order":
+                queryset = queryset.filter(
+                    models.Q(data__category="order")
+                    | models.Q(data__event__icontains="order")
+                    | models.Q(verb__icontains="order")
+                    | models.Q(target_content_type__model="order")
+                    | models.Q(action_object_content_type__model="order")
+                )
+            elif category == "refund":
+                queryset = queryset.filter(
+                    models.Q(data__category="refund")
+                    | models.Q(data__event__icontains="refund")
+                    | models.Q(verb__icontains="refund")
+                    | models.Q(target_content_type__model="refund")
+                    | models.Q(action_object_content_type__model="refund")
+                )
+            elif category == "payout":
+                queryset = queryset.filter(
+                    models.Q(data__category="payout")
+                    | models.Q(data__event__icontains="payout")
+                    | models.Q(data__event__icontains="withdrawal")
+                    | models.Q(verb__icontains="payout")
+                    | models.Q(verb__icontains="withdrawal")
+                    | models.Q(target_content_type__model="storepayout")
+                )
+            elif category == "general":
+                queryset = queryset.exclude(
+                    models.Q(data__category__in=["store", "affiliates", "order", "refund", "payout"])
+                    | models.Q(data__event__icontains="store")
+                    | models.Q(data__event__icontains="referral")
+                    | models.Q(data__event__icontains="affiliate")
+                    | models.Q(data__event__icontains="order")
+                    | models.Q(data__event__icontains="refund")
+                    | models.Q(data__event__icontains="payout")
+                    | models.Q(data__event__icontains="withdrawal")
+                    | models.Q(verb__icontains="store")
+                    | models.Q(verb__icontains="referral")
+                    | models.Q(verb__icontains="affiliate")
+                    | models.Q(verb__icontains="order")
+                    | models.Q(verb__icontains="refund")
+                    | models.Q(verb__icontains="payout")
+                    | models.Q(verb__icontains="withdrawal")
+                    | models.Q(target_content_type__model__in=["store", "order", "refund", "storepayout"])
+                )
+
+        # Store filter: by store ID, username, or store name
+        store_param = (
+            self.request.query_params.get("store")
+            or self.request.query_params.get("store_id")
+        )
+        queryset = _filter_notifications_by_store(queryset, store_param)
 
         return queryset.order_by("-timestamp", "-pk")
 
@@ -251,12 +376,21 @@ class NotificationViewSet(
     @action(detail=False, methods=["get"])
     def archived(self, request):
         queryset = Notification.objects.filter(recipient=request.user, deleted=True).order_by("-timestamp", "-pk")
+        store_param = request.query_params.get("store") or request.query_params.get("store_id")
+        queryset = _filter_notifications_by_store(queryset, store_param)
         page = self.paginate_queryset(queryset)
         return self.get_paginated_response(self.get_serializer(page, many=True).data)
+
+    @action(detail=False, methods=["get"], url_path="archive")
+    def archive_alias(self, request):
+        return self.archived(request)
 
     @action(detail=False, methods=["get"])
     def counts(self, request):
         notifications = Notification.objects.filter(recipient=request.user)
+        store_param = request.query_params.get("store") or request.query_params.get("store_id")
+        if store_param:
+            notifications = _filter_notifications_by_store(notifications, store_param)
         counts = {
             "unread": notifications.filter(unread=True, deleted=False).count(),
             "read": notifications.filter(unread=False, deleted=False).count(),
@@ -265,32 +399,162 @@ class NotificationViewSet(
         }
         return Response(NotificationCountSerializer(counts).data)
 
+    @action(detail=False, methods=["get"], url_path="filters")
+    def filters(self, request):
+        user_notifications = Notification.objects.filter(recipient=request.user)
+        active_notifications = user_notifications.filter(deleted=False)
+
+        from store.models import Store
+        store_ct = ContentType.objects.get_for_model(Store)
+
+        if request.user.is_superuser or getattr(request.user, "is_business_admin", False) or request.user.is_staff:
+            # Super Admin & Staff notification filtering:
+            # The notification popup dropdown/list displays only app-owned stores (Proace official stores).
+            # Third-party/independent stores should not appear in this specific notification list.
+            official_stores = list(
+                Store.objects.filter(is_official=True).order_by("name").values("id", "name", "username")
+            )
+            for s in official_stores:
+                s["is_official"] = True
+            owned_stores = official_stores
+        else:
+            owned_stores = list(
+                Store.objects.filter(user=request.user, is_official=False).order_by("name").values("id", "name", "username")
+            )
+            for s in owned_stores:
+                s["is_official"] = False
+
+        categories = [
+            {"id": "all", "label": "All Categories", "count": active_notifications.count()},
+            {"id": "store", "label": "Store", "count": active_notifications.filter(
+                models.Q(data__category="store") | models.Q(data__event__icontains="store") | models.Q(verb__icontains="store") | models.Q(target_content_type__model="store") | models.Q(action_object_content_type__model="store")
+            ).count()},
+            {"id": "affiliates", "label": "Affiliates & Referrals", "count": active_notifications.filter(
+                models.Q(data__category="affiliates") | models.Q(data__event__icontains="referral") | models.Q(data__event__icontains="affiliate") | models.Q(verb__icontains="referral") | models.Q(verb__icontains="affiliate")
+            ).count()},
+            {"id": "order", "label": "Orders", "count": active_notifications.filter(
+                models.Q(data__category="order") | models.Q(data__event__icontains="order") | models.Q(verb__icontains="order") | models.Q(target_content_type__model="order") | models.Q(action_object_content_type__model="order")
+            ).count()},
+            {"id": "refund", "label": "Refunds", "count": active_notifications.filter(
+                models.Q(data__category="refund") | models.Q(data__event__icontains="refund") | models.Q(verb__icontains="refund") | models.Q(target_content_type__model="refund") | models.Q(action_object_content_type__model="refund")
+            ).count()},
+            {"id": "payout", "label": "Payouts & Wallet", "count": active_notifications.filter(
+                models.Q(data__category="payout") | models.Q(data__event__icontains="payout") | models.Q(data__event__icontains="withdrawal") | models.Q(verb__icontains="payout") | models.Q(verb__icontains="withdrawal") | models.Q(target_content_type__model="storepayout")
+            ).count()},
+        ]
+
+        return Response({
+            "categories": categories,
+            "stores": owned_stores,
+            "counts": {
+                "unread": active_notifications.filter(unread=True).count(),
+                "read": active_notifications.filter(unread=False).count(),
+                "archived": user_notifications.filter(deleted=True).count(),
+                "total": user_notifications.count(),
+            }
+        })
+
+    def list(self, request, *args, **kwargs):
+        search = request.query_params.get("search") or request.query_params.get("q")
+        if search:
+            search = search.strip()
+            from notification.search import enabled as es_enabled, search_notification_ids
+
+            if es_enabled():
+                store_val = request.query_params.get("store") or request.query_params.get("store_id")
+                category_val = request.query_params.get("category")
+                include_archived = request.query_params.get("include_archived") == "true"
+                state_val = request.query_params.get("state")
+                level_val = request.query_params.get("level")
+
+                limit = int(request.query_params.get("limit", 20))
+                offset = int(request.query_params.get("offset", 0))
+
+                filters = {
+                    "include_archived": include_archived,
+                    "state": state_val,
+                    "category": category_val,
+                    "level": level_val,
+                }
+                if store_val and str(store_val).isdigit():
+                    filters["store_id"] = int(store_val)
+
+                es_results = search_notification_ids(
+                    query=search,
+                    recipient_id=request.user.id,
+                    filters=filters,
+                    offset=offset,
+                    limit=limit,
+                )
+                if es_results is not None:
+                    ids = es_results["ids"]
+                    count = es_results["count"]
+                    notifs = Notification.objects.filter(pk__in=ids).select_related(
+                        "recipient",
+                        "actor_content_type",
+                        "target_content_type",
+                        "action_object_content_type",
+                    ).in_bulk(ids)
+                    ordered = [notifs[pk] for pk in ids if pk in notifs]
+                    serializer = self.get_serializer(ordered, many=True)
+                    return Response({
+                        "count": count,
+                        "results": serializer.data,
+                        "next": None,
+                        "previous": None,
+                    })
+        return super().list(request, *args, **kwargs)
+
     @action(detail=True, methods=["post"], url_path="mark-read")
     def mark_read(self, request, pk=None):
         notification = self.get_object()
         notification.mark_as_read()
+        from notification.search import schedule_index_notification
+        schedule_index_notification(notification.pk)
         return Response(self.get_serializer(notification).data)
+
+    @action(detail=True, methods=["post"], url_path="mark_read")
+    def mark_read_alias(self, request, pk=None):
+        return self.mark_read(request, pk=pk)
 
     @action(detail=True, methods=["post"], url_path="mark-unread")
     def mark_unread(self, request, pk=None):
         notification = self.get_object()
         notification.mark_as_unread()
+        from notification.search import schedule_index_notification
+        schedule_index_notification(notification.pk)
         return Response(self.get_serializer(notification).data)
+
+    @action(detail=True, methods=["post"], url_path="mark_unread")
+    def mark_unread_alias(self, request, pk=None):
+        return self.mark_unread(request, pk=pk)
 
     @action(detail=False, methods=["post"], url_path="mark-all-read")
     def mark_all_read(self, request):
-        updated = Notification.objects.filter(
+        queryset = Notification.objects.filter(
             recipient=request.user,
             unread=True,
             deleted=False,
-        ).update(unread=False)
+        )
+        store_param = request.query_params.get("store") or request.query_params.get("store_id")
+        if store_param:
+            queryset = _filter_notifications_by_store(queryset, store_param)
+        updated = queryset.update(unread=False)
+        from notification.realtime import publish
+        publish(request.user.pk, {'event': 'notification.changed'})
         return Response({"updated": updated})
+
+    @action(detail=False, methods=["post"], url_path="mark_all_read")
+    def mark_all_read_alias(self, request):
+        return self.mark_all_read(request)
 
     @action(detail=True, methods=["post"])
     def archive(self, request, pk=None):
         notification = self.get_object()
         notification.deleted = True
         notification.save(update_fields=["deleted"])
+        from notification.search import schedule_index_notification
+        schedule_index_notification(notification.pk)
         return Response(self.get_serializer(notification).data)
 
     @action(detail=True, methods=["post"])
@@ -298,10 +562,14 @@ class NotificationViewSet(
         notification = get_object_or_404(Notification, pk=pk, recipient=request.user)
         notification.deleted = False
         notification.save(update_fields=["deleted"])
+        from notification.search import schedule_index_notification
+        schedule_index_notification(notification.pk)
         return Response(self.get_serializer(notification).data)
 
     def destroy(self, request, *args, **kwargs):
         notification = self.get_object()
-        notification.deleted = True
-        notification.save(update_fields=["deleted"])
+        pk = notification.pk
+        notification.delete()
+        from notification.search import schedule_delete_notification
+        schedule_delete_notification(pk)
         return Response(status=status.HTTP_204_NO_CONTENT)

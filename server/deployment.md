@@ -122,10 +122,18 @@ volume backups and test restoration before launch.
 cd /opt/proace-commerce
 docker compose --env-file deploy/hostgator/.env -f server/compose.yaml ps
 docker compose --env-file deploy/hostgator/.env -f client/compose.yaml ps
-docker compose --env-file deploy/hostgator/.env -f server/monitoring/compose.yaml ps
+docker compose --env-file deploy/hostgator/.env -f monitoring/compose.yaml ps
 docker compose --env-file deploy/hostgator/.env -f deploy/hostgator/compose.yaml ps
 curl --fail https://proaceintlshoppingmall.com/health/live/
 ```
 
 If a deployment fails, inspect `docker compose ... logs`, fix the configuration,
 and rerun the deployment script. Never delete Docker volumes as a rollback.
+
+## Back-office roles and shipping
+
+See the [endpoint permission matrix and staff onboarding](../docs/access-control.md)
+and [carrier setup and checkout API](../docs/shipping-integrations.md).
+Apply the new core, store, and payment migrations before starting this version.
+Staff/admin accounts use operational workspaces and cannot shop. Grafana requires
+technical-admin credentials; anonymous access is disabled.

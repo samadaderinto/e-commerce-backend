@@ -61,7 +61,7 @@ def test_ensure_default_admin_creates_superuser_and_is_idempotent():
 
 @pytest.mark.django_db
 def test_ensure_default_admin_rejects_partial_configuration():
-    with patch.dict(os.environ, {"DEFAULT_ADMIN_EMAIL": "admin@example.com"}):
+    with patch.dict(os.environ, {"DEFAULT_ADMIN_EMAIL": "admin@example.com"}, clear=True):
         with pytest.raises(CommandError, match="Set all default admin environment fields"):
             call_command("ensure_default_admin")
 

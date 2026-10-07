@@ -51,35 +51,42 @@ def product_document(product: Product) -> dict[str, Any]:
 def ensure_products_index(es: Any = None) -> bool:
     if not enabled():
         return False
+    from elasticsearch.exceptions import ApiError, BadRequestError
+
     es = es or client()
     index = settings.ELASTICSEARCH_PRODUCTS_INDEX
-    if es.indices.exists(index=index):
+    try:
+        if es.indices.exists(index=index):
+            return True
+        es.indices.create(
+            index=index,
+            mappings={
+                "properties": {
+                    "id": {"type": "integer"},
+                    "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                    "description": {"type": "text"},
+                    "brand": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                    "category": {"type": "keyword"},
+                    "store_id": {"type": "integer"},
+                    "store_status": {"type": "keyword"},
+                    "store_verified": {"type": "boolean"},
+                    "visibility": {"type": "boolean"},
+                    "price": {"type": "double"},
+                    "discount": {"type": "integer"},
+                    "available": {"type": "integer"},
+                    "average_rating": {"type": "double"},
+                    "sales": {"type": "integer"},
+                    "sponsored": {"type": "boolean"},
+                    "tags": {"type": "keyword"},
+                    "created": {"type": "date"},
+                }
+            },
+        )
         return True
-    es.indices.create(
-        index=index,
-        mappings={
-            "properties": {
-                "id": {"type": "integer"},
-                "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
-                "description": {"type": "text"},
-                "brand": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
-                "category": {"type": "keyword"},
-                "store_id": {"type": "integer"},
-                "store_status": {"type": "keyword"},
-                "store_verified": {"type": "boolean"},
-                "visibility": {"type": "boolean"},
-                "price": {"type": "double"},
-                "discount": {"type": "integer"},
-                "available": {"type": "integer"},
-                "average_rating": {"type": "double"},
-                "sales": {"type": "integer"},
-                "sponsored": {"type": "boolean"},
-                "tags": {"type": "keyword"},
-                "created": {"type": "date"},
-            }
-        },
-    )
-    return True
+    except (BadRequestError, ApiError) as exc:
+        if "resource_already_exists_exception" in str(exc) or getattr(exc, "status_code", None) == 400:
+            return True
+        raise
 
 
 def index_product(product_id: int) -> None:

@@ -47,11 +47,11 @@ def calculate_store_tier(store: Store | None) -> dict:
     """
     Computes the seller tier and badge color based on cumulative sales volume:
     - Official Store: 'official' (Gold badge #e5a93c)
-    - Starter: $0 - $4,999 (Blue badge #1d9bf0)
-    - Booster: $5,000 - $24,999 (Silver badge #94a3b8)
-    - Accelerator: $25,000 - $99,999 (Purple badge #8b5cf6)
-    - Power Seller: $100,000 - $499,999 (Emerald badge #10b981)
-    - Mega Seller: $500,000 - $999,999 (Diamond badge #0ea5e9)
+    - Starter: $0 - $4,999 (Sapphire Blue badge #2563eb)
+    - Booster: $5,000 - $24,999 (Slate Silver badge #64748b)
+    - Accelerator: $25,000 - $99,999 (Vivid Purple badge #7c3aed)
+    - Power Seller: $100,000 - $499,999 (Emerald Green badge #059669)
+    - Mega Seller: $500,000 - $999,999 (Flame Orange badge #ea580c)
     - Legendary Seller: $1,000,000+ (Cosmic Ruby Flame badge #ff0055)
     """
     if not store:
@@ -59,7 +59,7 @@ def calculate_store_tier(store: Store | None) -> dict:
             'tier': 'starter',
             'name': 'Starter',
             'badge_color': 'blue',
-            'badge_hex': '#1d9bf0',
+            'badge_hex': '#2563eb',
             'min_sales': 0.0,
             'current_sales': 0.0,
             'next_tier': 'Booster',
@@ -69,9 +69,9 @@ def calculate_store_tier(store: Store | None) -> dict:
     if getattr(store, 'is_official', False):
         return {
             'tier': 'official',
-            'name': 'Official Partner Store',
+            'name': 'Official Store',
             'badge_color': 'gold',
-            'badge_hex': '#e5a93c',
+            'badge_hex': '#d97706',
             'min_sales': 0.0,
             'current_sales': 0.0,
             'next_tier': None,
@@ -102,8 +102,8 @@ def calculate_store_tier(store: Store | None) -> dict:
         return {
             'tier': 'mega',
             'name': 'Mega Seller',
-            'badge_color': 'diamond',
-            'badge_hex': '#0ea5e9',
+            'badge_color': 'orange',
+            'badge_hex': '#ea580c',
             'min_sales': 500000.0,
             'current_sales': sales,
             'next_tier': 'Legendary Seller',
@@ -114,7 +114,7 @@ def calculate_store_tier(store: Store | None) -> dict:
             'tier': 'power',
             'name': 'Power Seller',
             'badge_color': 'emerald',
-            'badge_hex': '#10b981',
+            'badge_hex': '#059669',
             'min_sales': 100000.0,
             'current_sales': sales,
             'next_tier': 'Mega Seller',
@@ -125,7 +125,7 @@ def calculate_store_tier(store: Store | None) -> dict:
             'tier': 'accelerator',
             'name': 'Accelerator',
             'badge_color': 'purple',
-            'badge_hex': '#8b5cf6',
+            'badge_hex': '#7c3aed',
             'min_sales': 25000.0,
             'current_sales': sales,
             'next_tier': 'Power Seller',
@@ -136,7 +136,7 @@ def calculate_store_tier(store: Store | None) -> dict:
             'tier': 'booster',
             'name': 'Booster',
             'badge_color': 'silver',
-            'badge_hex': '#94a3b8',
+            'badge_hex': '#64748b',
             'min_sales': 5000.0,
             'current_sales': sales,
             'next_tier': 'Accelerator',
@@ -147,7 +147,7 @@ def calculate_store_tier(store: Store | None) -> dict:
             'tier': 'starter',
             'name': 'Starter',
             'badge_color': 'blue',
-            'badge_hex': '#1d9bf0',
+            'badge_hex': '#2563eb',
             'min_sales': 0.0,
             'current_sales': sales,
             'next_tier': 'Booster',
@@ -295,26 +295,37 @@ def process_refund_deduction(order: Any, refund_amount: Decimal | None = None, s
     """
     from payment.models import Order
 
-    entries = StoreEarningsLedger.objects.select_for_update().filter(
+    entries = StoreEarningsLedger.objects.select_for_update(of=('self',)).filter(
         order=order,
         entry_type=StoreEarningsLedger.TYPE_SALE,
-    ).exclude(status=StoreEarningsLedger.STATUS_REVERSED).select_related('wallet', 'store')
+    ).exclude(status=StoreEarningsLedger.STATUS_REVERSED)
 
     if store:
         entries = entries.filter(store=store)
 
+    entries = list(entries)
+    total_gross = sum((entry.gross_amount for entry in entries), Decimal('0.00'))
+    target = min(Decimal(str(refund_amount)), total_gross) if refund_amount is not None else total_gross
     for entry in entries:
-        wallet = entry.wallet
-        # If entry was pending, subtract from pending; if available, subtract from available
-        if entry.status == StoreEarningsLedger.STATUS_PENDING:
-            wallet.pending_balance = max(Decimal('0.00'), wallet.pending_balance - entry.net_amount)
-        elif entry.status == StoreEarningsLedger.STATUS_AVAILABLE:
-            wallet.available_balance = max(Decimal('0.00'), wallet.available_balance - entry.net_amount)
-        wallet.save(update_fields=['pending_balance', 'available_balance', 'updated'])
+        gross_share = (target * entry.gross_amount / total_gross).quantize(Decimal('0.01')) if total_gross else Decimal('0.00')
+        net_share = (gross_share * entry.net_amount / entry.gross_amount).quantize(Decimal('0.01')) if entry.gross_amount else Decimal('0.00')
+        fee_share = gross_share - net_share
+        wallet = entry.wallet or (entry.store and entry.store.user and MerchantWallet.objects.filter(user=entry.store.user).first())
+        if wallet:
+            wallet = MerchantWallet.objects.select_for_update().get(pk=wallet.pk)
+            # If entry was pending, subtract from pending; if available, subtract from available
+            if entry.status == StoreEarningsLedger.STATUS_PENDING:
+                wallet.pending_balance = max(Decimal('0.00'), wallet.pending_balance - net_share)
+            elif entry.status == StoreEarningsLedger.STATUS_AVAILABLE:
+                wallet.available_balance = max(Decimal('0.00'), wallet.available_balance - net_share)
+            wallet.save(update_fields=['pending_balance', 'available_balance', 'updated'])
 
-        entry.status = StoreEarningsLedger.STATUS_REVERSED
-        entry.description += " (Refunded / Reversed)"
-        entry.save(update_fields=['status', 'description', 'updated'])
+        StoreEarningsLedger.objects.create(wallet=wallet, store=entry.store, order=order, entry_type=StoreEarningsLedger.TYPE_REFUND, gross_amount=-gross_share, fee_amount=-fee_share, net_amount=-net_share, status=StoreEarningsLedger.STATUS_COMPLETED, description=f"Partial refund for order #{order.orderId}", reference=f"REF-{order.orderId}-{StoreEarningsLedger.objects.filter(order=order, entry_type=StoreEarningsLedger.TYPE_REFUND).count() + 1}")
+        already_refunded = abs(StoreEarningsLedger.objects.filter(order=order, store=entry.store, entry_type=StoreEarningsLedger.TYPE_REFUND).aggregate(total=Sum('gross_amount'))['total'] or Decimal('0.00'))
+        if already_refunded >= entry.gross_amount:
+            entry.status = StoreEarningsLedger.STATUS_REVERSED
+            entry.description += " (Fully refunded / reversed)"
+            entry.save(update_fields=['status', 'description', 'updated'])
 
 
 @transaction.atomic
@@ -386,6 +397,19 @@ def process_payout_status_change(
     wallet = payout.wallet or (payout.store and get_or_create_merchant_wallet(payout.store.user))
 
     if action == "approve":
+        # A connected Express account receives the approved payout through Stripe.
+        # Local/demo environments without Stripe credentials keep the existing manual
+        # completion flow so test and development payouts remain usable.
+        if wallet and wallet.stripe_account_id and getattr(settings, 'STRIPE_SECRET', ''):
+            import stripe
+            stripe.api_key = settings.STRIPE_SECRET
+            transfer = stripe.Transfer.create(
+                amount=int((payout.amount * 100).quantize(Decimal('1'))),
+                currency=getattr(settings, 'STRIPE_CURRENCY', 'usd').lower(),
+                destination=wallet.stripe_account_id,
+                metadata={'payout_id': str(payout.pk), 'reference': payout.reference},
+            )
+            notes = f"Stripe transfer {transfer.id}" if not notes else f"{notes} · Stripe transfer {transfer.id}"
         payout.status = StorePayout.STATUS_COMPLETED
         payout.processed_at = timezone.now()
         payout.processed_by = processed_by

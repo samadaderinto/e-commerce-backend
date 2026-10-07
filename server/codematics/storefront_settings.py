@@ -11,6 +11,7 @@ INSTALLED_APPS = [
     'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes',
     'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles',
     'rest_framework', 'rest_framework_simplejwt.token_blacklist',
+    'corsheaders',
     'drf_spectacular', 'taggit',
     'core', 'store', 'product', 'cart', 'payment', 'affiliates', 'notification',
     'observability', 'staff', 'storefront',
@@ -21,6 +22,7 @@ MIDDLEWARE = [
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -35,21 +37,100 @@ if DATABASE_ENGINE not in {'postgres', 'postgresql'}:
     }}
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
-    'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework_simplejwt.authentication.JWTAuthentication'],
+    'DEFAULT_AUTHENTICATION_CLASSES': ['core.access.BackofficeJWTAuthentication'],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.ScopedRateThrottle'],
     'DEFAULT_THROTTLE_RATES': {'auth': '10/minute'},
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
 }
+SWAGGER_API_DESCRIPTION = """# ProAce Multi-Vendor Commerce REST API
+
+Welcome to the official API documentation for the **ProAce Commerce Platform**.
+This API powers the Next.js customer storefront, merchant store management portal, admin moderation dashboards, and automated fulfillment workflows.
+
+---
+
+### Core Capabilities
+* **Storefront & Catalog**: Public product discovery, category hierarchies, brand filters, variants, and specifications.
+* **Customer Cart & Bag**: Line-item calculation, promotional discounts, and guest-to-account cart synchronization.
+* **Fulfillment & Checkout**: Shipping rate lookups, Stripe payment intent creation, and instant store credit checkout.
+* **Orders & Real-Time Tracking**: Full lifecycle status transitions (`pending` &rarr; `confirmed` &rarr; `shipped` &rarr; `delivered`), integrated carrier tracking timelines, and refund requests.
+* **Customer Digital Wallet**: Store credit refunds, deposits, and transparent audit ledgers.
+* **Multi-Vendor Merchant Engine**: Store profiles, automated seller tier calculation, escrow hold periods, and payout disbursements.
+* **Event Notifications & Alerts**: Real-time customer activity feeds and web push notifications.
+* **System Observability**: Prometheus metrics export and health check probes (`/health/live/`, `/health/ready/`, `/health/status/`).
+
+---
+
+### Authentication & Authorization
+Authenticated endpoints require a JSON Web Token (JWT) in the `Authorization` header:
+
+```http
+Authorization: Bearer <your_access_token>
+```
+
+1. **Obtain Tokens**: Submit credentials to `POST /api/v1/auth/login/` for an access token (15m lifetime) and refresh token (7d lifetime).
+2. **Refresh Access**: Call `POST /api/v1/auth/refresh/` using your refresh token when access expires.
+3. **Logout**: Call `POST /api/v1/auth/logout/` to invalidate the refresh token session.
+
+---
+
+### Rate Limiting
+Sensitive endpoints are protected with throttling policies:
+* **Authentication (`/api/v1/auth/*`)**: 10 requests per minute per IP. Excess calls receive HTTP `429 Too Many Requests`.
+
+---
+
+### Support & Resources
+* **Technical Contact**: [developer@proace.local](mailto:developer@proace.local)
+* **Frontend Web App**: [http://localhost:3000](http://localhost:3000)
+* **Grafana Observability Portal**: [http://localhost:3002](http://localhost:3002)
+"""
+
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'ProAce Commerce API',
-    'DESCRIPTION': (
-        'OpenAPI documentation for the ProAce customer storefront and merchant API. '
-        'Authenticated endpoints use a JWT bearer access token.'
-    ),
+    'TITLE': 'ProAce Multi-Vendor Commerce API',
+    'DESCRIPTION': SWAGGER_API_DESCRIPTION.strip(),
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'COMPONENT_SPLIT_REQUEST': True,
+    'CONTACT': {
+        'name': 'ProAce Platform Engineering',
+        'email': 'developer@proace.local',
+        'url': 'https://proace.local',
+    },
+    'LICENSE': {
+        'name': 'MIT License',
+        'url': 'https://opensource.org/licenses/MIT',
+    },
+    'TAGS': [
+        {'name': 'Authentication & Account', 'description': 'User registration, JWT login, token rotation, and profile management.'},
+        {'name': 'Storefront Catalog', 'description': 'Public product listings, category filters, specifications, and store showcases.'},
+        {'name': 'Customer Cart & Bag', 'description': 'Shopping cart management and line item quantity adjustments.'},
+        {'name': 'Checkout & Payments', 'description': 'Shipping rate calculation, Stripe session creation, and wallet checkout.'},
+        {'name': 'Orders & Fulfillment', 'description': 'Order lifecycle, live carrier tracking events, and refund processing.'},
+        {'name': 'Customer Wallet', 'description': 'Digital store credit balances and transaction audit trails.'},
+        {'name': 'Merchant Stores', 'description': 'Store profiles, vendor tiers, verification status, and public showcase.'},
+        {'name': 'Merchant Financials', 'description': 'Sales earnings ledgers, platform fee splits, and withdrawal payouts.'},
+        {'name': 'Promotions & Coupons', 'description': 'Discount codes and coupon redemptions.'},
+        {'name': 'Notifications', 'description': 'In-app notification feed, read tracking, and push devices.'},
+        {'name': 'Staff & Moderation', 'description': 'Vendor verification, staff accounts, and dispute resolution.'},
+        {'name': 'System & Observability', 'description': 'Health check probes and Prometheus metrics.'},
+    ],
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'persistAuthorization': True,
+        'displayRequestDuration': True,
+        'docExpansion': 'list',
+        'filter': True,
+        'defaultModelsExpandDepth': 2,
+        'defaultModelExpandDepth': 2,
+        'showCommonExtensions': True,
+    },
+    'REDOC_UI_SETTINGS': {
+        'expandResponses': '200,201',
+        'hideDownloadButton': False,
+        'pathInMiddlePanel': True,
+    },
 }
 SIMPLE_JWT = {
     **SIMPLE_JWT,
@@ -78,6 +159,7 @@ CELERY_TASK_ALWAYS_EAGER = os.environ.get(
 ).lower() == 'true'
 CELERY_TASK_EAGER_PROPAGATES = CELERY_TASK_ALWAYS_EAGER
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in os.environ.get('CORS_ALLOWED_ORIGINS', FRONTEND_URL).split(',') if origin.strip()]
 CSRF_TRUSTED_ORIGINS = [
     origin.strip()
     for origin in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')

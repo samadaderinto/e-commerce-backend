@@ -7,7 +7,12 @@ function message(data: unknown): string {
 }
 export async function api<T>(path: string, method = 'GET', data?: unknown): Promise<T> {
   const multipart = data instanceof FormData;
-  const response = await fetch(`/api/${path}`, { method, credentials: 'same-origin', headers: data && !multipart ? { 'Content-Type': 'application/json' } : undefined, body: data ? multipart ? data : JSON.stringify(data) : undefined });
+  const response = await fetch(`/api/${path}`, { method, signal: AbortSignal.timeout(25000), credentials: 'same-origin', headers: data && !multipart ? { 'Content-Type': 'application/json' } : undefined, body: data ? multipart ? data : JSON.stringify(data) : undefined }).catch((error: unknown) => {
+    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      throw new ApiError('The server took too long to respond. Please try again shortly.', 503);
+    }
+    throw error;
+  });
   const result = await response.json().catch(() => null);
   if (!response.ok) throw new ApiError(message(result), response.status);
   return result as T;

@@ -1,3 +1,4 @@
+from core.access import IsCustomer
 from django.conf import settings
 
 from cart.models import Cart, CartItem
@@ -35,7 +36,7 @@ stripe.api_key = settings.STRIPE_SECRET
 
 
 class PaymentViewSet(viewsets.GenericViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCustomer]
     auth_user = User
     cart_item = CartItem
     user_cart = Cart
@@ -43,7 +44,6 @@ class PaymentViewSet(viewsets.GenericViewSet):
     @extend_schema(responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['post'], url_path='checkout/create')
     def create_checkout_session(self, request):
-        data = JSONParser().parse(request)
         cart = get_object_or_404(self.user_cart, user=request.user, ordered=False)
         items = get_list_or_404(self.cart_item, cart=cart.id)
 
@@ -51,7 +51,7 @@ class PaymentViewSet(viewsets.GenericViewSet):
             product = item.product
             validate_purchase(product, request.user)
 
-            if product.available < item.quantity:
+            if not product.is_digital and product.available < item.quantity:
                 return Response(data={'message': 'One of your products is sold out'}, status=status.HTTP_409_CONFLICT)
 
         return Response('proceed to checkout', status=status.HTTP_200_OK)

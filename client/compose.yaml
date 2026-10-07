@@ -15,7 +15,7 @@ services:
       NODE_ENV: production
       PORT: 3000
       HOSTNAME: 0.0.0.0
-      API_URL: ${API_URL:-http://api:8000/api/v1}
+      API_URL: ${CONTAINER_API_URL:-http://api:8000/api/v1}
     extra_hosts:
       - host.docker.internal:host-gateway
     healthcheck:
@@ -27,5 +27,4 @@ services:
 
 networks:
   default:
-    external: true
     name: ${COMMERCE_NETWORK:-commerce-network}

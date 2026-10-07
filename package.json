@@ -9,8 +9,8 @@
     "test:unit": "npm run test:unit --workspace=client",
     "test:integration": "npm run test:integration --workspace=client",
     "test:e2e": "npm run test:e2e --workspace=client",
-    "docker:build": "docker compose build",
-    "docker:up": "docker compose up -d",
-    "docker:down": "docker compose down"
+    "docker:build": "docker compose -f server/compose.yaml build && docker compose -f client/compose.yaml build",
+    "docker:up": "docker compose -f server/compose.yaml up -d && docker compose -f client/compose.yaml up -d && docker compose -f monitoring/compose.yaml up -d",
+    "docker:down": "docker compose -f client/compose.yaml down && docker compose -f server/compose.yaml down && docker compose -f monitoring/compose.yaml down"
   }
 }

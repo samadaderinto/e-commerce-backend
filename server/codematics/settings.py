@@ -121,7 +121,7 @@ WSGI_APPLICATION = "codematics.wsgi.application"
 # https://docs.djangoproject.com/en/4.1/ref/settings/#databases
 
 
-DATABASE_ENGINE = os.environ.get("DATABASE_ENGINE", "sqlite").lower()
+DATABASE_ENGINE = os.environ.get("DATABASE_ENGINE", "postgres").lower()
 DATABASE_PATH = os.environ.get("SQLITE_DATABASE_PATH") or os.path.join(BASE_DIR, "main.sqlite3")
 
 DATABASES = {
@@ -199,39 +199,54 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.0/howto/static-files/
 
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 MEDIA_URL = "/media/"
 
 # Object storage is optional locally. Production can enable any S3-compatible
 # provider through the same django-storages settings below.
-OBJECT_STORAGE_ENABLED = os.environ.get('OBJECT_STORAGE_ENABLED', 'true').lower() == 'true'
+try:
+    import boto3  # noqa: F401
+    HAS_BOTO3 = True
+except ImportError:
+    HAS_BOTO3 = False
+
+OBJECT_STORAGE_ENABLED = os.environ.get('OBJECT_STORAGE_ENABLED', 'true').lower() == 'true' and HAS_BOTO3
 MINIO_ENDPOINT_URL = os.environ.get('MINIO_ENDPOINT_URL', 'http://127.0.0.1:9000')
 MINIO_PUBLIC_URL = os.environ.get('MINIO_PUBLIC_URL', MINIO_ENDPOINT_URL).rstrip('/')
 MINIO_BUCKET_NAME = os.environ.get('MINIO_BUCKET_NAME', 'commerce-images')
 _media_endpoint = urlsplit(MINIO_PUBLIC_URL)
 STORAGES = {
-    'default': {
-        'BACKEND': 'storages.backends.s3.S3Storage',
-        'OPTIONS': {
-            'access_key': os.environ.get('MINIO_ACCESS_KEY', ''),
-            'secret_key': os.environ.get('MINIO_SECRET_KEY', ''),
-            'bucket_name': MINIO_BUCKET_NAME,
-            'endpoint_url': MINIO_ENDPOINT_URL,
-            'region_name': os.environ.get('MINIO_REGION', 'us-east-1'),
-            'signature_version': 's3v4',
-            'addressing_style': 'path',
-            'default_acl': None,
-            'file_overwrite': False,
-            'querystring_auth': False,
-            'custom_domain': f'{_media_endpoint.netloc}{_media_endpoint.path}/{MINIO_BUCKET_NAME}',
-            'url_protocol': f'{_media_endpoint.scheme}:',
-        },
-    },
     'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
 }
 if OBJECT_STORAGE_ENABLED:
-    MEDIA_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/'
+    s3_options = {
+        'access_key': os.environ.get('MINIO_ACCESS_KEY', ''),
+        'secret_key': os.environ.get('MINIO_SECRET_KEY', ''),
+        'bucket_name': MINIO_BUCKET_NAME,
+        'endpoint_url': MINIO_ENDPOINT_URL,
+        'region_name': os.environ.get('MINIO_REGION', 'us-east-1'),
+        'signature_version': 's3v4',
+        'addressing_style': 'path',
+        'default_acl': None,
+        'file_overwrite': False,
+    }
+    STORAGES['default'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {
+            **s3_options,
+            'querystring_auth': True,
+            'querystring_expire': int(os.environ.get('MINIO_SIGNED_URL_TTL', '900')),
+            'location': 'media',
+        },
+    }
+    STORAGES['staticfiles'] = {
+        'BACKEND': 'storages.backends.s3.S3Storage',
+        'OPTIONS': {**s3_options, 'querystring_auth': False, 'location': 'static'},
+    }
+    MEDIA_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/media/'
+    STATIC_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/static/'
 else:
     STORAGES['default'] = {'BACKEND': 'django.core.files.storage.FileSystemStorage'}
     MEDIA_URL = '/media/'
@@ -283,6 +298,10 @@ ELASTICSEARCH_PRODUCTS_INDEX = os.environ.get(
     "ELASTICSEARCH_PRODUCTS_INDEX",
     f"{ELASTICSEARCH_INDEX_PREFIX}-products",
 )
+ELASTICSEARCH_NOTIFICATIONS_INDEX = os.environ.get(
+    "ELASTICSEARCH_NOTIFICATIONS_INDEX",
+    f"{ELASTICSEARCH_INDEX_PREFIX}-notifications",
+)
 ELASTICSEARCH_TIMEOUT = float(os.environ.get("ELASTICSEARCH_TIMEOUT", "2"))
 
 CORS_ALLOW_METHODS = [
@@ -309,7 +328,7 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "core.access.BackofficeJWTAuthentication",
     ],
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
@@ -443,10 +462,10 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 NOTIFICATION_DELIVERY_MAX_ATTEMPTS = int(
-    os.environ.get("NOTIFICATION_DELIVERY_MAX_ATTEMPTS", "8")
+    os.environ.get("NOTIFICATION_DELIVERY_MAX_ATTEMPTS") or "8"
 )
 NOTIFICATION_DELIVERY_STALE_SECONDS = int(
-    os.environ.get("NOTIFICATION_DELIVERY_STALE_SECONDS", "300")
+    os.environ.get("NOTIFICATION_DELIVERY_STALE_SECONDS") or "300"
 )
 
 
@@ -497,3 +516,9 @@ PLATFORM_FEE_PERCENT = Decimal(os.environ.get('PLATFORM_FEE_PERCENT', '4.00'))
 
 from observability.config import configure as configure_observability
 configure_observability(globals())
+
+# Fraction of taxable merchandise subtotal; zero until configured by deployment.
+CHECKOUT_TAX_RATE = Decimal(os.environ.get('CHECKOUT_TAX_RATE') or '0')
+
+# Optional dedicated broker; blank falls back to the shared cache Redis.
+REALTIME_REDIS_URL = os.environ.get("REALTIME_REDIS_URL") or CACHE_URL

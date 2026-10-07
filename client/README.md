@@ -61,3 +61,13 @@ The container listens on `127.0.0.1:3000` by default and reads `API_URL` from
 Frontend documentation lives in [`../docs/frontend.md`](../docs/frontend.md).
 Update it whenever frontend routing, proxy behavior, client deployment, or frontend
 tests change.
+
+## Back-office roles and shipping
+
+See the [endpoint permission matrix and staff onboarding](../docs/access-control.md)
+and [carrier setup and checkout API](../docs/shipping-integrations.md).
+Apply the new core, store, and payment migrations before starting this version.
+Staff/admin accounts use operational workspaces and cannot shop. Grafana requires
+technical-admin credentials; anonymous access is disabled.
+
+See [UI components and live event pipeline](../docs/ui-and-events.md) for responsive conventions, pagination, carrier selection, cart states, scoped SSE events, and verification procedures.

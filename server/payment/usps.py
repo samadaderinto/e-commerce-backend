@@ -1,9 +1,6 @@
-"""USPS Domestic Rate Calculator integration and fallback rate engine."""
+"""Development USPS cart estimates and tracking links. Live rating uses carriers.py."""
 from decimal import Decimal, ROUND_HALF_UP
-import os
 import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
 
 from django.conf import settings
 
@@ -44,15 +41,7 @@ def calculate_usps_rates(
     free_threshold = getattr(settings, 'FREE_SHIPPING_THRESHOLD', Decimal('100000'))
     is_free_eligible = subtotal >= free_threshold
 
-    usps_user_id = os.environ.get('USPS_USER_ID', '').strip()
-    rates_from_api = None
-    if usps_user_id:
-        rates_from_api = _fetch_usps_api_rates(usps_user_id, origin, destination, weight_int_lbs, weight_oz)
-
-    if rates_from_api:
-        options = rates_from_api
-    else:
-        options = _calculate_standard_usps_rates(weight)
+    options = _calculate_standard_usps_rates(weight)
 
     # Apply free shipping discount if eligible
     if is_free_eligible and options:
@@ -61,65 +50,6 @@ def calculate_usps_rates(
         options[0]['description'] += ' (Free shipping applied)'
 
     return options
-
-
-def _fetch_usps_api_rates(user_id: str, origin_zip: str, dest_zip: str, pounds: int, ounces: int) -> list[dict] | None:
-    """Call USPS Web Tools RateV4 XML API endpoint."""
-    xml_request = (
-        f'<RateV4Request USERID="{user_id}">'
-        f'<Revision>2</Revision>'
-        f'<Package ID="1ST">'
-        f'<Service>ALL</Service>'
-        f'<ZipOrigination>{origin_zip}</ZipOrigination>'
-        f'<ZipDestination>{dest_zip}</ZipDestination>'
-        f'<Pounds>{pounds}</Pounds>'
-        f'<Ounces>{ounces}</Ounces>'
-        f'<Container>VARIABLE</Container>'
-        f'<Size>REGULAR</Size>'
-        f'<Machinable>TRUE</Machinable>'
-        f'</Package>'
-        f'</RateV4Request>'
-    )
-    url = f"https://secure.shippingapis.com/ShippingAPI.dll?API=RateV4&XML={urllib.parse.quote(xml_request)}"
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'ProAceCommerce/1.0'})
-        with urllib.request.urlopen(req, timeout=4) as response:
-            tree = ET.fromstring(response.read())
-            postages = []
-            for postage in tree.findall('.//Postage'):
-                mail_service = postage.findtext('MailService', '')
-                rate = postage.findtext('Rate', '0.00')
-                clean_service = mail_service.replace('&lt;sup&gt;&amp;reg;&lt;/sup&gt;', '').replace('&lt;sup&gt;&#8482;&lt;/sup&gt;', '').strip()
-                if 'Ground Advantage' in clean_service:
-                    postages.append({
-                        'service_id': 'usps_ground_advantage',
-                        'name': 'USPS Ground Advantage',
-                        'description': '2–5 business days',
-                        'amount': str(Decimal(rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)),
-                        'is_default': True,
-                    })
-                elif 'Priority Mail' in clean_service and 'Express' not in clean_service:
-                    postages.append({
-                        'service_id': 'usps_priority_mail',
-                        'name': 'USPS Priority Mail',
-                        'description': '1–3 business days with tracking',
-                        'amount': str(Decimal(rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)),
-                        'is_default': False,
-                    })
-                elif 'Priority Mail Express' in clean_service:
-                    postages.append({
-                        'service_id': 'usps_priority_express',
-                        'name': 'USPS Priority Mail Express',
-                        'description': '1–2 business days guaranteed',
-                        'amount': str(Decimal(rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)),
-                        'is_default': False,
-                    })
-            if postages:
-                return sorted(postages, key=lambda x: Decimal(x['amount']))
-    except Exception:
-        # Fall back to standard rate matrix on timeout/network failure
-        pass
-    return None
 
 
 def _calculate_standard_usps_rates(weight_lbs: Decimal) -> list[dict]:
@@ -162,49 +92,7 @@ def get_usps_tracking_url(tracking_number: str) -> str:
 
 
 def track_usps_shipment(tracking_number: str) -> dict:
-    """Fetch or mock real-time USPS tracking data for a package."""
-    clean_number = str(tracking_number or '').strip()
-    if not clean_number:
-        return {'status': 'unknown', 'summary': 'No tracking number provided.', 'events': []}
-
-    usps_user_id = os.environ.get('USPS_USER_ID', '').strip()
-    if usps_user_id:
-        xml_request = (
-            f'<TrackFieldRequest USERID="{usps_user_id}">'
-            f'<Revision>1</Revision>'
-            f'<ClientIp>127.0.0.1</ClientIp>'
-            f'<SourceId>ProAceCommerce</SourceId>'
-            f'<TrackID ID="{clean_number}"/>'
-            f'</TrackFieldRequest>'
-        )
-        url = f"https://secure.shippingapis.com/ShippingAPI.dll?API=TrackV2&XML={urllib.parse.quote(xml_request)}"
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'ProAceCommerce/1.0'})
-            with urllib.request.urlopen(req, timeout=4) as response:
-                tree = ET.fromstring(response.read())
-                track_info = tree.find('.//TrackInfo')
-                if track_info is not None:
-                    summary = track_info.findtext('TrackSummary', 'In Transit')
-                    status_text = 'delivered' if 'Delivered' in summary else 'shipped'
-                    details = [elem.text for elem in track_info.findall('.//TrackDetail') if elem.text]
-                    return {
-                        'status': status_text,
-                        'summary': summary,
-                        'tracking_number': clean_number,
-                        'tracking_url': get_usps_tracking_url(clean_number),
-                        'events': details,
-                    }
-        except Exception:
-            pass
-
-    return {
-        'status': 'in_transit',
-        'summary': f'Package in transit with USPS (Tracking #{clean_number})',
-        'tracking_number': clean_number,
-        'tracking_url': get_usps_tracking_url(clean_number),
-        'events': [
-            f'Electronic Shipping Info Received for {clean_number}',
-            'Accepted at USPS Origin Sorting Facility',
-        ],
-    }
-
+    """Return an official tracking link; never fabricate carrier scan events."""
+    return {'status': 'unknown', 'summary': 'View the carrier website for current scans.',
+            'tracking_number': str(tracking_number or '').strip(),
+            'tracking_url': get_usps_tracking_url(tracking_number), 'events': []}

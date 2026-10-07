@@ -3,7 +3,9 @@ import os
 
 bind = os.environ.get('GUNICORN_BIND', '127.0.0.1:8000')
 workers = int(os.environ.get('WEB_CONCURRENCY', '2'))
-timeout = 30
+worker_class = 'gthread'
+threads = int(os.environ.get('GUNICORN_THREADS') or '32')
+timeout = 60
 accesslog = None  # Request summaries are emitted as JSON by Django middleware.
 errorlog = '-'
 

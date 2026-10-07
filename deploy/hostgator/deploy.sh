@@ -28,12 +28,12 @@ docker compose --env-file "$ENV_FILE" -f server/compose.yaml exec -T api python 
 docker compose --env-file "$ENV_FILE" -f server/compose.yaml exec -T api python manage.py rebuild_product_index
 
 docker compose --env-file "$ENV_FILE" -f client/compose.yaml up -d client
-docker compose --env-file "$ENV_FILE" -f server/monitoring/compose.yaml up -d
+docker compose --env-file "$ENV_FILE" -f monitoring/compose.yaml up -d
 docker compose --env-file "$ENV_FILE" -f deploy/hostgator/compose.yaml up -d
 
 docker compose --env-file "$ENV_FILE" -f server/compose.yaml ps
 docker compose --env-file "$ENV_FILE" -f client/compose.yaml ps
-docker compose --env-file "$ENV_FILE" -f server/monitoring/compose.yaml ps
+docker compose --env-file "$ENV_FILE" -f monitoring/compose.yaml ps
 docker compose --env-file "$ENV_FILE" -f deploy/hostgator/compose.yaml ps
 
 curl --fail --silent --show-error --retry 12 --retry-delay 5 \

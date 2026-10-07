@@ -26,6 +26,7 @@ TypeScript, React 19, React Query and shared UI components.
   `FlashCountdown` (real-time sale expiration timer), loading spinners, and small primitives.
 - `client/src/lib/api.ts`: browser API helper, error normalization, money
   formatting and category constants.
+- `client/src/lib/geo.ts`: ISO 3166-1 alpha-2 country catalog, US states/territories dictionary, dynamic postal code validators, and address normalization.
 - `client/src/lib/types.ts`: shared frontend DTO and domain types (`SellerTier`, `ProductVariant`, `Product`, etc.).
 - `client/tests/`: unit, integration and Playwright end-to-end tests.
 
@@ -164,3 +165,8 @@ demo accounts to exist.
 
 Update this file when changing frontend routing, app structure, major components,
 browser API behavior, auth-cookie behavior, UI conventions or frontend tests.
+
+## Back-office and carrier checkout
+
+See [role matrix, staff activation, and operator setup](access-control.md) and
+[multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).

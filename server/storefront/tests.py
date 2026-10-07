@@ -21,6 +21,7 @@ from product.models import Product
 from store.models import Schedule, Store
 from store.services import publish_due_products
 from storefront.serializers import unit_price
+from storefront.views import order_data
 
 
 class UnitPriceTests(SimpleTestCase):
@@ -126,7 +127,8 @@ class StorefrontTests(TestCase):
         self.client.force_authenticate(self.buyer)
         self.assertEqual(self.client.get('/api/v1/admin/stores/').status_code, 403)
         self.buyer.is_staff = True
-        self.buyer.save(update_fields=['is_staff'])
+        self.buyer.is_business_admin = True
+        self.buyer.save(update_fields=['is_staff', 'is_business_admin'])
         self.assertEqual(self.client.get('/api/v1/admin/stores/').data['results'][0]['id'], pending_store.pk)
         with self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(f'/api/v1/admin/stores/{pending_store.pk}/approve/')
@@ -191,10 +193,30 @@ class StorefrontTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(response.data['total'], '8500.00')
         self.assertTrue(response.data['items'][0]['is_digital'])
-        self.assertEqual(
-            response.data['items'][0]['download_url'],
-            'https://downloads.example.com/book.pdf',
-        )
+        self.assertEqual(response.data['items'][0]['download_url'], f"/api/orders/{response.data['id']}/downloads/{self.product.pk}")
+
+    def test_digital_checkout_succeeds_without_any_address(self):
+        self.product.is_digital = True
+        self.product.digital_file_url = 'https://downloads.example.com/guide.pdf'
+        self.product.save(update_fields=['is_digital', 'digital_file_url'])
+        self.add(1)
+
+        rate_res = self.client.get('/api/v1/checkout/shipping-rates/')
+        self.assertEqual(rate_res.status_code, 200)
+        self.assertEqual(rate_res.data[0]['carrier'], 'DIGITAL')
+        self.assertEqual(rate_res.data[0]['amount'], '0.00')
+
+        response = self.client.post('/api/v1/checkout/', {
+            'checkout_key': str(uuid4()),
+            'shipping_quote': rate_res.data[0]['quote_token'],
+            'shipping_service': 'digital_delivery',
+        }, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['total'], '8500.00')
+        self.assertEqual(response.data['address'], {'country': 'Worldwide', 'digital': True})
+        order = Order.objects.get(pk=response.data['id'])
+        self.assertIsNone(order.delivery.address)
+        self.assertEqual(order.delivery.delivery_type, 'digital_delivery')
 
     def test_cannot_add_products_from_any_owned_store_even_with_spoofed_user(self):
         for name in ['First store', 'Second store']:
@@ -254,6 +276,84 @@ class StorefrontTests(TestCase):
         self.assertEqual(removed_item.data['items'], [])
         self.assertEqual(removed_address.status_code, 204)
         self.assertFalse(Address.objects.filter(pk=self.address.pk).exists())
+
+    def test_address_deletion_does_not_destroy_or_lose_order_address_snapshot(self):
+        # 1. Buyer places an order with this address
+        self.add(1)
+        checkout_response = self.checkout()
+        self.assertEqual(checkout_response.status_code, 201)
+        order_id = checkout_response.data['id']
+        order_ref = checkout_response.data['reference']
+        original_address = checkout_response.data['address']
+        self.assertEqual(original_address['address'], '12 Test Road')
+
+        # 2. Buyer deletes the address months later
+        delete_response = self.client.delete(f'/api/v1/addresses/?id={self.address.pk}')
+        self.assertEqual(delete_response.status_code, 204)
+
+        # 3. Address is no longer visible in active address list
+        list_response = self.client.get('/api/v1/addresses/')
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.data), 0)
+
+        # 4. The order is NOT deleted (preventing critical data loss cascade)
+        order = Order.objects.get(pk=order_id)
+        self.assertEqual(order.orderId, order_ref)
+
+        # 5. Order detail continues to return the complete snapshotted address
+        order_detail = self.client.get(f'/api/v1/orders/{order_id}/')
+        self.assertEqual(order_detail.status_code, 200)
+        self.assertEqual(order_detail.data['address']['address'], '12 Test Road')
+        self.assertEqual(order_detail.data['address']['city'], 'Tampa')
+        self.assertEqual(order_detail.data['address']['state'], 'Florida')
+        self.assertEqual(order_detail.data['address']['zip'], '33601')
+
+    def test_user_account_deletion_preserves_orders_and_financial_records(self):
+        # 1. Place an order as the buyer
+        self.add(1)
+        checkout_response = self.checkout()
+        self.assertEqual(checkout_response.status_code, 201)
+        order_id = checkout_response.data['id']
+
+        # 2. Delete the buyer's user account (e.g. GDPR erasure or account closure)
+        buyer_email = self.buyer.email
+        self.buyer.delete()
+
+        # 3. Order is NOT deleted - financial and audit trail is preserved
+        order = Order.objects.filter(pk=order_id).first()
+        self.assertIsNotNone(order)
+        self.assertIsNone(order.user)
+        self.assertEqual(order.buyer_email, buyer_email)
+        self.assertEqual(order.address_snapshot['address'], '12 Test Road')
+        self.assertEqual(len(order.items_snapshot), 1)
+
+        # 4. Merchant and staff order retrieval continues to work seamlessly
+        data = order_data(order)
+        self.assertEqual(data['reference'], order.orderId)
+        self.assertEqual(data['address']['address'], '12 Test Road')
+        self.assertEqual(data['buyer_email'], buyer_email)
+
+    def test_address_can_be_updated_via_patch(self):
+        response = self.client.patch(
+            f'/api/v1/addresses/{self.address.pk}/',
+            {'address': '456 Updated Ave', 'city': 'Orlando', 'zip': '32801'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.address.refresh_from_db()
+        self.assertEqual(self.address.address, '456 Updated Ave')
+        self.assertEqual(self.address.city, 'Orlando')
+        self.assertEqual(self.address.zip, '32801')
+
+        response2 = self.client.patch(
+            f'/api/v1/addresses/?id={self.address.pk}',
+            {'address': '789 Query Ave'},
+            format='json',
+        )
+        self.assertEqual(response2.status_code, 200)
+        self.address.refresh_from_db()
+        self.assertEqual(self.address.address, '789 Query Ave')
+
 
     def test_checkout_creates_real_order_and_is_idempotent(self):
         self.add()
@@ -333,7 +433,8 @@ class StorefrontTests(TestCase):
         payload = {'code': 'ADMIN10', 'valid_to': (timezone.now() + timedelta(days=1)).isoformat(), 'discount': 10, 'num_available': 5, 'type': 'category', 'category': 'electronics', 'minimum_quantity': 1}
         self.assertEqual(self.client.post('/api/v1/admin/coupons/', payload, format='json').status_code, 403)
         self.buyer.is_staff = True
-        self.buyer.save(update_fields=['is_staff'])
+        self.buyer.is_business_admin = True
+        self.buyer.save(update_fields=['is_staff', 'is_business_admin'])
         response = self.client.post('/api/v1/admin/coupons/', payload, format='json')
         self.assertEqual(response.status_code, 201, response.data)
 
@@ -413,11 +514,11 @@ class StorefrontTests(TestCase):
         self.add()
         order_resp = self.checkout()
         order_id = order_resp.data['id']
-        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {'reason': 'Wrong size'}, format='json')
+        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {'reason': 'wrong_item_received', 'product_ids': [self.product.pk]}, format='json')
         self.assertEqual(refund_resp.status_code, 201)
-        self.assertEqual(refund_resp.data['status'], 'refund_requested')
+        self.assertEqual(refund_resp.data['refund_amount'], '17000.00')
         order = Order.objects.get(pk=order_id)
-        self.assertEqual(order.status, 'refund_requested')
+        self.assertEqual(order.status, 'confirmed')
 
     def test_order_refund_fails_after_7_days(self):
         self.add()
@@ -501,7 +602,8 @@ class StorefrontTests(TestCase):
         order_id = order_resp.data['id']
 
         refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {
-            'reason': 'Damaged package',
+            'reason': 'item_damaged',
+            'product_ids': [self.product.pk],
             'refund_type': 'store_credit',
         }, format='json')
         self.assertEqual(refund_resp.status_code, 201)
@@ -509,10 +611,11 @@ class StorefrontTests(TestCase):
         refund_id = refund_resp.data['refund_id']
 
         # Staff approves refund
-        staff_admin = User.objects.create(email='admin_tester@proace.com', is_staff=True, is_active=True)
+        staff_admin = User.objects.create(email='admin_tester@proace.com', is_staff=True, is_business_admin=True, is_active=True)
         self.client.force_authenticate(staff_admin)
         process_resp = self.client.post(f'/api/v1/admin/staff/refunds/{refund_id}/process/', {
             'action': 'approve',
+            'reason': 'Damage confirmed from customer evidence.',
         }, format='json')
         self.assertEqual(process_resp.status_code, 200)
 
@@ -549,7 +652,7 @@ class StorefrontTests(TestCase):
         payout_id = payout_resp.data['id']
 
         # Staff processes payout
-        staff_admin = User.objects.create(email='staff_payout_admin@proace.com', is_staff=True, is_active=True)
+        staff_admin = User.objects.create(email='staff_payout_admin@proace.com', is_staff=True, is_business_admin=True, is_active=True)
         self.client.force_authenticate(staff_admin)
         staff_payout_resp = self.client.post(f'/api/v1/admin/staff/payouts/{payout_id}/process/', {
             'action': 'approve',
@@ -699,6 +802,218 @@ class StorefrontTests(TestCase):
         self.assertIsNotNone(resp.data['flash_sale_end'])
 
 
+class UnverifiedStorePreviewTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(email='unverified_owner@test.com', password='Strong-password-123')
+        self.stranger = User.objects.create_user(email='stranger@test.com', password='Strong-password-123')
+        self.staff = User.objects.create_superuser(email='staff_admin@test.com', password='Strong-password-123')
+
+        self.unverified_store = Store.objects.create(
+            user=self.owner,
+            name='Fresh Onboarding Store',
+            username='fresh_store',
+            status=Store.STATUS_PENDING,
+            verified_at=None,
+        )
+        self.unverified_product = Product.objects.create(
+            store=self.unverified_store,
+            title='Prototype Widget',
+            description='Exclusive draft widget',
+            category='electronics',
+            price='49.99',
+            discount=0,
+            available=10,
+            visibility=True,
+        )
+
+        self.anon_client = APIClient()
+        self.owner_client = APIClient()
+        self.owner_client.force_authenticate(self.owner)
+        self.stranger_client = APIClient()
+        self.stranger_client.force_authenticate(self.stranger)
+        self.staff_client = APIClient()
+        self.staff_client.force_authenticate(self.staff)
+
+    def test_unverified_store_allows_owner_product_creation_with_visibility_true(self):
+        resp = self.owner_client.post(
+            f'/stores/{self.unverified_store.pk}/products/',
+            {
+                'title': 'New Sample Item',
+                'description': 'Description here',
+                'category': 'electronics',
+                'price': '29.99',
+                'available': 5,
+                'visibility': True,
+            },
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 201)
+        self.assertTrue(resp.data['visibility'])
+
+    def test_unverified_store_public_view_is_private_to_owner_and_staff(self):
+        url = f'/api/v1/stores/{self.unverified_store.pk}/public/'
+
+        # Anonymous and other users get 404
+        self.assertEqual(self.anon_client.get(url).status_code, 404)
+        self.assertEqual(self.stranger_client.get(url).status_code, 404)
+
+        # Owner gets 200 with is_preview=True and is_verified=False
+        owner_resp = self.owner_client.get(url)
+        self.assertEqual(owner_resp.status_code, 200)
+        self.assertFalse(owner_resp.data['is_verified'])
+        self.assertTrue(owner_resp.data['is_preview'])
+        self.assertEqual(owner_resp.data['name'], 'Fresh Onboarding Store')
+
+        # Staff gets 200
+        staff_resp = self.staff_client.get(url)
+        self.assertEqual(staff_resp.status_code, 200)
+
+    def test_unverified_store_products_list_is_private(self):
+        url = f'/api/v1/products/?store={self.unverified_store.pk}'
+
+        # General marketplace / anonymous receives 0 results
+        anon_resp = self.anon_client.get(url)
+        self.assertEqual(anon_resp.status_code, 200)
+        self.assertEqual(anon_resp.data['count'], 0)
+
+        stranger_resp = self.stranger_client.get(url)
+        self.assertEqual(stranger_resp.status_code, 200)
+        self.assertEqual(stranger_resp.data['count'], 0)
+
+        # Owner receives their products in preview mode
+        owner_resp = self.owner_client.get(url)
+        self.assertEqual(owner_resp.status_code, 200)
+        self.assertEqual(owner_resp.data['count'], 1)
+        self.assertEqual(owner_resp.data['results'][0]['id'], self.unverified_product.pk)
+        self.assertFalse(owner_resp.data['results'][0]['store_verified'])
+
+        # Staff receives products as well
+        staff_resp = self.staff_client.get(url)
+        self.assertEqual(staff_resp.status_code, 200)
+        self.assertEqual(staff_resp.data['count'], 1)
+
+    def test_unverified_store_product_detail_is_private(self):
+        url = f'/api/v1/products/{self.unverified_product.pk}/'
+
+        # Anonymous and other users get 404
+        self.assertEqual(self.anon_client.get(url).status_code, 404)
+        self.assertEqual(self.stranger_client.get(url).status_code, 404)
+
+        # Owner gets 200
+        owner_resp = self.owner_client.get(url)
+        self.assertEqual(owner_resp.status_code, 200)
+        self.assertEqual(owner_resp.data['title'], 'Prototype Widget')
+        self.assertFalse(owner_resp.data['store_verified'])
+
+        # Staff gets 200
+        staff_resp = self.staff_client.get(url)
+        self.assertEqual(staff_resp.status_code, 200)
+
+
+class ExtendedStorefrontFeatureTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email='buyer@test.com', password='Strong-password-123')
+        self.seller = User.objects.create_user(email='seller@test.com', password='Strong-password-123')
+        self.staff = User.objects.create_superuser(email='staff@test.com', password='Strong-password-123')
+
+        self.store = Store.objects.create(
+            user=self.seller, name='Prime Store', username='prime_store', status=Store.STATUS_ACTIVE, verified_at=timezone.now()
+        )
+        self.product = Product.objects.create(
+            store=self.store, title='Smart Watch', description='Fitness tracker',
+            category='electronics', price='100.00', discount=0, available=10, visibility=True
+        )
+        from product.models import Specification
+        Specification.objects.create(
+            product=self.product, serial='SW-100', attributes='Bluetooth 5.0, GPS',
+            height=Decimal('1.50'), width=Decimal('1.50'), breadth=Decimal('0.50'),
+            weight=Decimal('0.30'), color='Black'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_catalog_exposes_product_specifications(self):
+        resp = self.client.get(f'/api/v1/products/{self.product.pk}/')
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('specifications', resp.data)
+        specs = resp.data['specifications']
+        self.assertIsNotNone(specs)
+        self.assertEqual(specs['serial'], 'SW-100')
+        self.assertEqual(specs['color'], 'Black')
+
+    def test_coupon_validation_endpoint(self):
+        # Create active coupon
+        coupon = Coupon.objects.create(
+            code='SAVE20', discount=20,
+            active=True, valid_to=timezone.now() + timezone.timedelta(days=10),
+            num_available=10,
+        )
+        # Empty cart fails
+        resp = self.client.post('/api/v1/checkout/validate-coupon/', {'code': 'SAVE20'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+        # Add item to cart
+        self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': 1}, format='json')
+
+        # Valid coupon succeeds
+        resp = self.client.post('/api/v1/checkout/validate-coupon/', {'code': 'SAVE20'}, format='json')
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data['valid'])
+        self.assertEqual(resp.data['discount_amount'], '20.00')
+
+        # Invalid coupon fails
+        resp = self.client.post('/api/v1/checkout/validate-coupon/', {'code': 'INVALID'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+
+    def test_self_service_order_cancellation(self):
+        address = Address.objects.create(user=self.user, address='123 Main St', city='Tampa', state='FL', country='US', zip='33602')
+        order = Order.objects.create(
+            user=self.user, status='confirmed', ordered=True,
+            total=Decimal('100.00'), subtotal=Decimal('100.00'),
+            items_snapshot=[{'product': self.product.pk, 'title': 'Smart Watch', 'quantity': 2, 'unit_price': '50.00', 'is_digital': False}],
+            address_snapshot={'address': '123 Main St'},
+        )
+        self.product.available = 8
+        self.product.sales = 2
+        self.product.save()
+
+        cancel_resp = self.client.post(f'/api/v1/orders/{order.pk}/cancel/', {}, format='json')
+        self.assertEqual(cancel_resp.status_code, 200)
+
+        # Order status updated
+        order.refresh_from_db()
+        self.assertEqual(order.status, 'cancelled')
+
+        # Inventory restocked
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.available, 10)
+        self.assertEqual(self.product.sales, 0)
+
+        # Wallet credited
+        from core.services import get_or_create_user_wallet
+        wallet = get_or_create_user_wallet(self.user)
+        self.assertEqual(wallet.balance, Decimal('100.00'))
+
+    def test_review_creation_and_moderation(self):
+        from core.models import Review
+        # Buy product so user is verified
+        order = Order.objects.create(
+            user=self.user, status='delivered', ordered=True,
+            total=Decimal('100.00'), subtotal=Decimal('100.00'),
+            items_snapshot=[{'product': self.product.pk, 'title': 'Smart Watch', 'quantity': 1, 'unit_price': '100.00', 'is_digital': False}],
+        )
+        post_resp = self.client.post(
+            f'/api/v1/products/{self.product.pk}/reviews/',
+            {'rating': 5, 'label': 'Great watch!', 'comment': 'Works wonderfully.'},
+            format='json',
+        )
+        self.assertEqual(post_resp.status_code, 201)
+        review_id = post_resp.data['id']
+
+        # Author can delete their review
+        del_resp = self.client.delete(f'/api/v1/products/{self.product.pk}/reviews/?review_id={review_id}')
+        self.assertEqual(del_resp.status_code, 204)
+        self.assertFalse(Review.objects.filter(pk=review_id).exists())
 
 
 

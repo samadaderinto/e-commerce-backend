@@ -54,6 +54,21 @@ class User(AbstractUser):
         ("female", "female")
     )
     
+    is_business_admin = models.BooleanField(default=False)
+    must_change_password = models.BooleanField(default=False)
+    credential_version = models.PositiveIntegerField(default=0)
+    staff_email_verified = models.BooleanField(default=True)
+    staff_invitation_secret = models.TextField(blank=True, default="")
+    staff_blocked_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def role(self):
+        if self.is_superuser:
+            return "technical_admin"
+        if self.is_business_admin:
+            return "business_admin"
+        return "staff" if self.is_staff else "customer"
+
     username = None
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
@@ -77,6 +92,7 @@ class Address(DatesMixin):
     state = models.CharField(max_length=30, null=False, blank=False)
     city = models.CharField(max_length=100)
     is_default = models.BooleanField(default=True)
+    is_deleted = models.BooleanField(default=False)
 
 
 class Review(DatesMixin):
@@ -131,6 +147,16 @@ from decimal import Decimal
 
 
 class Refund(DatesMixin):
+    STATUS_PENDING = 'pending'
+    STATUS_APPROVED = 'approved'
+    STATUS_DECLINED = 'declined'
+    STATUS_FAILED = 'failed'
+    STATUS_CHOICES = (
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_APPROVED, 'Approved'),
+        (STATUS_DECLINED, 'Declined'),
+        (STATUS_FAILED, 'Failed'),
+    )
     REFUND_TYPE_STORE_CREDIT = 'store_credit'
     REFUND_TYPE_ORIGINAL_PAYMENT = 'original_payment'
     REFUND_TYPE_CHOICES = (
@@ -139,14 +165,28 @@ class Refund(DatesMixin):
     )
 
     email = models.EmailField()
-    order = models.ForeignKey(Order, on_delete=models.CASCADE)
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True)
     reason = models.TextField()
     accepted = models.BooleanField(default=False)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    processed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='processed_refunds',
+    )
+    processed_at = models.DateTimeField(null=True, blank=True)
     refund_type = models.CharField(
         max_length=20,
         choices=REFUND_TYPE_CHOICES,
         default=REFUND_TYPE_STORE_CREDIT,
     )
+    provider_reference = models.CharField(max_length=255, blank=True, default='')
+    failure_reason = models.TextField(blank=True, default='')
+    selected_items = models.JSONField(default=list, blank=True)
+    refund_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    processing_reason = models.TextField(blank=True, default='')
 
 
 class Device(DatesMixin):
@@ -161,7 +201,9 @@ class Device(DatesMixin):
 class UserWallet(DatesMixin):
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="user_wallet",
     )
     balance = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
@@ -204,4 +246,3 @@ class UserWalletTransaction(DatesMixin):
 
     class Meta:
         ordering = ["-created"]
-

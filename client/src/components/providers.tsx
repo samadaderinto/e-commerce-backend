@@ -1,8 +1,9 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, X, AlertCircle } from 'lucide-react';
+import { ThemeProvider } from './theme';
 import { api, ApiError } from '@/lib/api';
 import type { Cart, CartLine, Product, User } from '@/lib/types';
 import { unregisterPushDevice } from '@/lib/firebase-messaging';
@@ -19,9 +20,11 @@ type Context = {
 const ShopContext = createContext<Context | null>(null);
 
 function ShopProvider({ children }: { children: ReactNode }) {
+  const pendingAdds = useRef(new Set<number>());
   const client = useQueryClient();
   const session = useQuery({ queryKey: ['me'], queryFn: () => api<User>('me'), retry: false, staleTime: 60000 });
   const user = session.data;
+  const consumer = !!user && !user.is_staff && !user.is_superuser && !user.is_business_admin;
   const [guest, setGuest] = useState<CartLine[]>([]);
   const [guestSaved, setGuestSaved] = useState<Product[]>([]);
   const [ready, setReady] = useState(false);
@@ -30,7 +33,7 @@ function ShopProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     try {
       const stored = JSON.parse(localStorage.getItem('proace-cart') || '[]');
-      if (Array.isArray(stored)) setGuest(stored.filter(item => item?.product?.id && item.quantity > 0));
+      if (Array.isArray(stored)) setGuest(stored.filter(item => item?.product?.id && item.quantity > 0).map(item => item.product.is_digital ? { ...item, quantity: 1 } : item));
       const saved = JSON.parse(localStorage.getItem('proace-saved') || '[]');
       if (Array.isArray(saved)) setGuestSaved(saved.filter(item => item?.id));
     } catch { /* Ignore invalid local preferences. */ }
@@ -39,37 +42,88 @@ function ShopProvider({ children }: { children: ReactNode }) {
   useEffect(() => { if (ready) localStorage.setItem('proace-cart', JSON.stringify(guest)); }, [guest, ready]);
   useEffect(() => { if (ready) localStorage.setItem('proace-saved', JSON.stringify(guestSaved)); }, [guestSaved, ready]);
   useEffect(() => { if (!notice) return; const timeout = setTimeout(() => setNotice(null), 4500); return () => clearTimeout(timeout); }, [notice]);
-  const cartQuery = useQuery({ queryKey: ['cart', user?.id], queryFn: () => api<Cart>('cart'), enabled: !!user, retry: false });
-  const savedQuery = useQuery({ queryKey: ['saved', user?.id], queryFn: () => api<Product[]>('wishlist'), enabled: !!user });
+  const cartQuery = useQuery({ queryKey: ['cart', user?.id], queryFn: () => api<Cart>('cart'), enabled: consumer, retry: false });
+  const savedQuery = useQuery({ queryKey: ['saved', user?.id], queryFn: () => api<Product[]>('wishlist'), enabled: consumer });
   const subtotal = guest.reduce((sum, row) => sum + Number(row.product.sale_price) * row.quantity, 0);
   const shipping = subtotal >= 100000 || !guest.length || guest.every(row => row.product.is_digital) ? 0 : 2500;
   const guestCart = { items: guest, subtotal: String(subtotal), shipping: String(shipping), total: String(subtotal + shipping) };
   const cart = user ? cartQuery.data || { items: [], subtotal: '0', shipping: '0', total: '0' } : guestCart;
 
+  useEffect(() => {
+    if (!user?.id || user.must_change_password) return;
+    let stream: EventSource;
+    let reconnect: number | undefined;
+    let backoff = 3000;
+    let pending: number | undefined;
+    const refresh = () => {
+      if (pending !== undefined) return;
+      pending = window.setTimeout(() => { pending = undefined; void client.invalidateQueries(); }, 100);
+    };
+    const seen = new Set<number>();
+    const receive = (message: MessageEvent) => {
+      try {
+        const event = JSON.parse(message.data);
+        refresh();
+        if (event.event === 'notification.created' && event.title && !seen.has(event.notification_id)) {
+          seen.add(event.notification_id);
+          if (seen.size > 200) seen.delete(seen.values().next().value!);
+          notify(event.title);
+        }
+      } catch { /* Ignore malformed events; reconnect resynchronizes durable state. */ }
+    };
+    const connect = () => {
+      stream = new EventSource('/api/notifications/stream');
+      stream.addEventListener('ready', () => { backoff = 3000; refresh(); });
+      stream.addEventListener('resync', refresh);
+      stream.addEventListener('state', receive);
+      stream.onerror = () => {
+        if (stream.readyState === EventSource.CLOSED) {
+          stream.close();
+          reconnect = window.setTimeout(connect, backoff);
+          backoff = Math.min(backoff * 2, 30000);
+        }
+      };
+    };
+    connect();
+    const fallback = window.setInterval(() => { if (stream.readyState !== EventSource.OPEN) refresh(); }, 30000);
+    return () => { stream.close(); window.clearTimeout(pending); window.clearTimeout(reconnect); window.clearInterval(fallback); };
+  }, [user?.id, user?.must_change_password, client]);
+
   async function add(product: Product, quantity = 1) {
+    if (user && !consumer) throw new Error("Administrative accounts cannot shop.");
     if (user && product.is_own_store) throw new Error("You cannot buy products from any store you own.");
-    if (user) {
-      const result = await api<Cart>('cart', 'POST', { product: product.id, quantity });
-      client.setQueryData(['cart', user.id], result);
-    } else {
-      const existing = guest.find(row => row.product.id === product.id);
-      const next = (existing?.quantity || 0) + quantity;
-      if (next > product.available) throw new Error(`Only ${product.available} available.`);
-      setGuest(rows => [...rows.filter(row => row.product.id !== product.id), { product, quantity: next, total: String(Number(product.sale_price) * next), purchasable: true }]);
-    }
-    notify('Added to your bag');
+    if (pendingAdds.current.has(product.id)) return;
+    if (!Number.isSafeInteger(quantity) || quantity < 1) throw new Error("Choose a positive whole quantity.");
+    const current = cart.items.find(row => row.product.id === product.id)?.quantity || 0;
+    if (!product.is_digital && current + quantity > product.available) throw new Error(`Only ${product.available} available.`);
+    pendingAdds.current.add(product.id);
+    try {
+      if (user) {
+        const result = await api<Cart>('cart', 'POST', { product: product.id, quantity });
+        client.setQueryData(['cart', user.id], result);
+      } else {
+        setGuest(rows => {
+          const existing = rows.find(row => row.product.id === product.id);
+          const next = product.is_digital ? 1 : Math.min(product.available, (existing?.quantity || 0) + quantity);
+          return [...rows.filter(row => row.product.id !== product.id), { product, quantity: next, total: String(Number(product.sale_price) * next), purchasable: true }];
+        });
+      }
+      notify('Added to your bag');
+    } finally { pendingAdds.current.delete(product.id); }
   }
   async function setQuantity(product: Product, quantity: number) {
+    if (product.is_digital && quantity > 0) quantity = 1;
     if (user) {
       const result = await api<Cart>('cart', quantity === 0 ? 'DELETE' : 'PATCH', { product: product.id, quantity });
       client.setQueryData(['cart', user.id], result);
     } else {
-      if (quantity > product.available) throw new Error(`Only ${product.available} available.`);
+      if (!product.is_digital && quantity > product.available) throw new Error(`Only ${product.available} available.`);
       setGuest(rows => quantity === 0 ? rows.filter(row => row.product.id !== product.id) : rows.map(row => row.product.id === product.id ? { ...row, quantity } : row));
     }
   }
   const saved = user ? savedQuery.data || [] : guestSaved;
   async function toggleSave(product: Product) {
+    if (user && !consumer) throw new Error("Administrative accounts cannot save items.");
     const exists = saved.some(item => item.id === product.id);
     if (user) {
       await api('wishlist', exists ? 'DELETE' : 'POST', { product: product.id });
@@ -80,6 +134,11 @@ function ShopProvider({ children }: { children: ReactNode }) {
   async function login(email: string, password: string) {
     const result = await api<{ user: User }>('auth/login', 'POST', { email, password });
     client.setQueryData(['me'], result.user);
+    if (result.user.is_staff || result.user.is_superuser || result.user.is_business_admin) {
+      setGuest([]); setGuestSaved([]);
+      await client.invalidateQueries({ queryKey: ['stores'] });
+      return;
+    }
     const remaining: CartLine[] = [];
     for (const row of guest) {
       try { await api('cart', 'POST', { product: row.product.id, quantity: row.quantity }); }
@@ -112,6 +171,6 @@ function ShopProvider({ children }: { children: ReactNode }) {
 
 export function Providers({ children }: { children: ReactNode }) {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: (count, error) => !(error instanceof ApiError && error.status < 500) && count < 1, refetchOnWindowFocus: false, staleTime: 15000 } } }));
-  return <QueryClientProvider client={client}><ShopProvider>{children}</ShopProvider></QueryClientProvider>;
+  return <QueryClientProvider client={client}><ThemeProvider><ShopProvider>{children}</ShopProvider></ThemeProvider></QueryClientProvider>;
 }
 export function useShop() { const context = useContext(ShopContext); if (!context) throw new Error('ShopProvider missing'); return context; }

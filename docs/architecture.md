@@ -24,7 +24,7 @@ Next.js proxy.
 | `server/observability/` | Health, request instrumentation, metrics, logs and trace setup |
 | `server/codematics/` | Django settings package and WSGI/ASGI entry points |
 | `server/compose.yaml` | Local API, PostgreSQL, Redis and Elasticsearch services |
-| `server/monitoring/` | Local Prometheus, Grafana, Loki, Alloy and Tempo stack |
+| `monitoring/` | Local Prometheus, Grafana, Loki, Alloy and Tempo stack |
 | `docs/` | Canonical cross-project guides |
 
 ## Request and authentication flow
@@ -77,7 +77,7 @@ and permission details rather than inferring them from a prefix.
 | `/api/v1/checkout/wallet-session/`, `/wallet-confirm/` | Stripe wallet checkout session and confirmation endpoints |
 | `/api/v1/wallet/` | ProAce customer wallet balance and credit/debit transaction log |
 | `/api/v1/orders/` | Customer order list, order details, and 7-day refund request endpoints |
-| `/api/v1/orders/<id>/tracking/` | Live USPS shipment tracking milestones and status updates |
+| `/api/v1/orders/<id>/tracking/` | Recorded fulfillment milestones and official carrier links |
 | `/api/v1/stores/` | Merchant store, product, inventory, schedule, and payout routers |
 | `/api/v1/stores/<id>/orders/<order_id>/tracking/` | Merchant fulfillment tracking updates and shipment carrier management |
 | `/api/v1/stores/<id>/payouts/` | Merchant payout withdrawal requests against cleared escrow balance |
@@ -87,7 +87,7 @@ and permission details rather than inferring them from a prefix.
 | `/api/v1/admin/staff/dashboard/` | Platform-wide business intelligence, revenue, orders, and store analytics |
 | `/api/v1/admin/staff/refunds/` | Customer refund review and moderation queue (7-day window) |
 | `/api/v1/admin/staff/payouts/` | Merchant payout request approval and processing |
-| `/api/v1/admin/staff/staffs/` | Staff account provisioning, permission toggles, and blocking (Superuser only) |
+| `/api/v1/admin/staff/staffs/` | Staff invitation, permission controls, and blocking (technical/business admin only) |
 
 OpenAPI schema, Swagger and ReDoc are served at `/api/schema/`, `/api/docs/`
 and `/api/redoc/` respectively. They are available on a running local backend.
@@ -125,3 +125,8 @@ Treat [`server/deployment.md`](../server/deployment.md) as the detailed
 deployment procedure and secret inventory. The
 [infrastructure guide](infrastructure.md) describes local containers and
 production service boundaries. Never commit production secrets or env files.
+
+## Back-office and carrier checkout
+
+See [role matrix, staff activation, and operator setup](access-control.md) and
+[multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).

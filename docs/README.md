@@ -47,7 +47,8 @@ e-commerce-backend/
     cart, payment, notification/
     affiliates, staff, observability/
     compose.yaml          API and data-service containers
-    monitoring/           Prometheus, Grafana, Loki, Alloy and Tempo
+  monitoring/
+    compose.yaml          Prometheus, Grafana, Loki, Alloy and Tempo stack
   docs/                   Canonical cross-project documentation
   .github/workflows/      CI, security checks and HostGator deployment
 ```
@@ -84,6 +85,13 @@ Keep environment files simple:
 - `client/.env.example`: tracked frontend template.
 
 Do not add `.env.prod`, per-service env files, or hidden env files under
-`server/monitoring/`. Production values belong in GitHub Actions secrets or the
+`monitoring/`. Production values belong in GitHub Actions secrets or the
 deployment platform secret manager. For HostGator, the CD workflow uploads the
 encrypted production configuration over SSH and runs the deployment script.
+
+## Back-office and carrier checkout
+
+See [role matrix, staff activation, and operator setup](access-control.md) and
+[multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).
+
+See [UI components and live event pipeline](ui-and-events.md) for responsive conventions, pagination, carrier selection, cart states, scoped SSE events, and verification procedures.

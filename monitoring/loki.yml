@@ -1,7 +1,9 @@
 auth_enabled: false
 server:
   http_listen_port: 3100
+  grpc_listen_port: 9095
 common:
+  instance_addr: 127.0.0.1
   path_prefix: /loki
   replication_factor: 1
   ring:
@@ -20,9 +22,13 @@ schema_config:
       index:
         prefix: index_
         period: 24h
+pattern_ingester:
+  enabled: true
 compactor:
   working_directory: /loki/compactor
   retention_enabled: true
   delete_request_store: filesystem
 limits_config:
   retention_period: 168h
+  volume_enabled: true
+  allow_structured_metadata: true

@@ -37,12 +37,13 @@ The API is at `http://127.0.0.1:8000`, Grafana is at
 uses the official Redis service at `redis://redis:6379/0`. Elasticsearch runs at
 `http://127.0.0.1:9200` in the app stack.
 
-Grafana is configured with **automatic anonymous admin access**: visiting
-`http://127.0.0.1:3002` (or clicking **Live Metrics (Grafana)** from the app's
-Admin Dashboard at `/admin`) automatically logs you in with full Admin permissions
-without requiring credentials. For manual logins, the admin user is
-`${DEFAULT_ADMIN_EMAIL:-admin@proace.local}` with password
-`${DEFAULT_ADMIN_PASSWORD:-local-grafana-admin-change-me}`.
+Grafana requires a technical-administrator login. Anonymous authentication and
+signup are disabled. The technical user comes from `TECHNICAL_ADMIN_EMAIL` with
+`TECHNICAL_ADMIN_PASSWORD` in `server/.env`; these default to the same values as
+`DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD`. Business admins and staff
+are not given Grafana accounts.
+Only technical admins see monitoring links in the commerce interface. Keep Grafana
+on loopback and use a private tunnel or technical-only TLS gateway for remote access.
 
 Both projects share `commerce-network` (override `COMMERCE_NETWORK` in `.env`).
 `monitoring/init_local.py` creates the external network when it is missing.
@@ -125,6 +126,19 @@ For one request, copy the `request_id` from an API response header or log line:
 {service_name="api"} | json | request_id="paste-request-id-here"
 ```
 
+Frontend logs and browser runtime exceptions stream directly to Loki without backend hops:
+
+```logql
+# All frontend logs (Next.js server + browser telemetry)
+{service_name="client"} or {app="proace-frontend"}
+
+# Direct browser exceptions and unhandled rejections only
+{app="proace-frontend", source="browser"}
+
+# Frontend error filter
+{service_name="client"} |= "error" or {app="proace-frontend"} |= "error"
+```
+
 The container API binds Gunicorn to `0.0.0.0:8000` internally so the host and
 Prometheus can reach it. Local uploads persist in the `media-data` volume.
 
@@ -195,3 +209,11 @@ the JSON log body.
 Production profiling is low overhead: request histograms, in-flight requests,
 DB query counts/time, error rate and sampled traces. Use a log trace ID to open a
 Tempo trace. Use Silk only in local or a short-lived private debugging environment.
+
+## Back-office roles and shipping
+
+See the [endpoint permission matrix and staff onboarding](../docs/access-control.md)
+and [carrier setup and checkout API](../docs/shipping-integrations.md).
+Apply the new core, store, and payment migrations before starting this version.
+Staff/admin accounts use operational workspaces and cannot shop. Grafana requires
+technical-admin credentials; anonymous access is disabled.

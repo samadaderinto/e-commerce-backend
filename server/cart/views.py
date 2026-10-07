@@ -1,3 +1,4 @@
+from core.access import IsCustomer
 from rest_framework.decorators import action
 
 from core.models import User
@@ -48,7 +49,7 @@ def serialize_cart(cart):
 
 
 class CartViewSet(viewsets.GenericViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCustomer]
     auth_user = User
     cart_item = CartItem
     user_cart = Cart
@@ -82,7 +83,11 @@ class CartViewSet(viewsets.GenericViewSet):
         product = get_object_or_404(self.merchant_product, pk=data["product"])
 
         validate_purchase(product, request.user)
-        if product.available < quantity:
+        # Digital goods represent a single entitlement. Re-downloads are
+        # provided from completed orders, so quantity can never exceed one.
+        if product.is_digital:
+            quantity = 1
+        if not product.is_digital and product.available < quantity:
             return Response(
                 {'message': 'Not enough stock available'},
                 status=status.HTTP_409_CONFLICT
@@ -96,7 +101,7 @@ class CartViewSet(viewsets.GenericViewSet):
         if not created:
             quantity += cart_item.quantity
 
-        if product.available < quantity:
+        if not product.is_digital and product.available < quantity:
             return Response(
                 {'message': 'Not enough stock available'},
                 status=status.HTTP_409_CONFLICT
@@ -123,7 +128,9 @@ class CartViewSet(viewsets.GenericViewSet):
         )
 
         validate_purchase(cart_item.product, request.user)
-        if cart_item.product.available < quantity:
+        if cart_item.product.is_digital:
+            quantity = 1
+        if not cart_item.product.is_digital and cart_item.product.available < quantity:
             return Response(
                 {'message': 'Not enough stock available'},
                 status=status.HTTP_409_CONFLICT
@@ -149,7 +156,9 @@ class CartViewSet(viewsets.GenericViewSet):
         quantity = cart_item.quantity + increment_by
 
         validate_purchase(cart_item.product, request.user)
-        if cart_item.product.available < quantity:
+        if cart_item.product.is_digital:
+            quantity = 1
+        if not cart_item.product.is_digital and cart_item.product.available < quantity:
             return Response(
                 {'message': 'Not enough stock available'},
                 status=status.HTTP_409_CONFLICT

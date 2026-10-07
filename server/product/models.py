@@ -70,15 +70,22 @@ class Product(DatesMixin):
         default=Decimal('1.00'),
         help_text='Shipping weight in pounds (lbs).',
     )
+    length = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.01'))], help_text='Package length in inches.')
+    width = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.01'))], help_text='Package width in inches.')
+    height = models.DecimalField(max_digits=7, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(Decimal('0.01'))], help_text='Package height in inches.')
     is_digital = models.BooleanField(
         default=False,
         help_text='Digital products are delivered online and may be sold worldwide.',
     )
-    digital_file_url = models.URLField(
+    digital_file_url = models.CharField(
         blank=True,
         default='',
         max_length=1000,
-        help_text='Private fulfillment link shown only in the customer order.',
+        help_text='Private storage key exposed through authenticated, expiring download links.',
+    )
+    digital_preview_watermark = models.BooleanField(
+        default=False,
+        help_text='Overlay buyer-specific watermark on in-platform previews of digital images.',
     )
     flash_sale_end = models.DateTimeField(
         null=True,
@@ -98,7 +105,8 @@ class Product(DatesMixin):
         return str(discounted.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
 
     def set_availability(self, quantity_bought: int) -> None:
-        self.available -= quantity_bought
+        if not self.is_digital:
+            self.available -= quantity_bought
 
     def set_sponsorship(self, switch_to: bool) -> None:
         self.sponsored = switch_to

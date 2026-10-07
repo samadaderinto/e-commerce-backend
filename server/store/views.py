@@ -1,3 +1,5 @@
+from rest_framework import serializers
+from core.access import IsBusinessAdmin, is_admin, is_backoffice
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
@@ -5,11 +7,13 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum
 from django.db.models.functions import TruncDate
+from django.http import Http404
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import mixins, serializers, status, viewsets
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
@@ -49,7 +53,7 @@ def invalidate_store_products(store):
 class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     queryset = Store.objects.none()
     serializer_class = StoreSerializer
-    permission_classes = [IsAdminUser]
+    permission_classes = [IsBusinessAdmin]
     pagination_class = MerchantPagination
 
     def get_queryset(self):
@@ -133,14 +137,40 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     serializer_class = StoreSerializer
 
     def get_queryset(self):
-        return Store.objects.filter(user=self.request.user).order_by('-created', '-pk')
+        user = self.request.user
+        if is_backoffice(user):
+            # Strict separation: Admins and Staff never have access to a third-party seller's internal dashboard.
+            # Proace Official Stores exception: all staff members and admins automatically have access to official stores.
+            return Store.objects.filter(is_official=True).order_by('-created', '-pk')
+        return Store.objects.filter(user=user, is_official=False).order_by('-created', '-pk')
+
+    @extend_schema(responses={204: None})
+    @action(detail=True, methods=['delete'], url_path='delete')
+    def delete_store(self, request, pk=None):
+        if not is_admin(request.user):
+            raise PermissionDenied('Only administrators can delete official stores.')
+        self.get_object().delete()
+        return Response(status=204)
+
+    @action(detail=True, methods=['put'], url_path='staff')
+    def assign_staff(self, request, pk=None):
+        if not is_admin(request.user):
+            raise PermissionDenied('Only administrators can manage staff assignments.')
+        # Staff-to-store assignment logic is deprecated: all authenticated staff members
+        # have global backoffice access and automatic access to all official stores.
+        return Response({
+            'detail': 'Staff-to-store assignment is deprecated. All authenticated staff have global backoffice access and automatic access to all official stores.',
+            'staff_ids': [],
+        })
 
     def get_serializer_class(self):
         return StoreOnboardingSerializer if self.action in {'create', 'create_store'} else StoreSerializer
 
     def perform_create(self, serializer):
         user = self.request.user
-        if getattr(user, 'is_superuser', False):
+        if is_backoffice(user) and not is_admin(user):
+            raise PermissionDenied('Only administrators can create official stores.')
+        if is_admin(user):
             serializer.save(
                 user=user,
                 is_official=True,
@@ -149,7 +179,12 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                 verified_by=user,
             )
         else:
-            serializer.save(user=user)
+            # Serialize creation for this owner so simultaneous requests cannot exceed the limit.
+            with transaction.atomic():
+                type(user).objects.select_for_update().get(pk=user.pk)
+                if Store.objects.filter(user=user).count() >= 10:
+                    raise ValidationError({'detail': 'You can create a maximum of 10 stores.'})
+                serializer.save(user=user)
 
     @action(detail=False, methods=['post'], url_path='create')
     def create_store(self, request):
@@ -166,6 +201,31 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             serializer.is_valid(raise_exception=True)
             serializer.save(store=store)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='connect-stripe')
+    def connect_stripe(self, request, pk=None):
+        """Create/reuse a Stripe Express account and return its onboarding URL."""
+        store = self.get_object()
+        if store.user_id != request.user.id:
+            raise PermissionDenied('Only the store owner can connect Stripe.')
+        secret = getattr(settings, 'STRIPE_SECRET', '')
+        if not secret:
+            raise ValidationError({'detail': 'Stripe Connect is not configured yet.'})
+        try:
+            import stripe
+            stripe.api_key = secret
+            wallet, _ = MerchantWallet.objects.get_or_create(user=request.user)
+            if not wallet.stripe_account_id:
+                account = stripe.Account.create(type='express', email=request.user.email, metadata={'store_id': str(store.pk), 'user_id': str(request.user.pk)})
+                wallet.stripe_account_id = account.id
+                wallet.save(update_fields=['stripe_account_id', 'updated'])
+            # Stripe must return to the customer-facing Next.js app, not the API
+            # process (which has no /merchant/settings route).
+            base = f"{settings.FRONTEND_URL.rstrip('/')}/merchant/settings"
+            link = stripe.AccountLink.create(account=wallet.stripe_account_id, refresh_url=base, return_url=base, type='account_onboarding')
+            return Response({'url': link.url, 'stripe_account_id': wallet.stripe_account_id})
+        except Exception as exc:
+            raise ValidationError({'detail': f'Unable to start Stripe onboarding: {exc}'})
 
     @action(detail=True, methods=['get', 'put'], url_path='pickup-address')
     def pickup_address(self, request, pk=None):
@@ -206,7 +266,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             if order_status not in dict(Order.ORDER_STATUS_CHOICE):
                 raise ValidationError({'status': 'Invalid order status.'})
             orders = orders.filter(status=order_status)
-        orders = orders.prefetch_related(Prefetch(
+        orders = orders.select_related('user').prefetch_related(Prefetch(
             'cart__cart_items', queryset=CartItem.objects.filter(product__store=store)
             .select_related('product'), to_attr='merchant_items',
         ))
@@ -219,20 +279,44 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             'shipped_at': order.shipped_at,
             'delivered_at': order.delivered_at,
             'tracking_events': order.tracking_events or [],
+            'shipping_address': order.address_snapshot or {},
+            'customer': {
+                'name': f"{order.user.first_name} {order.user.last_name}".strip() if order.user else '',
+                'email': order.user.email if order.user else '',
+                'phone': getattr(order.user, 'phone1', '') if order.user else '',
+            },
             'created': order.created, 'ordered': order.ordered,
             'items': [{'product': item.product_id, 'title': item.product.title,
-                       'quantity': item.quantity} for item in order.cart.merchant_items],
+                       'quantity': item.quantity} for item in getattr(order.cart, 'merchant_items', [])] or [
+                       {'product': it.get('product', 0), 'title': it.get('title', 'Item'),
+                        'quantity': it.get('quantity', 1)} for it in (order.items_snapshot or []) if not it.get('store') or it.get('store') == store.pk],
         } for order in page]
         return self.get_paginated_response(data)
 
-    @action(detail=True, methods=['patch', 'post'], url_path=r'orders/(?P<order_pk>\d+)/tracking')
+    @action(detail=True, methods=['patch', 'post'], url_path=r'orders/(?P<order_pk>[^/.]+)/tracking')
     @transaction.atomic
     def update_order_tracking(self, request, pk=None, order_pk=None):
         store = self.get_object()
-        order = get_object_or_404(self.store_orders(store).select_for_update(), pk=order_pk)
+        order_filter = Q(pk=int(order_pk)) if str(order_pk).isdigit() else Q(orderId=order_pk)
+        order = Order.objects.filter(order_filter).select_for_update().first()
+        if not order:
+            raise Http404("Order not found.")
+        has_store_item = (
+            order.cart.cart_items.filter(product__store=store).exists() or
+            any(item.get('store') == store.pk for item in (order.items_snapshot or []))
+        )
+        if not has_store_item:
+            raise Http404("Order does not belong to this store.")
+        if order.status in ('cancelled', 'refunded'):
+            raise ValidationError({'order': f'Cannot update tracking for an order with status {order.status}.'})
         tracking_number = str(request.data.get('tracking_number', '')).strip()
         carrier = str(request.data.get('carrier', 'USPS')).strip() or 'USPS'
         new_status = request.data.get('status')
+
+        if carrier.upper() not in {'USPS', 'UPS', 'FEDEX', 'DHL'}:
+            raise ValidationError({'carrier': 'Choose USPS, UPS, FedEx, or DHL.'})
+        if len(tracking_number) > 100:
+            raise ValidationError({'tracking_number': 'Use at most 100 characters.'})
 
         if tracking_number:
             order.tracking_number = tracking_number
@@ -307,7 +391,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         inventory = products.aggregate(
             total=Count('id'), published=Count('id', filter=Q(visibility=True)),
             drafts=Count('id', filter=Q(visibility=False)),
-            out_of_stock=Count('id', filter=Q(available=0)),
+            out_of_stock=Count('id', filter=Q(is_digital=False, available=0)),
             low_stock=Count('id', filter=Q(available__gt=0, available__lte=threshold)),
             units=Sum('available'),
         )
@@ -379,6 +463,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             serializer = StorePayoutSerializer(page, many=True)
             return self.get_paginated_response(serializer.data)
 
+        if is_backoffice(request.user) and not is_admin(request.user):
+            raise PermissionDenied('Only administrators or store owners can request payouts.')
         serializer = MerchantPayoutCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         amount = serializer.validated_data['amount']
@@ -429,6 +515,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             serializer = StorePayoutSerializer(payouts, many=True)
             return Response(serializer.data)
 
+        if store.user_id != request.user.pk:
+            raise PermissionDenied('Only the store owner can initiate a withdrawal.')
         serializer = PayoutCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         amount = serializer.validated_data['amount']
@@ -486,18 +574,14 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
 
     def get_store(self):
         return get_object_or_404(
-            Store,
+            StoreViewSet.get_queryset(self),
             pk=self.kwargs['store_pk'],
-            user=self.request.user,
         )
 
     def validate_store_publication(self, serializer):
-        if serializer.validated_data.get('visibility') is True:
-            store = serializer.instance.store if serializer.instance else self.get_store()
-            if store.status != Store.STATUS_ACTIVE or not store.verified_at:
-                raise ValidationError({
-                    'visibility': 'A staff-verified store is required before publishing products.'
-                })
+        # Unverified stores can create and save products (including visibility=True for store preview).
+        # Products remain hidden from the public marketplace until the store is active and staff-verified.
+        pass
 
     def get_queryset(self):
         products = Product.objects.filter(store=self.get_store()).prefetch_related('tags', 'images').select_related('specification')
@@ -514,7 +598,7 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
             if category:
                 products = products.filter(category=category)
             stock = self.request.query_params.get('stock')
-            filters = {'out': Q(available=0), 'low': Q(available__gt=0, available__lte=5), 'in': Q(available__gt=0)}
+            filters = {'out': Q(is_digital=False, available=0), 'low': Q(is_digital=False, available__gt=0, available__lte=5), 'in': Q(is_digital=True) | Q(available__gt=0)}
             if stock is not None:
                 if stock not in filters:
                     raise ValidationError({'stock': 'Use in, low or out.'})
@@ -546,6 +630,8 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         with transaction.atomic():
             product = get_object_or_404(Product.objects.select_for_update(), pk=pk, store=self.get_store())
+            if product.is_digital:
+                raise ValidationError({'available': 'Digital products have unlimited inventory.'})
             product.available = serializer.validated_data['available']
             product.save(update_fields=['available', 'updated'])
             transaction.on_commit(lambda: invalidate_catalog(product))
@@ -558,9 +644,73 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
             return Response(MerchantImageSerializer(product.images.all(), many=True, context={'request': request}).data)
         serializer = MerchantImageSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        serializer.save(product=product)
+        img_obj = serializer.save(product=product)
+        is_cover = request.data.get('is_cover') in {'true', '1', True} or not product.image_url
+        if is_cover and img_obj.image:
+            image_url = request.build_absolute_uri(img_obj.image.url) if request else img_obj.image.url
+            product.image_url = image_url
+            product.save(update_fields=['image_url', 'updated'])
         invalidate_catalog(product)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['patch'], url_path=r'images/(?P<image_pk>\d+)/cover')
+    def set_cover_image(self, request, store_pk=None, pk=None, image_pk=None):
+        product = self.get_object()
+        img = get_object_or_404(ProductImg, pk=image_pk, product=product)
+        if img.image:
+            image_url = request.build_absolute_uri(img.image.url) if request else img.image.url
+            product.image_url = image_url
+            product.save(update_fields=['image_url', 'updated'])
+            invalidate_catalog(product)
+        return Response(self.get_serializer(product).data)
+
+    @action(detail=True, methods=['get', 'post'], url_path='digital-file', parser_classes=[MultiPartParser, FormParser])
+    def digital_file(self, request, store_pk=None, pk=None):
+        product = self.get_object()
+        if request.method == 'GET':
+            from django.core.files.storage import default_storage
+            from django.http import HttpResponseRedirect
+            from urllib.parse import urlparse
+            path = urlparse(product.digital_file_url or '').path.lstrip('/')
+            bucket = getattr(settings, 'MINIO_BUCKET_NAME', 'commerce-images')
+            for prefix in (f'{bucket}/media/', f'{bucket}/', 'media/'):
+                if path.startswith(prefix):
+                    path = path[len(prefix):]
+                    break
+            if not path or not default_storage.exists(path):
+                return Response({'detail': 'This product has no uploaded digital file.'}, status=404)
+            response = HttpResponseRedirect(default_storage.url(path))
+            response['Cache-Control'] = 'private, no-store'
+            return response
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            raise ValidationError({'file': 'Please select a digital file to upload.'})
+
+        # Max file size 50 MB
+        if file_obj.size > 50 * 1024 * 1024:
+            raise ValidationError({'file': 'Digital files must be 50 MB or smaller.'})
+
+        from django.core.files.storage import default_storage
+        import os
+        from uuid import uuid4
+
+        safe_name = f"digital_products/{product.store_id}/{product.id}/{uuid4().hex[:12]}_{file_obj.name}"
+        saved_path = default_storage.save(safe_name, file_obj)
+        # Store the stable object key. Signed URLs are generated only after an
+        # authenticated purchase or a backoffice audit request.
+        file_url = saved_path
+
+        product.is_digital = True
+        product.digital_file_url = file_url
+        product.weight = Decimal('0.00')
+        product.save(update_fields=['is_digital', 'digital_file_url', 'weight', 'updated'])
+        invalidate_catalog(product)
+
+        return Response({
+            'digital_file_url': file_url,
+            'file_name': file_obj.name,
+            'file_size': file_obj.size,
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['delete'], url_path=r'images/(?P<image_pk>\d+)')
     def delete_image(self, request, store_pk=None, pk=None, image_pk=None):
@@ -591,11 +741,11 @@ class VisibilityScheduleViewSet(viewsets.ModelViewSet):
     http_method_names = ['get', 'post', 'delete', 'head', 'options']
 
     def get_queryset(self):
-        return Schedule.objects.filter(store__user=self.request.user).order_by('make_visible_at', 'pk')
+        return Schedule.objects.filter(store__in=StoreViewSet.get_queryset(self)).order_by('make_visible_at', 'pk')
 
     def perform_create(self, serializer):
         product = serializer.validated_data['product']
-        if product.store.user_id != self.request.user.pk:
+        if not StoreViewSet.get_queryset(self).filter(pk=product.store_id).exists():
             raise ValidationError({'product': 'Choose a product from your store.'})
         if serializer.validated_data['make_visible_at'] <= timezone.now():
             raise ValidationError({'make_visible_at': 'Choose a future time.'})

@@ -134,3 +134,8 @@ cache so tests do not need production services.
   dashboards.
 - [Root README](../README.md): product capabilities, sample accounts and
   current limitations.
+
+## Back-office and carrier checkout
+
+See [role matrix, staff activation, and operator setup](access-control.md) and
+[multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).

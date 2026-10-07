@@ -46,22 +46,21 @@ Metric config files:
 - `server/observability/views.py`: health and metrics HTTP views.
 - `server/observability/config.py`: settings hook that enables middleware,
   JSON logging, optional Kafka logging, tracing and local profiling.
-- `server/monitoring/prometheus.yml`: Prometheus scrape config.
-- `server/monitoring/targets/app.json`: local application scrape target.
-- `server/monitoring/targets/exporters.json`: optional exporter scrape targets.
+- `monitoring/prometheus.yml`: Prometheus scrape config.
+- `monitoring/targets/app.json`: local application scrape target.
+- `monitoring/targets/exporters.json`: optional exporter scrape targets.
 
 ## Dashboards and alerts
 
-Grafana is available locally at `http://127.0.0.1:3002`. It is configured with
-**automatic anonymous admin access** (`GF_AUTH_ANONYMOUS_ENABLED=true`,
-`GF_AUTH_ANONYMOUS_ORG_ROLE=Admin`), so visiting Grafana directly or launching it
-from the app's Admin Dashboard (`/admin`) logs you in immediately with full
-administrator privileges. For explicit logins, the credentials are
-`DEFAULT_ADMIN_EMAIL` (`admin@proace.local`) and `DEFAULT_ADMIN_PASSWORD`
-(`local-grafana-admin-change-me`) in `server/.env`.
+Grafana is available locally at `http://127.0.0.1:3002`. Anonymous access and
+signup are disabled. Only technical administrators receive monitoring credentials;
+business administrators and staff see business insights but cannot enter Grafana.
+Use `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` from the private runtime
+configuration to sign in. For remote access, use a private tunnel or authenticated
+TLS gateway restricted to the technical team.
 
 The dashboard is provisioned from
-`server/monitoring/grafana/dashboards/commerce-overview.json` and includes:
+`monitoring/grafana/dashboards/commerce-overview.json` and includes:
 
 - request rate;
 - 4xx/5xx error rate;
@@ -71,7 +70,7 @@ The dashboard is provisioned from
 - dependency health and dependency check latency.
 - Elasticsearch cluster health, search query rate and JVM heap usage.
 
-Prometheus alert rules live in `server/monitoring/alerts.yml`.
+Prometheus alert rules live in `monitoring/alerts.yml`.
 
 Default alerts:
 
@@ -124,9 +123,9 @@ Log config files:
 
 - `server/observability/logging.py`: JSON formatter, request context and optional
   best-effort Kafka log handler.
-- `server/monitoring/alloy.alloy`: Docker discovery, relabeling and Loki output.
-- `server/monitoring/loki.yml`: Loki local config and retention.
-- `server/monitoring/grafana/provisioning/datasources/datasources.yml`:
+- `monitoring/alloy.alloy`: Docker discovery, relabeling and Loki output.
+- `monitoring/loki.yml`: Loki local config and retention.
+- `monitoring/grafana/provisioning/datasources/datasources.yml`:
   Grafana datasource registration for Loki, Prometheus and Tempo.
 
 Alloy labels Docker logs with:
@@ -163,8 +162,8 @@ private collector or managed tracing backend.
 Trace config files:
 
 - `server/observability/tracing.py`: tracing setup helper.
-- `server/monitoring/tempo.yml`: local Tempo config.
-- `server/monitoring/compose.yaml`: exposes Tempo OTLP HTTP on
+- `monitoring/tempo.yml`: local Tempo config.
+- `monitoring/compose.yaml`: exposes Tempo OTLP HTTP on
   `127.0.0.1:4318`.
 
 Trace variables:
@@ -203,3 +202,8 @@ The settings hook refuses to start with `LOCAL_PROFILING_ENABLED=true` when
 Update this file when changing health endpoints, metrics, histogram buckets,
 alert thresholds, dashboard panels, log fields, Loki/Alloy behavior, trace
 settings, profiling behavior or observability environment variables.
+
+## Back-office and carrier checkout
+
+See [role matrix, staff activation, and operator setup](access-control.md) and
+[multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).

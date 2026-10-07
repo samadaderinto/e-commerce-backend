@@ -1,16 +1,23 @@
-
+import logging
 from datetime import timedelta
 from decimal import Decimal
 
+logger = logging.getLogger(__name__)
+
 from django.db.models import Count, Q, Sum
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from rest_framework import status
+from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
 from rest_framework.decorators import action
 from rest_framework.parsers import JSONParser
-from rest_framework.permissions import BasePermission, IsAdminUser
+from rest_framework.permissions import BasePermission
+from core.access import IsBackoffice as IsAdminUser, IsBusinessAdmin, is_admin
 from rest_framework.response import Response
+from django.shortcuts import redirect
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.generics import ListAPIView
 from rest_framework.pagination import LimitOffsetPagination
@@ -24,12 +31,21 @@ from notification.views import (
     staff_created_nofication,
     store_moderation_notification,
 )
+from notification.models import Notification
 from store.serializers import StoreAddressSerializer, StorePayoutSerializer
 from store.services import process_payout_status_change, process_refund_deduction
-from core.services import credit_user_wallet
+from core.services import credit_user_wallet, get_or_create_user_wallet
+from core.models import UserWalletTransaction
+from payment.services import (
+    execute_order_status_transition,
+    process_order_refund,
+    decline_order_refund,
+)
 
 from staff.serilalizers import (
     BackofficeCouponSerializer,
+    CouponUpdateSerializer,
+    OrderStatusOverrideSerializer,
     BackofficeOrderSerializer,
     BackofficeStoreSerializer,
     CommentSerializer,
@@ -38,9 +54,11 @@ from staff.serilalizers import (
     StaffPermissionSerializer,
     StaffUserSerializer,
     StoreModerationSerializer,
+    StoreAuditProductSerializer,
 )
+from staff.digital_assets import stream_digital_asset
 
-from staff.models import Comment
+from staff.models import Comment, PlatformCommissionWithdrawal
 from payment.models import Coupon, Order
 from payment.serializers import CouponSerializer, OrdersSerializer
 
@@ -55,7 +73,7 @@ from utils.variables import methods
 from core.models import User, Refund
 from product.models import Product, Specification
 from product.cache import invalidate_product_cache
-from store.models import StoreAddress, Store, StorePayout
+from store.models import StoreAddress, Store, StorePayout, StoreEarningsLedger
 
 
 from django.utils.http import urlsafe_base64_encode
@@ -76,19 +94,15 @@ class BackofficePagination(LimitOffsetPagination):
     max_limit = 100
 
 
-class IsSuperuser(BasePermission):
-    """Restrict staff-account administration to platform administrators."""
-
-    def has_permission(self, request, view):
-        return bool(request.user and request.user.is_active and request.user.is_superuser)
-
+IsSuperuser = IsBusinessAdmin
 
 class StaffViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAdminUser]
     pagination_class = BackofficePagination
+    serializer_class = StaffUserSerializer
     filter_backends = [SearchFilter, OrderingFilter]
 
-    admin_only_actions = {"staffs", "staff_detail", "block_staff", "unblock_staff"}
+    admin_only_actions = {"staffs", "staff_detail", "block_staff", "unblock_staff", "resend_staff_verification", "block_store", "unblock_store", "process_payout", "commission_wallet", "withdraw_commission"}
 
     def get_permissions(self):
         permission_classes = (
@@ -101,6 +115,7 @@ class StaffViewSet(viewsets.GenericViewSet):
         serializer = serializer_class(page, many=True, context={"request": self.request})
         return self.get_paginated_response(serializer.data)
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     @action(detail=False, methods=["get"])
     def dashboard(self, request):
         query = DashboardQuerySerializer(data=request.query_params)
@@ -115,6 +130,9 @@ class StaffViewSet(viewsets.GenericViewSet):
             status__in=["confirmed", "shipped", "delivered", "picked up"],
         )
         order_total = paid_orders.aggregate(total=Sum("total"))["total"] or Decimal("0")
+        ledger = StoreEarningsLedger.objects.exclude(status=StoreEarningsLedger.STATUS_REVERSED)
+        escrow_total = ledger.filter(status=StoreEarningsLedger.STATUS_PENDING).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
+        commission_total = ledger.aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
 
         return Response({
             "period": {"from": start, "to": today, "days": days},
@@ -122,19 +140,20 @@ class StaffViewSet(viewsets.GenericViewSet):
                 "total": User.objects.count(),
                 "active": User.objects.filter(is_active=True).count(),
                 "staff": User.objects.filter(is_staff=True).count(),
-                "new": User.objects.filter(created__date__gte=start).count(),
+                "new": User.objects.filter(date_joined__date__gte=start).count(),
             },
             "stores": {
                 "total": Store.objects.count(),
                 "active": Store.objects.filter(status=Store.STATUS_ACTIVE).count(),
                 "blocked": Store.objects.filter(status=Store.STATUS_BLOCKED).count(),
                 "new": Store.objects.filter(created__date__gte=start).count(),
+                "new_last_30_days": Store.objects.filter(created__date__gte=today - timedelta(days=29)).count(),
             },
             "products": {
                 "total": Product.objects.count(),
                 "published": Product.objects.filter(visibility=True).count(),
                 "hidden": Product.objects.filter(visibility=False).count(),
-                "out_of_stock": Product.objects.filter(available=0).count(),
+                "out_of_stock": Product.objects.filter(is_digital=False, available=0).count(),
                 "sponsored": Product.objects.filter(sponsored=True).count(),
             },
             "orders": {
@@ -145,14 +164,23 @@ class StaffViewSet(viewsets.GenericViewSet):
                 ),
                 "gross_total": format(order_total, ".2f"),
             },
+            "financials": {
+                "escrow_total": format(escrow_total, ".2f"),
+                "commission_earned": format(commission_total, ".2f"),
+            },
+            "pending_actions": {
+                "withdrawals": StorePayout.objects.filter(status=StorePayout.STATUS_PENDING).count(),
+                "refunds": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
+            },
             "coupons": {
                 "total": Coupon.objects.count(),
                 "active": Coupon.objects.filter(active=True).count(),
             },
             "refunds": {
                 "total": Refund.objects.count(),
-                "accepted": Refund.objects.filter(accepted=True).count(),
-                "pending": Refund.objects.filter(accepted=False).count(),
+                "accepted": Refund.objects.filter(status=Refund.STATUS_APPROVED).count(),
+                "declined": Refund.objects.filter(status=Refund.STATUS_DECLINED).count(),
+                "pending": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
             },
             "marketers": {"total": Marketer.objects.count()},
             "recent_orders": BackofficeOrderSerializer(
@@ -162,25 +190,57 @@ class StaffViewSet(viewsets.GenericViewSet):
             "top_stores": list(
                 Store.objects.annotate(
                     products=Count("product", distinct=True),
-                    orders=Count("product__cartitem__cart__order", distinct=True),
+                    orders=Count(
+                        "product__cartitem__cart__order",
+                        filter=Q(
+                            product__cartitem__cart__order__ordered=True,
+                            product__cartitem__cart__order__status__in=["confirmed", "shipped", "delivered", "picked up"],
+                        ),
+                        distinct=True,
+                    ),
                 )
                 .order_by("-orders", "-products", "pk")
                 .values("id", "name", "username", "status", "products", "orders")[:10]
             ),
+            "scopes": {
+                "orders": f"Last {days} days",
+                "top_stores": "All-time completed orders",
+                "recent_orders": "All-time (recent 10)",
+                "coupons": "All-time configuration",
+                "refunds": "All-time requests",
+                "products": "Current catalog inventory",
+                "users": f"Platform total (new: last {days} days)",
+                "stores": f"Platform total (new: last {days} days)",
+            },
         })
 
     @action(detail=False, methods=["get"])
     def users(self, request):
-        users = User.objects.all().order_by("-created", "-pk")
+        users = User.objects.all().order_by("-date_joined", "-pk")
         search = request.query_params.get("search")
         if search:
             users = users.filter(
                 Q(email__icontains=search)
                 | Q(first_name__icontains=search)
                 | Q(last_name__icontains=search)
+                | Q(phone1__icontains=search)
             )
+        role = request.query_params.get("role")
+        if role == "customer":
+            users = users.filter(is_staff=False, is_superuser=False, is_business_admin=False)
+        elif role == "staff":
+            users = users.filter(is_staff=True, is_superuser=False, is_business_admin=False)
+        elif role == "admin":
+            users = users.filter(Q(is_superuser=True) | Q(is_business_admin=True))
+
+        is_active = request.query_params.get("is_active")
+        if is_active in {"true", "false"}:
+            users = users.filter(is_active=is_active == "true")
+
         return self.paginate_response(users, StaffUserSerializer)
 
+    @extend_schema(request=StaffCreateSerializer, responses={201: StaffUserSerializer}, methods=["POST"])
+    @extend_schema(responses=StaffUserSerializer(many=True), methods=["GET"])
     @action(detail=False, methods=["get", "post"], url_path="staffs")
     def staffs(self, request):
         """List staff accounts or create one. Superuser/admin only."""
@@ -188,6 +248,7 @@ class StaffViewSet(viewsets.GenericViewSet):
             staff_users = User.objects.filter(
                 is_staff=True,
                 is_superuser=False,
+                is_business_admin=False,
             ).order_by("-date_joined", "-pk")
             search = request.query_params.get("search")
             if search:
@@ -210,6 +271,7 @@ class StaffViewSet(viewsets.GenericViewSet):
             pk=staff_pk,
             is_staff=True,
             is_superuser=False,
+                is_business_admin=False,
         )
 
     @action(detail=False, methods=["get"], url_path=r"staffs/(?P<staff_pk>\d+)")
@@ -219,25 +281,62 @@ class StaffViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/block")
     def block_staff(self, request, staff_pk=None):
         staff_user = self.get_managed_staff(staff_pk)
-        if staff_user.is_active:
+        if staff_user.is_active or staff_user.staff_invitation_secret:
             staff_user.is_active = False
-            staff_user.save(update_fields=["is_active"])
+            staff_user.staff_invitation_secret = ""
+            staff_user.staff_blocked_at = timezone.now()
+            staff_user.credential_version += 1
+            staff_user.save(update_fields=["is_active", "credential_version", "staff_invitation_secret", "staff_blocked_at"])
         return Response(StaffUserSerializer(staff_user).data)
 
     @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/unblock")
     def unblock_staff(self, request, staff_pk=None):
         staff_user = self.get_managed_staff(staff_pk)
+        if not staff_user.staff_email_verified:
+            return Response({"detail": "Email verification is required before activation."}, status=400)
         if not staff_user.is_active:
             staff_user.is_active = True
-            staff_user.save(update_fields=["is_active"])
+            staff_user.staff_blocked_at = None
+            staff_user.save(update_fields=["is_active", "staff_blocked_at"])
         return Response(StaffUserSerializer(staff_user).data)
 
+    @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/resend-verification")
+    def resend_staff_verification(self, request, staff_pk=None):
+        from core.onboarding import resend_staff_verification
+        staff_user = resend_staff_verification(self.get_managed_staff(staff_pk))
+        return Response({"detail": "A fresh verification email has been queued.", "staff": StaffUserSerializer(staff_user).data})
+
+    @extend_schema(request=StaffPermissionSerializer, responses=StaffUserSerializer, methods=["PATCH"])
     @action(detail=False, methods=["get", "patch"], url_path=r"users/(?P<user_pk>\d+)")
     def user_detail(self, request, user_pk=None):
         user = get_object_or_404(User, pk=user_pk)
         if request.method == "GET":
-            return Response(StaffUserSerializer(user).data)
-        if not request.user.is_superuser:
+            wallet = get_or_create_user_wallet(user)
+            ledger = wallet.transactions.order_by('-created')
+            ledger_search = request.query_params.get('ledger_search', '').strip()
+            ledger_type = request.query_params.get('ledger_type', '').strip()
+            if ledger_search:
+                ledger = ledger.filter(Q(description__icontains=ledger_search) | Q(reference__icontains=ledger_search) | Q(source__icontains=ledger_search))
+            if ledger_type in {'credit', 'debit'}:
+                ledger = ledger.filter(transaction_type=ledger_type)
+            orders = Order.objects.filter(user=user, ordered=True).order_by('-created')
+            order_search = request.query_params.get('order_search', '').strip()
+            order_status = request.query_params.get('order_status', '').strip()
+            if order_search:
+                orders = orders.filter(orderId__icontains=order_search)
+            if order_status:
+                orders = orders.filter(status=order_status)
+            activities = Notification.objects.filter(recipient=user).order_by('-created')[:30]
+            return Response({
+                'user': StaffUserSerializer(user).data,
+                'wallet': {'balance': format(wallet.balance, '.2f'), 'transactions': [
+                    {'id': tx.pk, 'type': tx.transaction_type, 'source': tx.source, 'amount': format(tx.amount, '.2f'), 'description': tx.description, 'created': tx.created}
+                    for tx in ledger[:100]
+                ]},
+                'orders': [{'id': order.pk, 'reference': order.orderId, 'created': order.created, 'status': order.status, 'total': format(order.total, '.2f')} for order in orders[:100]],
+                'activity': [{'id': item.pk, 'verb': item.verb, 'description': item.description, 'created': item.created, 'level': item.level} for item in activities],
+            })
+        if not is_admin(request.user):
             return Response(
                 {"detail": "Only an admin can change account permissions."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -253,7 +352,7 @@ class StaffViewSet(viewsets.GenericViewSet):
         store_status = request.query_params.get("status")
         if store_status:
             if store_status not in dict(Store.STATUS_CHOICES):
-                return Response({"status": "Use active or blocked."}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({"status": "Use active, blocked, or pending."}, status=status.HTTP_400_BAD_REQUEST)
             stores = stores.filter(status=store_status)
         search = request.query_params.get("search")
         if search:
@@ -262,12 +361,58 @@ class StaffViewSet(viewsets.GenericViewSet):
                 | Q(username__icontains=search)
                 | Q(user__email__icontains=search)
             )
+        ordering = request.query_params.get("ordering", "-created")
+        allowed_ordering = {"created", "-created", "name", "-name", "status", "-status"}
+        if ordering not in allowed_ordering:
+            return Response({"ordering": "Order by created, name, or status."}, status=status.HTTP_400_BAD_REQUEST)
+        stores = stores.order_by(ordering, "-pk")
         return self.paginate_response(stores, BackofficeStoreSerializer)
 
-    @action(detail=False, methods=["get"], url_path=r"stores/(?P<store_pk>\d+)")
+    @action(detail=False, methods=["get", "patch"], url_path=r"stores/(?P<store_pk>\d+)")
     def store_detail(self, request, store_pk=None):
         store = get_object_or_404(Store.objects.select_related("user", "blocked_by"), pk=store_pk)
+        if request.method == "PATCH":
+            if not is_admin(request.user):
+                return Response({"detail": "Only administrators can edit store settings."}, status=403)
+            immutable = {"name", "username"}.intersection(request.data.keys())
+            if immutable:
+                return Response({field: "Store identity is read-only for platform staff." for field in immutable}, status=400)
+            serializer = BackofficeStoreSerializer(store, data=request.data, partial=True, context={"request": request})
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
         return Response(BackofficeStoreSerializer(store, context={"request": request}).data)
+
+    @action(detail=False, methods=["get"], url_path=r"stores/(?P<store_pk>\d+)/products")
+    def store_products(self, request, store_pk=None):
+        get_object_or_404(Store, pk=store_pk)
+        products = Product.objects.filter(store_id=store_pk).order_by("-created", "-pk")
+        search = request.query_params.get("search")
+        if search:
+            products = products.filter(Q(title__icontains=search) | Q(category__icontains=search))
+        is_digital = request.query_params.get("is_digital")
+        if is_digital in ("true", "1"):
+            products = products.filter(is_digital=True)
+        elif is_digital in ("false", "0"):
+            products = products.filter(is_digital=False)
+        visibility = request.query_params.get("visibility")
+        if visibility in ("true", "1"):
+            products = products.filter(visibility=True)
+        elif visibility in ("false", "0"):
+            products = products.filter(visibility=False)
+        has_asset = request.query_params.get("has_asset")
+        if has_asset in ("true", "1"):
+            products = products.filter(is_digital=True).exclude(digital_file_url="")
+        elif has_asset in ("false", "0"):
+            products = products.filter(Q(digital_file_url="") | Q(is_digital=False))
+        ordering = request.query_params.get("ordering")
+        if ordering in ("created", "-created", "title", "-title", "price", "-price"):
+            products = products.order_by(ordering, "-pk")
+        return self.paginate_response(products, StoreAuditProductSerializer)
+
+    @action(detail=False, methods=["get"], url_path=r"products/(?P<product_pk>\d+)/digital-asset")
+    def digital_asset(self, request, product_pk=None):
+        product = get_object_or_404(Product, pk=product_pk, is_digital=True)
+        return stream_digital_asset(product)
 
     @action(detail=False, methods=["post"], url_path=r"stores/(?P<store_pk>\d+)/block")
     def block_store(self, request, store_pk=None):
@@ -293,78 +438,118 @@ class StaffViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=["get"])
     def orders(self, request):
-        orders = Order.objects.select_related("user").order_by("-created", "-pk")
+        ordering = request.query_params.get("ordering", "-created")
+        if ordering not in ("-created", "created", "-total", "total"):
+            ordering = "-created"
+        orders = Order.objects.select_related("user").order_by(ordering, "-pk")
         order_status = request.query_params.get("status")
         if order_status:
             if order_status not in dict(Order.ORDER_STATUS_CHOICE):
                 return Response({"status": "Invalid order status."}, status=status.HTTP_400_BAD_REQUEST)
             orders = orders.filter(status=order_status)
+        payment_type = request.query_params.get("payment_type")
+        if payment_type:
+            orders = orders.filter(payment_type=payment_type)
         search = request.query_params.get("search")
         if search:
-            orders = orders.filter(Q(orderId__icontains=search) | Q(user__email__icontains=search))
+            orders = orders.filter(
+                Q(orderId__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(buyer_email__icontains=search)
+                | Q(coupon_code__icontains=search)
+                | Q(tracking_number__icontains=search)
+            )
         return self.paginate_response(orders, BackofficeOrderSerializer)
+
+    @action(detail=False, methods=["post"], url_path=r"orders/(?P<order_pk>\d+)/status")
+    def override_order_status(self, request, order_pk=None):
+        serializer = OrderStatusOverrideSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        order = get_object_or_404(Order.objects.select_related("user"), pk=order_pk)
+        next_status = serializer.validated_data["status"]
+        reason = serializer.validated_data["reason"]
+        order = execute_order_status_transition(order, next_status, request.user, reason)
+        return Response(BackofficeOrderSerializer(order).data)
 
     @action(detail=False, methods=["get", "post"])
     def coupons(self, request):
         if request.method == "GET":
-            coupons = Coupon.objects.all().order_by("-created", "-pk")
+            ordering = request.query_params.get("ordering", "-created")
+            if ordering not in ("-created", "created", "-discount", "discount", "-num_used", "num_used"):
+                ordering = "-created"
+            coupons = Coupon.objects.all().order_by(ordering, "-pk")
+            active = request.query_params.get("active")
+            if active in ("true", "1"):
+                coupons = coupons.filter(active=True)
+            elif active in ("false", "0"):
+                coupons = coupons.filter(active=False)
+            search = request.query_params.get("search")
+            if search:
+                coupons = coupons.filter(code__icontains=search)
             return self.paginate_response(coupons, BackofficeCouponSerializer)
         serializer = BackofficeCouponSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        serializer.save(created_by=request.user if request.user.is_authenticated else None)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["patch", "delete"], url_path=r"coupons/(?P<coupon_pk>\d+)")
+    def coupon_detail(self, request, coupon_pk=None):
+        coupon = get_object_or_404(Coupon, pk=coupon_pk)
+        if request.method == "PATCH":
+            serializer = CouponUpdateSerializer(coupon, data=request.data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            logger.info("Coupon %s mutated by %s: %s", coupon.code, request.user, request.data)
+            return Response(BackofficeCouponSerializer(coupon).data)
+        if coupon.num_used or coupon.redemptions.exists():
+            return Response(
+                {"detail": "Used coupons must be deactivated to preserve redemption history."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if coupon.active:
+            return Response({"detail": "Deactivate this coupon before deleting it."}, status=status.HTTP_400_BAD_REQUEST)
+        coupon.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=["get"], url_path="refunds")
     def refunds(self, request):
-        refunds = Refund.objects.select_related("order", "order__user").order_by("-created", "-pk")
+        ordering = request.query_params.get("ordering", "-created")
+        if ordering not in ("-created", "created"):
+            ordering = "-created"
+        refunds = Refund.objects.select_related("order", "order__user").order_by(ordering, "-pk")
+        refund_status = request.query_params.get("status")
+        if refund_status:
+            refunds = refunds.filter(status=refund_status)
+        refund_type = request.query_params.get("refund_type")
+        if refund_type:
+            refunds = refunds.filter(refund_type=refund_type)
         search = request.query_params.get("search")
         if search:
-            refunds = refunds.filter(Q(email__icontains=search) | Q(order__orderId__icontains=search))
+            refunds = refunds.filter(
+                Q(email__icontains=search)
+                | Q(order__orderId__icontains=search)
+                | Q(reason__icontains=search)
+                | Q(provider_reference__icontains=search)
+            )
         return self.paginate_response(refunds, RefundsSerializer)
 
     @action(detail=False, methods=["post"], url_path=r"refunds/(?P<refund_pk>\d+)/process")
     def process_refund(self, request, refund_pk=None):
-        refund = get_object_or_404(Refund.objects.select_related("order", "order__user"), pk=refund_pk)
         action_type = request.data.get("action", "approve")
+        if action_type not in {"approve", "decline"}:
+            return Response({"action": "Use approve or decline."}, status=400)
+        reason = str(request.data.get("reason", "")).strip()
+        if not reason:
+            return Response({"reason": "A reason is required to process a refund."}, status=400)
+        refund = get_object_or_404(
+            Refund.objects.select_related("order", "order__user"),
+            pk=refund_pk,
+        )
         if action_type == "approve":
-            refund.accepted = True
-            refund.order.status = "refunded"
-            refund.order.save(update_fields=["status"])
-            refund.save(update_fields=["accepted"])
-
-            # Reverse merchant ledger earnings and adjust merchant wallet
-            process_refund_deduction(refund.order)
-
-            if refund.refund_type == Refund.REFUND_TYPE_STORE_CREDIT:
-                credit_user_wallet(
-                    user=refund.order.user,
-                    amount=refund.order.total,
-                    description=f"Refund store credit for Order #{refund.order.orderId}",
-                    source="refund",
-                    reference=refund.order.orderId,
-                )
-
-            create_notification(
-                recipient=refund.order.user,
-                verb=f"Refund Approved for Order #{refund.order.orderId}",
-                description=f"Your refund request for Order #{refund.order.orderId} of ${refund.order.total} has been approved."
-                + (" Store credit has been added to your ProAce Wallet." if refund.refund_type == Refund.REFUND_TYPE_STORE_CREDIT else ""),
-                data={"order_id": refund.order.pk, "refund_id": refund.pk},
-            )
+            refund = process_order_refund(refund, request.user, reason=reason)
             return Response({"detail": "Refund approved and processed.", "refund": RefundsSerializer(refund).data})
         else:
-            reason = request.data.get("reason", "Refund request declined by moderation.")
-            refund.accepted = False
-            refund.order.status = "confirmed"
-            refund.order.save(update_fields=["status"])
-            refund.save(update_fields=["accepted"])
-
-            create_notification(
-                recipient=refund.order.user,
-                verb=f"Refund Request Update for Order #{refund.order.orderId}",
-                description=f"Your refund request for Order #{refund.order.orderId} was declined. Reason: {reason}",
-                data={"order_id": refund.order.pk, "refund_id": refund.pk},
-            )
+            refund = decline_order_refund(refund, request.user, reason=reason)
             return Response({"detail": "Refund request declined.", "refund": RefundsSerializer(refund).data})
 
     @action(detail=False, methods=["get"], url_path="payouts")
@@ -374,6 +559,27 @@ class StaffViewSet(viewsets.GenericViewSet):
         if payout_status:
             payouts = payouts.filter(status=payout_status)
         return self.paginate_response(payouts, StorePayoutSerializer)
+
+    @action(detail=False, methods=["get"], url_path="commission-wallet")
+    def commission_wallet(self, request):
+        earned = StoreEarningsLedger.objects.filter(status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED]).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+        withdrawn = PlatformCommissionWithdrawal.objects.exclude(status=PlatformCommissionWithdrawal.STATUS_FAILED).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+        rows = PlatformCommissionWithdrawal.objects.select_related('requested_by').order_by('-created')[:50]
+        return Response({"earned": format(earned, '.2f'), "withdrawn_or_pending": format(withdrawn, '.2f'), "available": format(max(Decimal('0'), earned - withdrawn), '.2f'), "withdrawals": [{"id": row.pk, "amount": format(row.amount, '.2f'), "payout_method": row.payout_method, "status": row.status, "reference": row.reference, "created": row.created} for row in rows]})
+
+    @action(detail=False, methods=["post"], url_path="commission-wallet/withdraw")
+    @transaction.atomic
+    def withdraw_commission(self, request):
+        amount = Decimal(str(request.data.get('amount', '0')))
+        if amount <= 0:
+            return Response({'amount': 'Enter an amount greater than zero.'}, status=400)
+        earned = StoreEarningsLedger.objects.filter(status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED]).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+        reserved = PlatformCommissionWithdrawal.objects.exclude(status=PlatformCommissionWithdrawal.STATUS_FAILED).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+        if amount > earned - reserved:
+            return Response({'amount': 'Amount exceeds available platform commission.'}, status=400)
+        from nanoid import generate
+        row = PlatformCommissionWithdrawal.objects.create(amount=amount, payout_method=str(request.data.get('payout_method', 'bank')), account_details=request.data.get('account_details') or {}, requested_by=request.user, reference=f'PCW-{generate(size=12)}')
+        return Response({'id': row.pk, 'reference': row.reference, 'status': row.status}, status=201)
 
     @action(detail=False, methods=["post"], url_path=r"payouts/(?P<payout_pk>\d+)/process")
     def process_payout(self, request, payout_pk=None):

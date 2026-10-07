@@ -25,11 +25,15 @@ from drf_yasg import openapi
 
 schema_view = get_schema_view(
     openapi.Info(
-        title="Proace",
+        title="ProAce Multi-Vendor Commerce API",
         default_version='v1',
-        description="Official documentation",
-        contact=openapi.Contact(email="adesamad1234@gmail.com"),
-        
+        description=(
+            "Comprehensive REST API documentation for the ProAce multi-vendor e-commerce platform. "
+            "Includes endpoints for customer storefront, product catalog, cart & checkout, orders, "
+            "merchant management, and digital wallets."
+        ),
+        contact=openapi.Contact(email="developer@proace.local"),
+        license=openapi.License(name="MIT License"),
     ),
     public=True,
     permission_classes=(permissions.AllowAny,),

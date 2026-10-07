@@ -1,8 +1,12 @@
 "use client";
 import Link from "next/link";
-import { useState, useEffect, ReactNode } from "react";
+import { useState, useEffect, useRef, ReactNode } from "react";
 import {
   AlertCircle,
+  Check,
+  LoaderCircle,
+  ChevronLeft,
+  ChevronRight,
   ArrowRight,
   Heart,
   ImageOff,
@@ -14,39 +18,40 @@ import {
 import { Product, SellerTier } from "@/lib/types";
 import { money } from "@/lib/api";
 import { useShop } from "./providers";
+import { useSearchParams } from "next/navigation";
 
 export type TierLevel = 'official' | 'starter' | 'booster' | 'accelerator' | 'power' | 'mega' | 'legendary';
 
 export const tierConfig: Record<TierLevel, { color: string; label: string; title: string }> = {
   official: {
-    color: '#e5a93c', // Golden
+    color: '#d97706', // Radiant Gold
     label: 'Official Store',
-    title: 'Verified Official Partner Store (Gold Badge)',
+    title: 'Verified Official Store',
   },
   starter: {
-    color: '#1d9bf0', // Blue
+    color: '#2563eb', // Sapphire Blue
     label: 'Starter Seller',
     title: 'Verified Starter Seller (Blue Badge)',
   },
   booster: {
-    color: '#94a3b8', // Silver / Slate
+    color: '#64748b', // Slate Silver
     label: 'Booster Seller',
     title: 'Verified Booster Seller ($5,000+ Sales - Silver Badge)',
   },
   accelerator: {
-    color: '#8b5cf6', // Electric Violet
+    color: '#7c3aed', // Electric Purple
     label: 'Accelerator Seller',
     title: 'Verified Accelerator Seller ($25,000+ Sales - Purple Badge)',
   },
   power: {
-    color: '#10b981', // Emerald Green
+    color: '#059669', // Emerald Green
     label: 'Power Seller',
     title: 'Verified Power Seller ($100,000+ Sales - Emerald Badge)',
   },
   mega: {
-    color: '#0ea5e9', // Diamond Cyan
+    color: '#ea580c', // Flame Orange
     label: 'Mega Seller',
-    title: 'Verified Mega Seller ($500,000+ Sales - Diamond Badge)',
+    title: 'Verified Mega Seller ($500,000+ Sales - Flame Orange Badge)',
   },
   legendary: {
     color: '#ff0055', // Cosmic Ruby Flame
@@ -152,108 +157,132 @@ export function ProductImage({
     </div>
   );
 }
+export function ProductGallery({ images, title, discount, activeImage, onImageChange }: { images: string[]; title: string; discount: number; activeImage?: string; onImageChange?: (image: string) => void }) {
+  const photos = [...new Set(images.filter(Boolean))];
+  const [selected, setSelected] = useState(0);
+  const touchStart = useRef<number | null>(null);
+  const mappedIndex = activeImage ? photos.indexOf(activeImage) : -1;
+  const current = mappedIndex >= 0 ? mappedIndex : Math.min(selected, Math.max(0, photos.length - 1));
+  const selectPhoto = (index: number) => {
+    setSelected(index);
+    onImageChange?.(photos[index]);
+  };
+  const move = (direction: number) => selectPhoto((current + direction + photos.length) % photos.length);
+
+  return (
+    <div className="gallery" role="region" aria-roledescription="carousel" aria-label={`${title} photos`}>
+      <div className="gallery-main" tabIndex={photos.length > 1 ? 0 : undefined}
+        onKeyDown={event => {
+          if (photos.length < 2) return;
+          if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            move(event.key === 'ArrowLeft' ? -1 : 1);
+          }
+        }}
+        onTouchStart={event => { touchStart.current = event.touches[0].clientX; }}
+        onTouchEnd={event => {
+          if (touchStart.current !== null && photos.length > 1) {
+            const distance = event.changedTouches[0].clientX - touchStart.current;
+            if (Math.abs(distance) > 50) move(distance > 0 ? -1 : 1);
+          }
+          touchStart.current = null;
+        }}
+        onTouchCancel={() => { touchStart.current = null; }}>
+        <ProductImage key={photos[current] || 'placeholder'} src={photos[current]} alt={`${title} — photo ${current + 1}`} />
+        {discount > 0 && <span className="discount">Save {discount}%</span>}
+        {photos.length > 1 && <>
+          <button type="button" className="gallery-arrow gallery-arrow-prev" aria-label="Previous product photo" onClick={() => move(-1)}><ChevronLeft size={22} /></button>
+          <button type="button" className="gallery-arrow gallery-arrow-next" aria-label="Next product photo" onClick={() => move(1)}><ChevronRight size={22} /></button>
+          <span className="gallery-counter" aria-live="polite" aria-atomic="true">{current + 1} / {photos.length}</span>
+        </>}
+      </div>
+      {photos.length > 1 && <div className="gallery-thumbs">
+        {photos.map((src, index) => <button type="button" key={src} aria-label={`View photo ${index + 1}`} aria-pressed={current === index} className={current === index ? 'active' : ''} onClick={() => selectPhoto(index)}><ProductImage src={src} alt={`${title} view ${index + 1}`} /></button>)}
+      </div>}
+    </div>
+  );
+}
+
 export function FlashCountdown({ end }: { end?: string | null }) {
-  const [timeLeft, setTimeLeft] = useState<{ hours: number; minutes: number; seconds: number; expired: boolean } | null>(null);
+  const [timeLeft, setTimeLeft] = useState<{ months: number; days: number; hours: number; seconds: number; expired: boolean } | null>(null);
 
   useEffect(() => {
     if (!end) return;
     function calculate() {
       const diff = new Date(end!).getTime() - new Date().getTime();
-      if (diff <= 0) {
-        setTimeLeft({ hours: 0, minutes: 0, seconds: 0, expired: true });
+      if (!Number.isFinite(diff) || diff <= 0) {
+        setTimeLeft({ months: 0, days: 0, hours: 0, seconds: 0, expired: true });
         return;
       }
-      const hours = Math.floor(diff / (1000 * 60 * 60));
-      const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+      const totalHours = Math.floor(diff / (1000 * 60 * 60));
+      const totalDays = Math.floor(totalHours / 24);
+      // Countdown months use a fixed 30-day duration.
+      const months = Math.floor(totalDays / 30);
+      const days = totalDays % 30;
+      const hours = totalHours % 24;
       const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-      setTimeLeft({ hours, minutes, seconds, expired: false });
+      setTimeLeft({ months, days, hours, seconds, expired: false });
     }
     calculate();
     const interval = setInterval(calculate, 1000);
     return () => clearInterval(interval);
   }, [end]);
 
-  if (!timeLeft || timeLeft.expired) return null;
+  if (!end || !timeLeft || timeLeft.expired) return null;
 
   const pad = (n: number) => String(n).padStart(2, '0');
 
   return (
     <span
       className="flash-deal-badge"
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 3,
-        background: "#fee2e2",
-        color: "#dc2626",
-        padding: "1px 6px",
-        borderRadius: "8px",
-        fontSize: "10px",
-        fontWeight: 700,
-        letterSpacing: "0.02em"
-      }}
-      title="Limited-time Flash Deal"
+      title="Flash deal ends in months:days:hours:seconds (30-day months)"
+      aria-label={`Flash deal ends in ${timeLeft.months} months, ${timeLeft.days} days, ${timeLeft.hours} hours and ${timeLeft.seconds} seconds`}
     >
-      <span>⚡</span>
-      <span>{timeLeft.hours > 0 ? `${pad(timeLeft.hours)}:` : ''}{pad(timeLeft.minutes)}:{pad(timeLeft.seconds)}</span>
+      <span aria-hidden="true">⚡</span>
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+        {pad(timeLeft.months)}:{pad(timeLeft.days)}:{pad(timeLeft.hours)}:{pad(timeLeft.seconds)}
+      </span>
     </span>
   );
 }
 
 export function ProductCard({ product }: { product: Product }) {
-  const { saved, toggleSave, add, notify } = useShop();
-  const [busy, setBusy] = useState(false);
+  const { saved, toggleSave, notify, user } = useShop();
+  const params = useSearchParams();
+  const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
+  const productHref = `/products/${product.id}${preview ? '?preview=1' : ''}`;
   const liked = saved.some((item) => item.id === product.id);
   return (
     <article className="product-card">
       <div className="product-photo">
         <Link
-          href={`/products/${product.id}`}
+          href={productHref}
           aria-label={`View ${product.title}`}
         >
           <ProductImage src={product.image} alt={product.title} />
         </Link>
-        <div style={{ position: "absolute", top: 8, left: 8, display: "flex", flexDirection: "column", gap: 4, zIndex: 1 }}>
-          {product.discount > 0 && (
-            <span className="discount">−{product.discount}%</span>
-          )}
-          {product.flash_sale_end && (
-            <FlashCountdown end={product.flash_sale_end} />
-          )}
-        </div>
+        {(product.flash_sale_end || product.discount > 0) && (
+          <div className="product-badges">
+            {product.flash_sale_end && (
+              <FlashCountdown end={product.flash_sale_end} />
+            )}
+            {product.discount > 0 && (
+              <span className="discount">−{product.discount}%</span>
+            )}
+          </div>
+        )}
         <button
           className={`icon-button save-button ${liked ? "saved" : ""}`}
           aria-label={`${liked ? "Unsave" : "Save"} ${product.title}`}
           title={liked ? "Remove from saved items" : "Save for later"}
+          disabled={preview}
           onClick={() =>
             toggleSave(product).catch((error) => notify(error.message, true))
           }
         >
           <Heart size={18} fill={liked ? "currentColor" : "none"} />
         </button>
-        <button
-          className="quick-add"
-          disabled={busy || !product.available || product.is_own_store}
-          onClick={async () => {
-            setBusy(true);
-            try {
-              await add(product);
-            } catch (error) {
-              notify((error as Error).message, true);
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          <Plus size={16} />
-          {product.is_own_store
-            ? "Your listing"
-            : !product.available
-              ? "Sold out"
-              : busy
-                ? "Adding…"
-                : "Add to bag"}
-        </button>
+        <AddToBagButton product={product} className="quick-add" />
       </div>
       <div className="product-meta">
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -271,7 +300,7 @@ export function ProductCard({ product }: { product: Product }) {
             : "New"}
         </span>
       </div>
-      <Link className="product-title" href={`/products/${product.id}`}>
+      <Link className="product-title" href={productHref}>
         {product.title}
       </Link>
       <div className="price">
@@ -406,4 +435,70 @@ export function Field({
       {children}
     </label>
   );
+}
+
+export function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (page: number) => void }) {
+  if (totalPages <= 1) return null;
+  const current = Math.max(1, Math.min(page, totalPages));
+  const pages = [...new Set([1, totalPages, current - 1, current, current + 1].filter(value => value >= 1 && value <= totalPages))].sort((a, b) => a - b);
+  return <nav className="pagination" aria-label="Pagination">
+    <button aria-label="Previous page" disabled={current === 1} onClick={() => onChange(current - 1)}>‹</button>
+    <span className="pagination-compact" aria-live="polite">Page {current} of {totalPages}</span>
+    <span className="pagination-pages">{pages.map((value, index) => <span key={value}>{index > 0 && value - pages[index - 1] > 1 && <span className="pagination-ellipsis" aria-hidden="true">…</span>}<button aria-label={`Page ${value}`} aria-current={value === current ? 'page' : undefined} className={value === current ? 'active' : ''} onClick={() => onChange(value)}>{value}</button></span>)}</span>
+    <button aria-label="Next page" disabled={current === totalPages} onClick={() => onChange(current + 1)}>›</button>
+  </nav>;
+}
+
+export function AddToBagButton({ product, quantity = 1, className = 'button' }: { product: Product; quantity?: number; className?: string }) {
+  const { cart, add, notify, cartLoading, cartError, user } = useShop();
+  const params = useSearchParams();
+  const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
+  const [busy, setBusy] = useState(false);
+  const [added, setAdded] = useState(false);
+  const locked = useRef(false);
+  const current = cart.items.find(row => row.product.id === product.id)?.quantity || 0;
+  const committed = current >= quantity;
+  const capped = !product.is_digital && current >= product.available;
+  useEffect(() => {
+    if (!added) return;
+    const timer = window.setTimeout(() => setAdded(false), 1800);
+    return () => window.clearTimeout(timer);
+  }, [added]);
+  async function submit() {
+    if (locked.current || committed) return;
+    locked.current = true;
+    setBusy(true);
+    try { await add(product, quantity - current); setAdded(true); }
+    catch (error) { notify((error as Error).message, true); }
+    finally { locked.current = false; setBusy(false); }
+  }
+  const label = preview ? 'Preview only' : product.is_own_store ? 'Your listing' : product.store_verified === false ? 'Preview only' : !product.is_digital && !product.available ? 'Out of stock' : busy ? 'Adding…' : capped ? 'Max quantity in bag' : added ? 'Added!' : committed ? `${current} in bag` : 'Add to bag';
+  return <button type="button" className={className} disabled={preview || busy || cartLoading || !!cartError || committed || (!product.is_digital && (!product.available || quantity > product.available)) || product.is_own_store || product.store_verified === false} onClick={submit} aria-busy={busy}>
+    {busy ? <LoaderCircle className="bag-spinner" size={16} /> : added || committed ? <Check size={16} /> : <Plus size={16} />}{label}
+  </button>;
+}
+
+export function useDialogFocus(open: boolean, close: () => void) {
+  const ref = useRef<HTMLElement>(null);
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const controls = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select, textarea, a[href]') || []);
+    controls()[0]?.focus();
+    const keyboard = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeRef.current();
+      if (event.key !== 'Tab') return;
+      const items = controls();
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    };
+    document.addEventListener('keydown', keyboard);
+    return () => { document.body.style.overflow = overflow; document.removeEventListener('keydown', keyboard); previous?.focus(); };
+  }, [open]);
+  return ref;
 }

@@ -144,3 +144,13 @@ The normal application startup check currently stops at the pre-existing
 `event_notification.apps.EventNotificationConfig` setting: the local package is
 named `notification`. Full-project startup and optional integrations have not
 been validated by this isolated merchant test suite.
+
+## Back-office roles and shipping
+
+See the [endpoint permission matrix and staff onboarding](../../docs/access-control.md)
+and [carrier setup and checkout API](../../docs/shipping-integrations.md).
+Apply the new core, store, and payment migrations before starting this version.
+Staff/admin accounts use operational workspaces and cannot shop. Grafana requires
+technical-admin credentials; anonymous access is disabled.
+
+See [UI components and live event pipeline](../../docs/ui-and-events.md) for responsive conventions, pagination, carrier selection, cart states, scoped SSE events, and verification procedures.

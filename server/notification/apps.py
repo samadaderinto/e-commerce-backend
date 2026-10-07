@@ -5,3 +5,6 @@ class EventNotificationConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "notification"
     label = "event_notification"
+
+    def ready(self):
+        from . import events  # noqa: F401

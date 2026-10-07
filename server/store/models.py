@@ -12,6 +12,7 @@ from nanoid import generate
 
 
 class Store(DatesMixin):
+    assigned_staff = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="assigned_stores")
     STATUS_PENDING = "pending"
     STATUS_ACTIVE = "active"
     STATUS_BLOCKED = "blocked"
@@ -21,7 +22,7 @@ class Store(DatesMixin):
         (STATUS_BLOCKED, "blocked"),
     )
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
     username = models.CharField(max_length=17, unique=True)
     name = models.CharField(max_length=40)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
@@ -184,7 +185,9 @@ class StoreEarningsLedger(DatesMixin):
     )
     store = models.ForeignKey(
         Store,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
         related_name="ledger_entries",
     )
     order = models.ForeignKey(
@@ -229,7 +232,7 @@ class StorePayout(DatesMixin):
         (METHOD_STRIPE_CONNECT, "Stripe Connect"),
     )
 
-    store = models.ForeignKey('Store', on_delete=models.CASCADE, related_name='payouts', null=True, blank=True)
+    store = models.ForeignKey('Store', on_delete=models.SET_NULL, related_name='payouts', null=True, blank=True)
     wallet = models.ForeignKey(
         MerchantWallet,
         on_delete=models.SET_NULL,

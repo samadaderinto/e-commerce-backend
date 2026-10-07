@@ -130,7 +130,26 @@ class RefundsSerializer(serializers.ModelSerializer):
             "reason",
             "refund_type",
             "accepted",
+            "status",
+            "processed_by",
+            "processed_at",
+            "provider_reference",
+            "failure_reason",
+            "selected_items",
+            "refund_amount",
+            "processing_reason",
             'created',
+        ]
+        read_only_fields = [
+            "accepted",
+            "status",
+            "processed_by",
+            "processed_at",
+            "provider_reference",
+            "failure_reason",
+            "refund_amount",
+            "processing_reason",
+            "created",
         ]
 
 

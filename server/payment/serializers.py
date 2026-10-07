@@ -29,6 +29,7 @@ class OrdersSerializer(serializers.ModelSerializer):
             "shipped_at",
             "delivered_at",
             "tracking_events",
+            "shipping_snapshot",
             "items_snapshot",
             "address_snapshot",
         ]

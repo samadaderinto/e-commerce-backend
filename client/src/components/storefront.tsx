@@ -27,6 +27,7 @@ import {
   Truck,
   ShieldCheck,
   Store as StoreIcon,
+  Trash2,
   X,
 } from "lucide-react";
 import { api, categories, money } from "@/lib/api";
@@ -38,6 +39,9 @@ import {
   FlashCountdown,
   Loading,
   ProductGrid,
+  Pagination,
+  AddToBagButton,
+  ProductGallery,
   ProductImage,
   Quantity,
   VerifiedBadge,
@@ -168,6 +172,7 @@ export function HomePage() {
 
 export function ShopPage() {
   const params = useSearchParams();
+  const { user } = useShop();
   const router = useRouter();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const query = params.toString();
@@ -190,6 +195,13 @@ export function ShopPage() {
   const firstProduct = products.data?.results?.[0];
   const storeName = storeData?.name || firstProduct?.store_name || (storeId ? `Store #${storeId}` : null);
   const isOfficialStore = Boolean(storeData?.is_official ?? firstProduct?.is_official_store);
+  const isPreview = Boolean(
+    params.get('preview') === '1' ||
+    ((user?.is_staff || user?.is_superuser || user?.is_business_admin) && storeId) ||
+    storeData?.is_preview ||
+    (storeData && storeData.is_verified === false) ||
+    (firstProduct && firstProduct.store_verified === false)
+  );
 
   const title = storeName
     ? storeName
@@ -228,6 +240,28 @@ export function ShopPage() {
         )}
       </div>
 
+      {isPreview && (
+        <div className="storefront-preview-banner">
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <span style={{ fontSize: "22px" }}>🔒</span>
+            <div>
+              <div className="storefront-preview-title">
+                Storefront Preview Mode (Private)
+              </div>
+              <div className="storefront-preview-desc">
+                This is a read-only backoffice audit. Purchasing, cart, wishlist, and other customer transactions are disabled.
+              </div>
+            </div>
+          </div>
+          <Link
+            href="/admin/stores"
+            className="button secondary storefront-preview-button"
+          >
+            Back to store governance
+          </Link>
+        </div>
+      )}
+
       {storeName && storeId ? (
         <section
           className="store-profile-header"
@@ -236,7 +270,7 @@ export function ShopPage() {
             border: "1px solid var(--line)",
             borderRadius: "12px",
             overflow: "hidden",
-            background: "#fff",
+            background: "var(--paper)",
             boxShadow: "0 1px 4px rgba(0,0,0,0.04)"
           }}
         >
@@ -254,21 +288,9 @@ export function ShopPage() {
 
           {/* Announcement Bar */}
           {storeProfile?.announcement && (
-            <div
-              style={{
-                background: "linear-gradient(90deg, #ecfdf5 0%, #f0fdf4 100%)",
-                borderBottom: "1px solid #a7f3d0",
-                padding: "8px 24px",
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                fontSize: "12px",
-                fontWeight: 600,
-                color: "#065f46"
-              }}
-            >
+            <div className="storefront-announcement-bar">
               <span>📢</span>
-              <span>{storeProfile.announcement}</span>
+              <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{storeProfile.announcement}</span>
             </div>
           )}
 
@@ -291,9 +313,9 @@ export function ShopPage() {
                   width: "100px",
                   height: "100px",
                   borderRadius: "50%",
-                  border: "4px solid #fff",
+                  border: "4px solid var(--paper)",
                   overflow: "hidden",
-                  background: "#edf2ea",
+                  background: "var(--green-light)",
                   boxShadow: "0 4px 12px rgba(0,0,0,0.12)",
                   display: "grid",
                   placeItems: "center",
@@ -365,45 +387,29 @@ export function ShopPage() {
                 <h1 style={{ fontSize: "26px", margin: 0, fontWeight: 750, letterSpacing: "-0.02em" }}>
                   {storeName}
                 </h1>
-                <VerifiedBadge
-                  tier={isOfficialStore ? "official" : "starter"}
-                  tierData={storeData?.seller_tier || firstProduct?.seller_tier}
-                  size={22}
-                />
+                {!isPreview && (
+                  <VerifiedBadge
+                    tier={isOfficialStore ? "official" : "starter"}
+                    tierData={storeData?.seller_tier || firstProduct?.seller_tier}
+                    size={22}
+                  />
+                )}
                 <span
-                  style={{
-                    fontSize: "10px",
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                    padding: "3px 9px",
-                    borderRadius: "12px",
-                    background: isOfficialStore
-                      ? "#fef3c7"
-                      : (storeData?.seller_tier?.tier === "legendary"
-                          ? "#ffe4e6"
-                          : storeData?.seller_tier?.tier === "mega"
-                            ? "#e0f2fe"
-                            : storeData?.seller_tier?.tier === "power"
-                              ? "#d1fae5"
-                              : storeData?.seller_tier?.tier === "accelerator"
-                                ? "#ede9fe"
-                                : storeData?.seller_tier?.tier === "booster"
-                                  ? "#f1f5f9"
-                                  : "#e0f2fe"),
-                    color: isOfficialStore
-                      ? "#b45309"
-                      : (storeData?.seller_tier?.tier === "booster"
-                          ? "#475569"
-                          : storeData?.seller_tier?.badge_hex || "#1d9bf0"),
-                    border: storeData?.seller_tier?.tier === "legendary" ? "1px solid #fecdd3" : "none",
-                    letterSpacing: "0.05em"
-                  }}
+                  className={`seller-tier-pill tier-${
+                    isPreview
+                      ? "preview"
+                      : isOfficialStore
+                        ? "official"
+                        : (storeData?.seller_tier?.tier || "starter")
+                  }`}
                 >
-                  {isOfficialStore
-                    ? "Official Partner Store (Gold)"
-                    : (storeData?.seller_tier?.name
-                        ? `${storeData.seller_tier.name}`
-                        : "Verified Merchant")}
+                  {isPreview
+                    ? "Unverified (Preview Mode)"
+                    : isOfficialStore
+                      ? "Official Store"
+                      : (storeData?.seller_tier?.name
+                          ? `${storeData.seller_tier.name}`
+                          : "Verified Merchant")}
                 </span>
               </div>
               <p className="muted" style={{ fontSize: "13px", margin: "4px 0 0" }}>
@@ -486,8 +492,8 @@ export function ShopPage() {
               minHeight: "34px",
               fontSize: "11px",
               borderRadius: "20px",
-              background: !params.has("category") ? "var(--green)" : "white",
-              color: !params.has("category") ? "white" : "var(--ink)",
+              background: !params.has("category") ? "var(--green)" : "var(--paper)",
+              color: !params.has("category") ? "var(--button-text)" : "var(--ink)",
               borderColor: !params.has("category") ? "var(--green)" : "var(--line)"
             }}
             onClick={() => update("category", "")}
@@ -505,8 +511,8 @@ export function ShopPage() {
                   minHeight: "34px",
                   fontSize: "11px",
                   borderRadius: "20px",
-                  background: active ? "var(--green)" : "white",
-                  color: active ? "white" : "var(--ink)",
+                  background: active ? "var(--green)" : "var(--paper)",
+                  color: active ? "var(--button-text)" : "var(--ink)",
                   borderColor: active ? "var(--green)" : "var(--line)",
                   whiteSpace: "nowrap"
                 }}
@@ -648,21 +654,7 @@ export function ShopPage() {
             <ProductGrid products={products.data.results} />
           )}
           {products.data && products.data.pages! > 1 && (
-            <div className="pagination">
-              {Array.from({ length: products.data.pages! }, (_, index) => (
-                <button
-                  className={
-                    Number(params.get("page") || 1) === index + 1
-                      ? "active"
-                      : ""
-                  }
-                  key={index}
-                  onClick={() => update("page", String(index + 1))}
-                >
-                  {index + 1}
-                </button>
-              ))}
-            </div>
+            <Pagination page={Number(params.get("page") || 1)} totalPages={products.data.pages!} onChange={page => update("page", String(page))} />
           )}
         </div>
       </div>
@@ -672,6 +664,8 @@ export function ShopPage() {
 
 export function ProductPage({ id }: { id: string }) {
   const { add, notify, toggleSave, saved, user } = useShop();
+  const params = useSearchParams();
+  const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const client = useQueryClient();
   const productQuery = useQuery({
     queryKey: ["product", id],
@@ -688,11 +682,11 @@ export function ProductPage({ id }: { id: string }) {
     enabled: !!productQuery.data,
   });
   const [quantity, setQuantity] = useState(1);
-  const [image, setImage] = useState(0);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("details");
   const [reviewBusy, setReviewBusy] = useState(false);
   const [selectedVariantIdx, setSelectedVariantIdx] = useState<number>(0);
+  const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   if (productQuery.isLoading) return <Loading />;
   if (productQuery.error)
     return (
@@ -703,7 +697,7 @@ export function ProductPage({ id }: { id: string }) {
     );
   const product = productQuery.data!;
   const activeVariant = product.variants && product.variants.length > 0 ? product.variants[selectedVariantIdx] : null;
-  const effectiveStock = activeVariant && typeof activeVariant.available === 'number' ? activeVariant.available : product.available;
+  const effectiveStock = product.is_digital ? 99 : activeVariant && typeof activeVariant.available === 'number' ? activeVariant.available : product.available;
   const variantPriceDelta = activeVariant?.price_delta ? Number(activeVariant.price_delta) : 0;
   const effectiveSalePrice = (Number(product.sale_price) + variantPriceDelta).toFixed(2);
   const effectiveOriginalPrice = (Number(product.price) + variantPriceDelta).toFixed(2);
@@ -735,6 +729,18 @@ export function ProductPage({ id }: { id: string }) {
       setReviewBusy(false);
     }
   }
+
+  async function deleteReview(reviewId: number) {
+    if (!window.confirm("Are you sure you want to delete this review?")) return;
+    try {
+      await api(`products/${id}/reviews?review_id=${reviewId}`, "DELETE");
+      await client.invalidateQueries({ queryKey: ["reviews", id] });
+      await client.invalidateQueries({ queryKey: ["product", id] });
+      notify("Review removed successfully");
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
+  }
   return (
     <div className="container product-page">
       <div className="breadcrumb">
@@ -744,43 +750,39 @@ export function ProductPage({ id }: { id: string }) {
         <ChevronRight size={12} />
         <span>{product.title}</span>
       </div>
-      <div className="product-detail">
-        <div className="gallery">
-          <div className="gallery-main">
-            <ProductImage
-              src={product.images[image] || product.image}
-              alt={product.title}
-            />
-            {product.discount > 0 && (
-              <span className="discount">Save {product.discount}%</span>
-            )}
-          </div>
-          {product.images.length > 1 && (
-            <div className="gallery-thumbs">
-              {product.images.map((src, index) => (
-                <button
-                  aria-label={`View photo ${index + 1}`}
-                  className={image === index ? "active" : ""}
-                  key={src}
-                  onClick={() => setImage(index)}
-                >
-                  <ProductImage
-                    src={src}
-                    alt={`${product.title} view ${index + 1}`}
-                  />
-                </button>
-              ))}
+      {product.store_verified === false && (
+        <div className="storefront-preview-banner">
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <span style={{ fontSize: "20px" }}>🔒</span>
+            <div>
+              <div className="storefront-preview-title">
+                Product Preview Mode (Private)
+              </div>
+              <div className="storefront-preview-desc">
+                This product belongs to an unverified store. It is visible only to you and staff, and is hidden from public shoppers.
+              </div>
             </div>
-          )}
+          </div>
+          <Link
+            href="/merchant"
+            className="button secondary storefront-preview-button"
+          >
+            Store Manager
+          </Link>
         </div>
+      )}
+      <div className="product-detail">
+        <ProductGallery key={product.id} images={[...product.images, product.image, ...(product.variants || []).map(variant => variant.image_url || '')]} title={product.title} discount={product.discount} activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? product.image} onImageChange={setSelectedGalleryImage} />
         <div className="product-information">
           <span className="eyebrow green" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
             {product.brand || product.store_name}
-            <VerifiedBadge
-              tier={product.is_official_store ? "official" : "starter"}
-              tierData={product.seller_tier}
-              size={14}
-            />
+            {product.store_verified !== false && (
+              <VerifiedBadge
+                tier={product.is_official_store ? "official" : "starter"}
+                tierData={product.seller_tier}
+                size={14}
+              />
+            )}
           </span>
           <h1>{product.title}</h1>
           <div className="rating-line" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -834,12 +836,16 @@ export function ProductPage({ id }: { id: string }) {
                     <button
                       key={idx}
                       type="button"
-                      onClick={() => setSelectedVariantIdx(idx)}
+                      aria-pressed={isSelected}
+                      onClick={() => {
+                        setSelectedVariantIdx(idx);
+                        setSelectedGalleryImage(variant.image_url || product.image);
+                      }}
                       style={{
                         padding: "6px 14px",
                         borderRadius: "8px",
                         border: isSelected ? "2px solid var(--green)" : "1px solid var(--line)",
-                        background: isSelected ? "#f0fdf4" : "#fff",
+                        background: isSelected ? "var(--green-light)" : "var(--paper)",
                         color: isSelected ? "var(--green)" : "var(--ink)",
                         fontWeight: isSelected ? 600 : 500,
                         fontSize: "13px",
@@ -868,50 +874,28 @@ export function ProductPage({ id }: { id: string }) {
 
           <div className={`stock ${effectiveStock ? "" : "sold-out"}`}>
             <span />
-            {effectiveStock > 5
+            {product.is_digital
+              ? "Unlimited digital inventory"
+              : effectiveStock > 5
               ? "In stock. Ready for your everyday."
               : effectiveStock
                 ? `Only ${effectiveStock} left in stock`
                 : "Currently out of stock"}
           </div>
-          <label className="field">
+          {!product.is_digital && <label className="field">
             <span>Quantity</span>
             <Quantity
               value={quantity}
               max={effectiveStock}
               onChange={setQuantity}
             />
-          </label>
+          </label>}
           <div className="purchase-actions">
-            <button
-              className="button"
-              disabled={busy || !effectiveStock || product.is_own_store}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await add({
-                    ...product,
-                    title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title,
-                    sale_price: effectiveSalePrice,
-                    price: effectiveOriginalPrice,
-                  }, quantity);
-                } catch (error) {
-                  notify((error as Error).message, true);
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              {product.is_own_store
-                ? "Your listing"
-                : busy
-                  ? "Adding…"
-                  : "Add to bag"}
-              <ArrowRight size={18} />
-            </button>
+            <AddToBagButton quantity={quantity} product={{ ...product, available: effectiveStock, title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title, sale_price: effectiveSalePrice, price: effectiveOriginalPrice }} />
             <button
               className={`button secondary ${liked ? "saved" : ""}`}
               aria-label="Save product"
+              disabled={preview}
               onClick={() =>
                 toggleSave(product).catch((error) =>
                   notify(error.message, true),
@@ -961,7 +945,7 @@ export function ProductPage({ id }: { id: string }) {
               alignItems: "center",
               justifyContent: "space-between",
               padding: "12px 16px",
-              background: "#f8fafc",
+              background: "var(--soft)",
               border: "1px solid var(--line)",
               borderRadius: "10px",
               textDecoration: "none",
@@ -975,10 +959,10 @@ export function ProductPage({ id }: { id: string }) {
                   width: "36px",
                   height: "36px",
                   borderRadius: "50%",
-                  background: product.is_official_store ? "#fef3c7" : "#edf2ea",
+                  background: product.is_official_store ? "rgba(217, 119, 6, 0.16)" : "var(--green-light)",
                   display: "grid",
                   placeItems: "center",
-                  color: product.is_official_store ? "#b45309" : "var(--green)",
+                  color: product.is_official_store ? "#d97706" : "var(--green)",
                   flexShrink: 0
                 }}
               >
@@ -1050,6 +1034,61 @@ export function ProductPage({ id }: { id: string }) {
                   </dd>
                 </div>
               </dl>
+              {(product.specifications || product.weight || product.length || product.width || product.height) && (
+                <div style={{ marginTop: "24px" }}>
+                  <h3 style={{ fontSize: "15px", fontWeight: 700, marginBottom: "12px", color: "var(--ink)" }}>
+                    Technical Specifications & Dimensions
+                  </h3>
+                  <div className="table-scroll">
+                    <table style={{ width: "100%", fontSize: "13px" }}>
+                      <tbody>
+                        {product.specifications?.serial && (
+                          <tr>
+                            <td style={{ fontWeight: 600, width: "35%", color: "var(--muted)" }}>Serial / Part Number</td>
+                            <td>{product.specifications.serial}</td>
+                          </tr>
+                        )}
+                        {product.specifications?.color && (
+                          <tr>
+                            <td style={{ fontWeight: 600, color: "var(--muted)" }}>Color</td>
+                            <td>{product.specifications.color}</td>
+                          </tr>
+                        )}
+                        {(product.specifications?.weight || product.weight) && (
+                          <tr>
+                            <td style={{ fontWeight: 600, color: "var(--muted)" }}>Weight</td>
+                            <td>{product.specifications?.weight || `${product.weight} lbs`}</td>
+                          </tr>
+                        )}
+                        {(product.specifications?.height || product.height) && (
+                          <tr>
+                            <td style={{ fontWeight: 600, color: "var(--muted)" }}>Height</td>
+                            <td>{product.specifications?.height || `${product.height} in`}</td>
+                          </tr>
+                        )}
+                        {(product.specifications?.width || product.width) && (
+                          <tr>
+                            <td style={{ fontWeight: 600, color: "var(--muted)" }}>Width</td>
+                            <td>{product.specifications?.width || `${product.width} in`}</td>
+                          </tr>
+                        )}
+                        {(product.specifications?.breadth || product.length) && (
+                          <tr>
+                            <td style={{ fontWeight: 600, color: "var(--muted)" }}>Length / Breadth</td>
+                            <td>{product.specifications?.breadth || `${product.length} in`}</td>
+                          </tr>
+                        )}
+                        {product.specifications?.attributes && (
+                          <tr>
+                            <td style={{ fontWeight: 600, color: "var(--muted)" }}>Additional Attributes</td>
+                            <td>{product.specifications.attributes}</td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </>
           ) : tab === "delivery" ? (
             <>
@@ -1081,20 +1120,7 @@ export function ProductPage({ id }: { id: string }) {
                           {"☆".repeat(5 - item.rating)}
                         </span>
                         {item.is_verified_buyer && (
-                          <span
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: 4,
-                              fontSize: "11px",
-                              fontWeight: 600,
-                              color: "#059669",
-                              background: "#ecfdf5",
-                              padding: "2px 8px",
-                              borderRadius: "12px",
-                              border: "1px solid #a7f3d0"
-                            }}
-                          >
+                          <span className="storefront-verified-buyer">
                             <Check size={12} strokeWidth={2.5} /> Verified Buyer
                           </span>
                         )}
@@ -1124,7 +1150,7 @@ export function ProductPage({ id }: { id: string }) {
                                 overflow: "hidden",
                                 border: "1px solid var(--line)",
                                 display: "block",
-                                background: "#f8fafc"
+                                background: "var(--soft)"
                               }}
                             >
                               <img
@@ -1136,10 +1162,24 @@ export function ProductPage({ id }: { id: string }) {
                           ))}
                         </div>
                       )}
-                      <small>
-                        {item.author || "ProAce customer"} ·{" "}
-                        {new Date(item.created).toLocaleDateString()}
-                      </small>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
+                        <small>
+                          {item.author || "ProAce customer"} ·{" "}
+                          {new Date(item.created).toLocaleDateString()}
+                        </small>
+                        {(item.can_moderate || item.is_own_review) && (
+                          <button
+                            type="button"
+                            className="icon-button"
+                            title={item.is_own_review ? "Delete your review" : "Moderate / remove review"}
+                            aria-label={item.is_own_review ? "Delete your review" : "Moderate / remove review"}
+                            style={{ color: "var(--rose, #e11d48)", padding: "4px" }}
+                            onClick={() => deleteReview(item.id)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
                     </article>
                   ))
                 ) : (

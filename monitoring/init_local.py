@@ -4,8 +4,8 @@ import secrets
 import subprocess
 import string
 
-server_root = Path(__file__).resolve().parent.parent
-env_path = server_root / '.env'
+repo_root = Path(__file__).resolve().parent.parent
+env_path = repo_root / 'server' / '.env' if (repo_root / 'server').exists() else repo_root / '.env'
 
 
 def _random_password(length=24):
@@ -47,14 +47,17 @@ if missing:
     print(f'Generated {len(missing)} missing credential(s) in .env')
 
 network = existing.get('COMMERCE_NETWORK', 'commerce-network')
-inspection = subprocess.run(
-    ['docker', 'network', 'inspect', network],
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-    check=False,
-)
-if inspection.returncode:
-    subprocess.run(['docker', 'network', 'create', network], check=True)
+try:
+    inspection = subprocess.run(
+        ['docker', 'network', 'inspect', network],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if inspection.returncode:
+        subprocess.run(['docker', 'network', 'create', network], check=True)
+except FileNotFoundError:
+    pass
 
 print(f'Local credentials and Docker network {network!r} are ready.')
 print()

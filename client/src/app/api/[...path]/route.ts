@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 function getCandidateApis(): string[] {
-  const configured = (process.env.API_URL || 'http://127.0.0.1:8000/api/v1').trim();
-  const list = [configured];
-  if (configured.includes('host.docker.internal')) {
-    list.push(configured.replace('host.docker.internal', '127.0.0.1'));
-  } else if (configured.includes('127.0.0.1:8000')) {
-    list.push(configured.replace('127.0.0.1:8000', 'localhost:8000'));
-  }
-  return [...new Set(list)];
+  // Compose supplies the service URL; local development uses the published port.
+  // Replaying writes against guessed hosts can duplicate account/order creation.
+  return [(process.env.API_URL || 'http://127.0.0.1:8000/api/v1').trim().replace(/\/$/, '')];
 }
 
 async function handler(request: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
@@ -45,7 +40,7 @@ async function handler(request: NextRequest, { params }: { params: Promise<{ pat
           body: payload,
           headers,
           cache: 'no-store',
-          signal: AbortSignal.timeout(20000),
+          signal: route === 'notifications/stream' ? AbortSignal.any([request.signal, AbortSignal.timeout(35000)]) : AbortSignal.timeout(10000),
         });
         activeApi = baseApi;
         break;
@@ -65,7 +60,7 @@ async function handler(request: NextRequest, { params }: { params: Promise<{ pat
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refresh }),
         cache: 'no-store',
-        signal: AbortSignal.timeout(10000),
+        signal: route === 'notifications/stream' ? AbortSignal.any([request.signal, AbortSignal.timeout(35000)]) : AbortSignal.timeout(10000),
       });
       if (renewed.ok) {
         newAccess = (await renewed.json()).access;
@@ -77,12 +72,30 @@ async function handler(request: NextRequest, { params }: { params: Promise<{ pat
           body: payload,
           headers,
           cache: 'no-store',
-          signal: AbortSignal.timeout(20000),
+          signal: (route === 'notifications/stream' || route.includes('digital-asset')) ? AbortSignal.any([request.signal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(10000),
         });
       }
     }
+    if (route === 'notifications/stream' && upstream.ok && upstream.body) {
+      const response = new NextResponse(upstream.body, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no' } });
+      if (newAccess) response.cookies.set('proace_access', newAccess, { ...options, maxAge: 900 });
+      return response;
+    }
+    const upstreamType = upstream.headers.get('content-type') || '';
+    if (upstream.ok && !upstreamType.includes('application/json')) {
+      const response = new NextResponse(upstream.body, {
+        status: upstream.status,
+        headers: {
+          'Content-Type': upstreamType || 'application/octet-stream',
+          'Content-Disposition': upstream.headers.get('content-disposition') || 'inline',
+          'Cache-Control': 'private, no-store',
+        },
+      });
+      if (newAccess) response.cookies.set('proace_access', newAccess, { ...options, maxAge: 900 });
+      return response;
+    }
     const data = upstream.status === 204 ? null : await upstream.json().catch(() => ({ detail: 'The server could not process this request.' }));
-    const loginTokens = route === 'auth/login' && upstream.ok ? { access: data.access, refresh: data.refresh } : null;
+    const loginTokens = ['auth/login', 'password/change'].includes(route) && upstream.ok ? { access: data.access, refresh: data.refresh } : null;
     if (loginTokens) { delete data.access; delete data.refresh; }
     const response = NextResponse.json(data, { status: upstream.status === 204 ? 200 : upstream.status, headers: { 'Cache-Control': 'no-store' } });
     if (newAccess) response.cookies.set('proace_access', newAccess, { ...options, maxAge: 900 });
@@ -101,10 +114,7 @@ async function handler(request: NextRequest, { params }: { params: Promise<{ pat
       response.cookies.delete('proace_access'); response.cookies.delete('proace_refresh');
       return response;
     }
-    const isDev = process.env.NODE_ENV !== 'production';
-    const detail = isDev
-      ? `The backend API server is unreachable. Please verify the Django server is running at ${candidateApis.join(' or ')}. (${(error as Error)?.message || 'connection failed'})`
-      : 'The shop is temporarily unavailable. Please try again shortly.';
+    const detail = 'The server is temporarily unavailable. Please try again shortly.';
     return NextResponse.json({ detail }, { status: 503 });
   }
 }

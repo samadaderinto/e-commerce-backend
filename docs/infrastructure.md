@@ -25,8 +25,8 @@ Local development uses exactly one server env file and one client env file:
 Production does not use repo env files. GitHub Actions reads production values
 from repository or environment secrets in the `production` environment. The
 deployment platform should receive values as environment variables or managed
-secrets. Do not recreate `server/.env.prod`, `server/monitoring/.env`, or
-`server/monitoring/secrets/metrics-token`.
+secrets. Do not recreate `server/.env.prod`, `monitoring/.env`, or
+`monitoring/secrets/metrics-token`.
 
 For HostGator, the deploy workflow uses SSH connection secrets and a base64
 encoded production environment file. It uploads the repository, rebuilds the
@@ -43,21 +43,14 @@ same superuser email and password.
 
 ## Local container stacks
 
-The application can be run as a unified multi-service stack or as modular, independent container stacks sharing the `commerce-network` Docker network:
-
-### 0. Unified Full Stack (`compose.yaml`)
-From the repository root:
-```sh
-docker compose up --build -d
-```
-Contains the complete application environment (Next.js client, Django API, Celery worker, PostgreSQL, Redis, and Elasticsearch) connected over the `commerce-network`.
+The application runs as modular container stacks sharing the `commerce-network` Docker network:
 
 ### 1. Server stack (`server/compose.yaml`)
-From `server/`:
+From the repository root:
 ```sh
-../.venv/bin/python monitoring/init_local.py
-docker compose -f compose.yaml up --build -d api redis postgres elasticsearch
-docker compose -f compose.yaml exec api python manage.py rebuild_product_index
+.venv/bin/python monitoring/init_local.py
+docker compose -f server/compose.yaml up --build -d api redis postgres elasticsearch
+docker compose -f server/compose.yaml exec api python manage.py rebuild_product_index
 ```
 
 Contains:
@@ -67,8 +60,17 @@ Contains:
 - `redis`: Redis 7.4 cache & Celery broker.
 - `elasticsearch`: Elasticsearch 8.15 product search index.
 
-### 2. Monitoring stack (`server/monitoring/compose.yaml`)
-From `server/`:
+### 2. Frontend stack (`client/compose.yaml`)
+From the repository root:
+```sh
+docker compose -f client/compose.yaml up --build -d
+```
+
+Contains:
+- `client`: Next.js production SSR/standalone application built from `client/Dockerfile`. Communicates with the API over `commerce-network` at `http://api:8000/api/v1` or host gateway.
+
+### 3. Monitoring stack (`monitoring/compose.yaml`)
+From the repository root:
 ```sh
 docker compose -f monitoring/compose.yaml up -d
 ```
@@ -80,14 +82,10 @@ Contains:
 - `tempo`: Distributed tracing store.
 - Exporter sidecars: `postgres-exporter`, `redis-exporter`, `elasticsearch-exporter`, `docker-exporter`.
 
-### 3. Frontend stack (`client/compose.yaml`)
-From the repository root:
+To run all stacks together from the repository root:
 ```sh
-docker compose -f client/compose.yaml up --build -d
+npm run docker:up
 ```
-
-Contains:
-- `client`: Next.js production SSR/standalone application built from `client/Dockerfile`. Communicates with the API over `commerce-network` at `http://api:8000/api/v1` or host gateway.
 
 ## Production / HostGator deployment
 
@@ -100,6 +98,8 @@ entry point. Production orchestration lives in `deploy/hostgator/`; see the
 
 Application container files:
 
+- `client/Dockerfile`: Next.js multi-stage build.
+- `client/compose.yaml`: frontend SSR container.
 - `server/Dockerfile`: Python 3.12 slim API image. Installs
   `requirements.txt`, optionally installs `requirements-storage.txt` when
   `INSTALL_OBJECT_STORAGE=true`, runs as a non-root `app` user and starts
@@ -114,21 +114,21 @@ Application container files:
 
 Monitoring and operations files:
 
-- `server/monitoring/compose.yaml`: Prometheus, Grafana, Loki, Alloy, Tempo and
+- `monitoring/compose.yaml`: Prometheus, Grafana, Loki, Alloy, Tempo and
   optional messaging/exporter services.
-- `server/monitoring/init_local.py`: ensures local `OBSERVABILITY_TOKEN` and
+- `monitoring/init_local.py`: ensures local `OBSERVABILITY_TOKEN` and
   `DEFAULT_ADMIN_EMAIL` and `DEFAULT_ADMIN_PASSWORD` values exist in
   `server/.env`; the same credentials are passed to Grafana.
-- `server/monitoring/prometheus.yml`: scrape configuration.
-- `server/monitoring/alerts.yml`: alert rules, including p95 and p99 latency.
-- `server/monitoring/alloy.alloy`: Docker log collection into Loki.
-- `server/monitoring/loki.yml`: local Loki retention/storage configuration.
-- `server/monitoring/tempo.yml`: local Tempo trace storage configuration.
-- `server/monitoring/grafana/provisioning/`: Grafana datasources and dashboard
+- `monitoring/prometheus.yml`: scrape configuration.
+- `monitoring/alerts.yml`: alert rules, including p95 and p99 latency.
+- `monitoring/alloy.alloy`: Docker log collection into Loki.
+- `monitoring/loki.yml`: local Loki retention/storage configuration.
+- `monitoring/tempo.yml`: local Tempo trace storage configuration.
+- `monitoring/grafana/provisioning/`: Grafana datasources and dashboard
   provisioning.
-- `server/monitoring/grafana/dashboards/commerce-overview.json`: API overview
+- `monitoring/grafana/dashboards/commerce-overview.json`: API overview
   dashboard.
-- `server/monitoring/targets/`: Prometheus file discovery targets.
+- `monitoring/targets/`: Prometheus file discovery targets.
 - `server/nginx/`: Nginx proxy hardening, IP allow/deny lists and Kubernetes
   manifests.
 
@@ -314,3 +314,8 @@ For production:
 Update this file when changing Dockerfiles, Compose services, service images,
 ports, volumes, environment variables, Kafka/RabbitMQ, Redis, PostgreSQL, Nginx,
 object storage or production deployment instructions.
+
+## Back-office and carrier checkout
+
+See [role matrix, staff activation, and operator setup](access-control.md) and
+[multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).

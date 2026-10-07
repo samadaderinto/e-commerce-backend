@@ -14,7 +14,7 @@ ALLOWED_HOSTS = ['testserver', 'localhost']
 INSTALLED_APPS = [
     'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes',
     'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles',
-    'rest_framework', 'taggit', 'core', 'store', 'product', 'cart', 'payment',
+    'rest_framework', 'rest_framework_simplejwt.token_blacklist', 'taggit', 'core', 'store', 'product', 'cart', 'payment',
     'notification.apps.EventNotificationConfig',
     'observability.apps.ObservabilityConfig',
     'affiliates',
@@ -55,7 +55,10 @@ RESEND_FROM_EMAIL = DEFAULT_FROM_EMAIL
 FRONTEND_URL = 'http://testserver'
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
-    'DEFAULT_AUTHENTICATION_CLASSES': ['rest_framework_simplejwt.authentication.JWTAuthentication'],
+    'DEFAULT_AUTHENTICATION_CLASSES': ['core.access.BackofficeJWTAuthentication'],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'EXCEPTION_HANDLER': 'utils.exceptions.custom_exception_handler',
 }
+
+SHIPPING_RATE_MODE = 'demo'
+ELASTICSEARCH_ENABLED = False

@@ -84,6 +84,14 @@ class NotificationApiTests(TestCase):
         self.assertEqual(restored.status_code, 200, restored.data)
         self.assertFalse(restored.data["deleted"])
 
+        # Archive again and test permanent deletion from archive
+        self.client.post(f"/notifications/{notification.pk}/archive/")
+        self.assertEqual(self.client.get("/notifications/archived/").data["count"], 1)
+        delete_resp = self.client.delete(f"/notifications/{notification.pk}/")
+        self.assertEqual(delete_resp.status_code, 204)
+        self.assertEqual(self.client.get("/notifications/archived/").data["count"], 0)
+        self.assertFalse(Notification.objects.filter(pk=notification.pk).exists())
+
     def test_mark_all_read_and_event_filter(self):
         create_notification(recipient=self.user, verb="one", data={"event": "orders"})
         create_notification(recipient=self.user, verb="two", data={"event": "refunds"})
@@ -355,3 +363,212 @@ class NotificationApiTests(TestCase):
         self.assertIsNone(message.notification)
         self.assertEqual(message.data["recipient_id"], str(self.user.pk))
         self.assertEqual(message.data["url"], "/account/orders")
+
+    def test_full_text_search_filters_notifications(self):
+        create_notification(
+            recipient=self.user,
+            verb="Refund processed for Order #10042",
+            description="Your $45.00 return has cleared.",
+        )
+        create_notification(
+            recipient=self.user,
+            verb="Package arriving tomorrow",
+            description="USPS tracking is updated.",
+        )
+
+        res1 = self.client.get("/notifications/", {"search": "refund"})
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res1.data["count"], 1)
+        self.assertIn("Refund", res1.data["results"][0]["verb"])
+
+        res2 = self.client.get("/notifications/", {"q": "tracking"})
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.data["count"], 1)
+        self.assertIn("USPS", res2.data["results"][0]["description"])
+
+        res3 = self.client.get("/notifications/", {"search": "nonexistent keyword"})
+        self.assertEqual(res3.status_code, 200)
+        self.assertEqual(res3.data["count"], 0)
+
+    def test_category_filter_supports_store_and_affiliates(self):
+        from store.models import Store
+
+        store = Store.objects.create(
+            user=self.user,
+            name="Green Valley Store",
+            username="green-valley",
+        )
+
+        create_notification(
+            recipient=self.user,
+            verb="Store verified",
+            description="Green Valley Store is now live.",
+            target=store,
+            data={"event": "store_verified", "store_id": store.pk},
+        )
+        create_notification(
+            recipient=self.user,
+            verb="Referral Reward Earned: $25",
+            description="You referred a new member!",
+            data={"event": "referral_reward", "amount": "25.00"},
+        )
+        create_notification(
+            recipient=self.user,
+            verb="Account security alert",
+            description="New login from a recognized device.",
+        )
+
+        res_store = self.client.get("/notifications/", {"category": "store"})
+        self.assertEqual(res_store.status_code, 200)
+        self.assertEqual(res_store.data["count"], 1)
+        self.assertEqual(res_store.data["results"][0]["category"], "store")
+        self.assertEqual(res_store.data["results"][0]["store"]["name"], "Green Valley Store")
+
+        res_aff = self.client.get("/notifications/", {"category": "affiliates"})
+        self.assertEqual(res_aff.status_code, 200)
+        self.assertEqual(res_aff.data["count"], 1)
+        self.assertEqual(res_aff.data["results"][0]["category"], "affiliates")
+
+    def test_store_filter_by_id_and_slug(self):
+        from store.models import Store
+
+        store1 = Store.objects.create(user=self.user, name="Alpha Store", username="alpha-store")
+        store2 = Store.objects.create(user=self.user, name="Beta Store", username="beta-store")
+
+        create_notification(
+            recipient=self.user,
+            verb="Item sold in Alpha Store",
+            description="New customer purchase in Alpha Store.",
+            target=store1,
+            data={"store_id": store1.pk},
+        )
+        create_notification(
+            recipient=self.user,
+            verb="Inventory low in Beta Store",
+            description="Restock Beta Store soon.",
+            target=store2,
+            data={"store_id": store2.pk},
+        )
+
+        # By ID
+        res_by_id = self.client.get("/notifications/", {"store": str(store1.pk)})
+        self.assertEqual(res_by_id.status_code, 200)
+        self.assertEqual(res_by_id.data["count"], 1)
+        self.assertIn("Alpha", res_by_id.data["results"][0]["verb"])
+
+        # By username
+        res_by_user = self.client.get("/notifications/", {"store": "beta-store"})
+        self.assertEqual(res_by_user.status_code, 200)
+        self.assertEqual(res_by_user.data["count"], 1)
+        self.assertIn("Beta", res_by_user.data["results"][0]["verb"])
+
+        # Store-filtered counts endpoint
+        counts_res = self.client.get("/notifications/counts/", {"store": str(store1.pk)})
+        self.assertEqual(counts_res.status_code, 200)
+        self.assertEqual(counts_res.data["unread"], 1)
+        self.assertEqual(counts_res.data["total"], 1)
+
+    def test_filters_action_returns_metadata(self):
+        from store.models import Store
+
+        store = Store.objects.create(user=self.user, name="My Shop", username="my-shop")
+        create_notification(
+            recipient=self.user,
+            verb="Store verified",
+            target=store,
+            data={"event": "store_verified", "store_id": store.pk},
+        )
+        create_notification(
+            recipient=self.user,
+            verb="Referral Reward",
+            data={"event": "referral_reward"},
+        )
+
+        res = self.client.get("/notifications/filters/")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("categories", res.data)
+        self.assertIn("stores", res.data)
+        self.assertIn("counts", res.data)
+
+        cat_ids = [c["id"] for c in res.data["categories"]]
+        self.assertIn("all", cat_ids)
+        self.assertIn("store", cat_ids)
+        self.assertIn("affiliates", cat_ids)
+        self.assertTrue(any(s["id"] == store.pk for s in res.data["stores"]))
+
+    def test_super_admin_notification_filters_only_shows_official_stores(self):
+        from store.models import Store
+        from core.models import User
+
+        admin = User.objects.create_superuser(email="superadmin@proace.com", password="Admin-Pass-123!")
+        third_party_user = User.objects.create_user(email="thirdparty@seller.com", password="Seller-Pass-123!")
+
+        third_party_store = Store.objects.create(user=third_party_user, name="Third Party Store", username="third-party", is_official=False)
+        official_store = Store.objects.create(user=admin, name="Proace Official Store", username="proace-official", is_official=True)
+
+        create_notification(
+            recipient=admin,
+            verb="Third-party store updated",
+            target=third_party_store,
+            data={"event": "store_updated", "store_id": third_party_store.pk},
+        )
+        create_notification(
+            recipient=admin,
+            verb="Official store updated",
+            target=official_store,
+            data={"event": "store_updated", "store_id": official_store.pk},
+        )
+
+        self.client.force_authenticate(admin)
+        res = self.client.get("/notifications/filters/")
+        self.assertEqual(res.status_code, 200)
+
+        store_ids = [s["id"] for s in res.data["stores"]]
+        self.assertIn(official_store.pk, store_ids)
+        self.assertNotIn(third_party_store.pk, store_ids)
+
+    def test_elasticsearch_notification_document_mapping(self):
+        from notification.search import notification_document
+        from store.models import Store
+
+        store = Store.objects.create(user=self.user, name="ES Store", username="es-store")
+        notif = create_notification(
+            recipient=self.user,
+            verb="Item Purchased",
+            description="A buyer purchased an item.",
+            level="success",
+            target=store,
+            data={"event": "new_order", "store_id": store.pk},
+        )
+        doc = notification_document(notif)
+        self.assertEqual(doc["id"], notif.id)
+        self.assertEqual(doc["recipient_id"], self.user.id)
+        self.assertEqual(doc["verb"], "Item Purchased")
+        self.assertEqual(doc["category"], "store")
+        self.assertEqual(doc["store_id"], store.pk)
+        self.assertEqual(doc["store_name"], "ES Store")
+        self.assertTrue(doc["unread"])
+        self.assertFalse(doc["deleted"])
+
+    def test_elasticsearch_search_notification_ids_with_mock(self):
+        from notification.search import search_notification_ids
+
+        mock_response = {
+            "hits": {
+                "total": {"value": 1},
+                "hits": [{"_id": "42"}],
+            }
+        }
+
+        with (
+            override_settings(ELASTICSEARCH_ENABLED=True),
+            patch("notification.search.client") as mock_client_fn,
+        ):
+            mock_es = mock_client_fn.return_value
+            mock_es.search.return_value = mock_response
+
+            results = search_notification_ids("refund", recipient_id=self.user.id)
+            self.assertIsNotNone(results)
+            self.assertEqual(results["count"], 1)
+            self.assertEqual(results["ids"], [42])
+

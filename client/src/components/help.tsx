@@ -41,11 +41,11 @@ export function HelpPage() {
         ],
         [
           'What is the return and refund policy?',
-          'Physical products can be returned within 7 days of order placement. When requesting a refund from your order page, you can choose between instant ProAce Store Credit (Wallet balance) or refund to your original payment method. Physical returns are reviewed and processed within 1–2 business days.',
+          'Physical products can be returned within 7 calendar days of delivery. When requesting a refund from your order page, you can choose between instant ProAce Store Credit (Wallet balance) or refund to your original payment method. Physical returns are reviewed and processed within 1–2 business days.',
         ],
         [
           'Can digital downloads be refunded?',
-          'Digital products (e-books, software, digital artwork) are non-refundable once delivered or downloaded. If you experience technical difficulties with a downloaded file, please contact support for immediate assistance.',
+          'Digital products (e-books, software, digital artwork) are sold as one customer entitlement, so the cart quantity is limited to one. After payment, you can return to your order and download the file again whenever needed. Digital products are non-refundable once delivered or downloaded; if a file is corrupted, contact support for a verified replacement.',
         ],
         [
           'How does the ProAce Wallet work?',
@@ -65,7 +65,19 @@ export function HelpPage() {
         ],
         [
           'Where can I manage my orders?',
-          'Sign in and navigate to My Account > My Orders. Every order includes itemized receipts, download links for digital goods, live USPS tracking, and return request forms.',
+          'Sign in and navigate to My Account > My Orders. Every order includes itemized receipts, reusable download links for digital goods, live USPS tracking when available, and return request forms.',
+        ],
+        [
+          'Can I buy multiple copies of an ebook?',
+          'Digital products are limited to one entitlement per order. You can download your purchased file again from the completed order instead of paying for duplicate copies.',
+        ],
+        [
+          'How do I connect seller payouts?',
+          'Merchants can connect Stripe Express from Store settings. After onboarding and the buyer-review escrow period, approved payouts can be sent to the connected payout account.',
+        ],
+        [
+          'What does Product Preview do?',
+          'Merchants can preview an unsaved product using the current title, description, pricing, variants, and local image or file selections. Preview data is temporary and is not published or saved.',
         ],
       ].map(([question, answer]) => (
         <details key={question}>
@@ -121,11 +133,11 @@ export function PolicyPage({ type }: { type: string }) {
           </p>
           <h2>7-Day Return Window & Refunds</h2>
           <p>
-            Customers may request a return or refund for physical items within <strong>7 calendar days</strong> of placing their order. Approved refunds can be credited instantly to your <strong>ProAce Wallet (Store Credit)</strong> or refunded to the original payment method. Physical returns are inspected and resolved within 1–2 business days.
+            Customers may request a return or refund for physical items within <strong>7 calendar days of delivery</strong>. Approved refunds can be credited instantly to your <strong>ProAce Wallet (Store Credit)</strong> or refunded to the original payment method. Physical returns are inspected and resolved within 1–2 business days.
           </p>
           <h2>Digital Products Policy</h2>
           <p>
-            Digital goods (software, documents, media downloads) are delivered immediately upon order confirmation and are non-refundable once downloaded. If a file is corrupted, support will provide a verified replacement.
+            Digital goods (software, documents, media downloads) are delivered immediately upon order confirmation. Each product is one customer entitlement; repeat downloads are available from the completed order. Digital goods are non-refundable once delivered or downloaded, except that support may provide a verified replacement for a corrupted or inaccessible file.
           </p>
           <h2>Merchant Escrow & Platform Fees</h2>
           <p>

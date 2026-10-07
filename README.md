@@ -75,35 +75,35 @@ npm run dev
 
 Open <http://127.0.0.1:3000>. The client defaults to
 `http://127.0.0.1:8000/api/v1`; override `API_URL` in `client/.env` when needed.
-Email verification and password-reset links print to the API terminal locally.
+Customer email verification and password-reset links print to the API terminal with the local console email backend. Staff credential issuance requires a private email backend such as Resend or SMTP.
 Set `FRONTEND_URL=http://127.0.0.1:3000` to keep email links on that exact host.
 
-## Run The Container Stack
+## Run The Container Stacks
 
-You can run the entire application (Next.js frontend, Django API, Celery worker, PostgreSQL, Redis, and Elasticsearch) with the unified Compose stack, or run individual stacks independently:
+The project uses modular Compose stacks located in `client/`, `server/`, and `monitoring/`:
 
-### Option A: Full Application Stack (Frontend + Backend + Datastores)
+### Option A: Run All Stacks (Frontend + Backend + Monitoring)
 From the repository root:
 
 ```sh
-# Build and run the entire stack
-docker compose up --build -d
+# Start all stacks via package.json script
+npm run docker:up
 
-# Check services status
-docker compose ps
+# Or start each stack individually
+docker compose -f server/compose.yaml up --build -d
+docker compose -f client/compose.yaml up --build -d
+docker compose -f monitoring/compose.yaml up -d
 ```
 
-The Next.js storefront will be available at <http://127.0.0.1:3000>, and the Django API at <http://127.0.0.1:8000>.
+The Next.js storefront will be available at <http://127.0.0.1:3000>, the Django API at <http://127.0.0.1:8000>, and Grafana at <http://127.0.0.1:3002>.
 
 ### Option B: Backend Stack Only
-From the `server/` directory:
+From the repository root:
 
 ```sh
-cd server
-../.venv/bin/python monitoring/init_local.py
-docker compose --env-file .env -f compose.yaml up --build -d api redis postgres elasticsearch
-docker compose --env-file .env -f monitoring/compose.yaml up -d
-docker compose --env-file .env -f compose.yaml exec api python manage.py rebuild_product_index
+.venv/bin/python monitoring/init_local.py
+docker compose -f server/compose.yaml up --build -d api redis postgres elasticsearch
+docker compose -f server/compose.yaml exec api python manage.py rebuild_product_index
 ```
 
 ### Option C: Frontend Stack Only
@@ -111,6 +111,13 @@ From the repository root:
 
 ```sh
 docker compose -f client/compose.yaml up --build -d
+```
+
+### Option D: Monitoring Stack
+From the repository root:
+
+```sh
+docker compose -f monitoring/compose.yaml up -d
 ```
 
 The API uses `redis://redis:6379/0` inside Compose. The API is available at
@@ -121,12 +128,13 @@ persist in named Docker volumes. The Grafana password and metrics token live in
 `server/.env`. Log aggregation is part of this stack too: Alloy collects Docker
 container stdout and sends it to Loki, which is available in Grafana Explore.
 
-Check both stacks and follow their logs:
+Check running stacks and follow logs:
 
 ```sh
-docker compose -f compose.yaml ps
+docker compose -f server/compose.yaml ps
+docker compose -f client/compose.yaml ps
 docker compose -f monitoring/compose.yaml ps
-docker compose -f compose.yaml logs -f api redis
+docker compose -f server/compose.yaml logs -f api redis
 ```
 
 In Grafana, open Explore, select Loki, and query API logs with:
@@ -136,11 +144,14 @@ In Grafana, open Explore, select Loki, and query API logs with:
 {service_name="api"} | json | level="ERROR"
 ```
 
-The API health endpoint is <http://127.0.0.1:8000/health/live/>. Stop the
-application and monitoring stacks with:
+The API health endpoint is <http://127.0.0.1:8000/health/live/>. Stop all
+stacks with:
 
 ```sh
-docker compose -f compose.yaml down
+npm run docker:down
+# Or stop individually:
+docker compose -f client/compose.yaml down
+docker compose -f server/compose.yaml down
 docker compose -f monitoring/compose.yaml down
 ```
 
@@ -153,7 +164,7 @@ docker compose -f monitoring/compose.yaml --profile messaging up -d kafka rabbit
 
 For production, use the HostGator VPS environment and GitHub Actions secrets,
 not checked-in env files. Full deployment details are in [`server/deployment.md`](server/deployment.md) and
-[`server/monitoring/README.md`](server/monitoring/README.md).
+[`monitoring/README.md`](monitoring/README.md).
 
 The GitHub Actions deploy job targets the HostGator VPS. It validates SSH and
 environment secrets, uploads the release, rebuilds the containers, and verifies
@@ -184,7 +195,7 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 - Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
 - Email-verified registration, sign-in, password reset, and session management.
 - Profile, delivery addresses, order history, and detailed order pages.
-- **Order Tracking**: Real-time USPS package tracking with dynamic carrier links (`https://tools.usps.com/...`), live status badges, and shipping milestones.
+- **Order Tracking**: Recorded fulfillment milestones and official USPS, UPS, FedEx, and DHL tracking links. Shipping service and carrier quotes are preserved in each order.
 - **ProAce Wallet & Refunds**: Integrated customer wallet balance with 7-day physical return window, supporting instant store credit refund resolution.
 - **Flexible Checkout**: Supports Cash-on-Delivery, ProAce Wallet balance, and Stripe Wallet payments with transactional stock deductions and idempotent retry handling.
 
@@ -205,7 +216,7 @@ Visit `/admin` (Platform Intelligence) and `/admin/staff` (Team Administration):
 - **Order Status Distribution Chart**: Visual fulfillment pipeline breakdown across order lifecycle stages.
 - **Moderation Queues**: Review 7-day customer refund requests (approve to wallet store credit or decline with reasons) and merchant payout requests.
 - **Store Moderation**: Review pending store onboardings, approve verified sellers, or suspend non-compliant stores with instant catalog cache invalidation.
-- **Staff Provisioning (Superusers)**: Create new staff accounts, manage access levels, or block compromised accounts.
+- **Staff Provisioning (Technical and Business Admins)**: Invite staff through mailbox verification and private temporary credentials, assign operational stores, or block compromised accounts.
 
 ## API And Authentication
 
@@ -251,6 +262,16 @@ variants serialization, flash sale countdowns, and merchant payouts.
   behind HTTPS.
   behind HTTPS.
 - Dedicated monitoring stack (Grafana Loki, Alloy, Prometheus, Tempo) runs via
-  `server/monitoring/compose.yaml` with centralized dashboards at `http://127.0.0.1:3002`.
+  `monitoring/compose.yaml` with centralized dashboards at `http://127.0.0.1:3002`.
 - Product photos and media uploads are persisted in named volumes or S3-compatible
   object storage (MinIO/AWS S3).
+
+## Back-office roles and shipping
+
+See the [endpoint permission matrix and staff onboarding](docs/access-control.md)
+and [carrier setup and checkout API](docs/shipping-integrations.md).
+Apply the new core, store, and payment migrations before starting this version.
+Staff/admin accounts use operational workspaces and cannot shop. Grafana requires
+technical-admin credentials; anonymous access is disabled.
+
+See [UI components and live event pipeline](docs/ui-and-events.md) for responsive conventions, pagination, carrier selection, cart states, scoped SSE events, and verification procedures.

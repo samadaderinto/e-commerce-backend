@@ -9,5 +9,6 @@
   {"targets": ["docker-exporter:8080"], "labels": {"service": "containers"}},
   {"targets": ["grafana:3000"], "labels": {"service": "grafana"}},
   {"targets": ["loki:3100"], "labels": {"service": "loki"}},
-  {"targets": ["tempo:3200"], "labels": {"service": "tempo"}}
+  {"targets": ["tempo:3200"], "labels": {"service": "tempo"}},
+  {"targets": ["client:3000"], "labels": {"service": "client"}}
 ]
