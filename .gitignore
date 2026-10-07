@@ -12,4 +12,6 @@ deploy/hostgator/.env
 server/media/
 client/test-results/
 client/playwright-report/
+client/AGENTS.md
+client/CLAUDE.md
 artifacts/
