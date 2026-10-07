@@ -22,7 +22,7 @@ env:
   PYTHON_VERSION: "3.11"
   DJANGO_SETTINGS_MODULE: codematics.test_settings
   SECRET_KEY: ci-only-not-for-production
-  SQLITE_DATABASE_PATH: ${{ github.workspace }}/server/main.sqlite3
+  SQLITE_DATABASE_PATH: ${{ github.workspace }}/server/storefront.sqlite3
   SQLITE_TEST_DATABASE_PATH: ${{ github.workspace }}/server/test.sqlite3
   PIPENV_VENV_IN_PROJECT: "1"
 
@@ -71,7 +71,7 @@ jobs:
         run: pipenv run python manage.py test storefront --settings=codematics.storefront_settings --noinput
 
   frontend:
-    name: Next.js Build
+    name: Next.js Build & Verification
     runs-on: ubuntu-latest
     env:
       API_URL: http://127.0.0.1:8000/api/v1
@@ -82,6 +82,8 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:unit
       - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
 
@@ -172,7 +174,7 @@ jobs:
         env:
           HOSTGATOR_SSH_PRIVATE_KEY: ${{ secrets.HOSTGATOR_SSH_PRIVATE_KEY }}
           HOSTGATOR_SSH_KNOWN_HOSTS: ${{ secrets.HOSTGATOR_SSH_KNOWN_HOSTS }}
-          HOSTGATOR_ENV_B64: ${{ secrets.HOSTGATOR_ENV_B64 }}
+          PROD_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY || secrets.SECRET_KEY }}
         run: |
           required=(
             HOSTGATOR_HOST
@@ -180,7 +182,7 @@ jobs:
             HOSTGATOR_DEPLOY_PATH
             HOSTGATOR_SSH_PRIVATE_KEY
             HOSTGATOR_SSH_KNOWN_HOSTS
-            HOSTGATOR_ENV_B64
+            PROD_SECRET_KEY
           )
           missing=0
           for name in "${required[@]}"; do
@@ -202,9 +204,35 @@ jobs:
           printf '%s\n' "$HOSTGATOR_SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Upload application and production environment
+      - name: Compose production environment file
         env:
-          HOSTGATOR_ENV_B64: ${{ secrets.HOSTGATOR_ENV_B64 }}
+          PUBLIC_DOMAIN: ${{ vars.PUBLIC_DOMAIN || 'proaceintlshoppingmall.com' }}
+          PROD_SECRET_KEY: ${{ secrets.PROD_SECRET_KEY || secrets.SECRET_KEY }}
+          PROD_POSTGRES_PASSWORD: ${{ secrets.PROD_POSTGRES_PASSWORD || secrets.POSTGRES_PASSWORD }}
+          PROD_ADMIN_PASSWORD: ${{ secrets.PROD_ADMIN_PASSWORD || secrets.DEFAULT_ADMIN_PASSWORD }}
+          PROD_TECHNICAL_ADMIN_PASSWORD: ${{ secrets.PROD_TECHNICAL_ADMIN_PASSWORD || secrets.TECHNICAL_ADMIN_PASSWORD }}
+          PROD_ADMIN_EMAIL: ${{ secrets.PROD_ADMIN_EMAIL || vars.PROD_ADMIN_EMAIL || 'admin@proaceintl.com' }}
+          PROD_OBSERVABILITY_TOKEN: ${{ secrets.PROD_OBSERVABILITY_TOKEN || secrets.OBSERVABILITY_TOKEN }}
+          STRIPE_SECRET: ${{ secrets.STRIPE_SECRET }}
+          PUBLISHER_KEY: ${{ secrets.PUBLISHER_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL || vars.RESEND_FROM_EMAIL }}
+          USPS_CLIENT_ID: ${{ secrets.USPS_CLIENT_ID }}
+          USPS_CLIENT_SECRET: ${{ secrets.USPS_CLIENT_SECRET }}
+          FEDEX_API_KEY: ${{ secrets.FEDEX_API_KEY }}
+          FEDEX_SECRET_KEY: ${{ secrets.FEDEX_SECRET_KEY }}
+          FEDEX_ACCOUNT_NUMBER: ${{ secrets.FEDEX_ACCOUNT_NUMBER }}
+          DHL_API_KEY: ${{ secrets.DHL_API_KEY }}
+          DHL_API_SECRET: ${{ secrets.DHL_API_SECRET }}
+          UPS_CLIENT_ID: ${{ secrets.UPS_CLIENT_ID }}
+          UPS_CLIENT_SECRET: ${{ secrets.UPS_CLIENT_SECRET }}
+          UPS_ACCOUNT_NUMBER: ${{ secrets.UPS_ACCOUNT_NUMBER }}
+        run: |
+          echo "Composing deploy/hostgator/.env strictly from GitHub Secrets and Variables..."
+          python3 deploy/hostgator/generate_env.py
+          chmod 600 deploy/hostgator/.env
+
+      - name: Upload application and production environment
         run: |
           SSH=(ssh -i ~/.ssh/hostgator -p "$HOSTGATOR_PORT")
           RSYNC_SSH="ssh -i $HOME/.ssh/hostgator -p $HOSTGATOR_PORT"
@@ -218,9 +246,7 @@ jobs:
             --exclude '__pycache__/' \
             --rsh "$RSYNC_SSH" \
             ./ "$HOSTGATOR_USER@$HOSTGATOR_HOST:$HOSTGATOR_DEPLOY_PATH/"
-          printf '%s' "$HOSTGATOR_ENV_B64" | base64 --decode > hostgator.env
-          chmod 600 hostgator.env
-          scp -i ~/.ssh/hostgator -P "$HOSTGATOR_PORT" hostgator.env \
+          scp -i ~/.ssh/hostgator -P "$HOSTGATOR_PORT" deploy/hostgator/.env \
             "$HOSTGATOR_USER@$HOSTGATOR_HOST:$HOSTGATOR_DEPLOY_PATH/deploy/hostgator/.env"
 
       - name: Deploy and verify HostGator stack

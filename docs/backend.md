@@ -94,6 +94,75 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 - Orders dynamically generate live tracking links (`https://tools.usps.com/go/TrackConfirmAction?tLabels=<tracking_number>`).
 - Recorded fulfillment milestones are queryable by customers, merchants, staff, and superusers via `/api/v1/orders/<id>/tracking/`.
 
+## Management commands & data seeding
+
+The repository includes three specialized Django management commands for seeding data, generating realistic stress load, and indexing products into Elasticsearch:
+
+| Command | Primary Purpose | Deterministic / Predictable? | Sample Data Size | Rebuilds Elasticsearch? |
+| :--- | :--- | :--- | :--- | :--- |
+| `seed_demo` | **Test / Demo suite setup** | **Yes** (Fixed emails, predictable accounts) | Small & focused | Automatically calls indexer |
+| `populate_fake_data` | **Stress & volume testing** | **No** (Randomized realistic data) | Large (150–500+ products, orders, reviews) | Automatically calls indexer |
+| `rebuild_product_index` | **Elasticsearch sync** | N/A (Syncs existing DB records) | Indexes whatever is in the DB | **Core function** |
+
+### 1. `seed_demo`
+- **File**: `server/storefront/management/commands/seed_demo.py`
+- **Purpose**: Creates deterministic, fixture-like test accounts and baseline catalog records for local onboarding and automated test suites (`client/tests/*.spec.ts`).
+- **Guaranteed Accounts Created** (using the password passed via `--password`):
+  - **Superuser**: `admin@proace.local` (Full technical super admin, syncs with Grafana/MinIO)
+  - **Staff Backoffice**: `staff@proace.local` (Order auditing & moderation)
+  - **Single-store seller**: `seller@proace.local` (Owns store *Apex Athletics*)
+  - **Multi-store merchant**: `merchant@proace.local` (Owns stores across all 6 tier badges: Starter, Booster, Accelerator, Power, Mega, Legendary)
+  - **Shopper / Buyer**: `shopper@proace.local` and `buyer@proace.local`
+  - **Moderation accounts**: `pending-seller@proace.local` (unapproved store), `blocked-seller@proace.local` (suspended store)
+- **Automatic Indexing**: Triggers Elasticsearch index rebuild automatically if Elasticsearch is enabled and available.
+- **Usage**:
+  ```sh
+  # Local Python virtual environment
+  .venv/bin/python server/manage.py seed_demo --password 'ProaceDemo2026!'
+
+  # Inside Docker Compose
+  docker compose -f server/compose.yaml exec api python manage.py seed_demo --password 'ProaceDemo2026!'
+  ```
+
+### 2. `populate_fake_data` (Alias: `seed_fake_data`)
+- **File**: `server/storefront/management/commands/populate_fake_data.py`
+- **Purpose**: Generates high-volume, realistic marketplace catalog and transactional history for UI benchmarking, load testing, and visual development.
+- **What it generates**:
+  - Products with complete specifications schemas (dimensions, colors, serial numbers), variant matrices (sizes, colors, price adjustments), and Unsplash image galleries.
+  - Historical orders across lifecycles (`PENDING`, `PROCESSING`, `SHIPPED`, `DELIVERED`, `CANCELLED`) with realistic carrier tracking (USPS, FedEx, DHL, UPS).
+  - Customer reviews with star ratings and attached photos.
+  - Financial records: customer wallets, 7-day refund hold escrow balances (`in_review`), and cleared payout funds (`cleared_net`).
+- **CLI Options**:
+  - `--scale standard`: Generates ~150 products, ~350 orders, ~65 users, 12 stores (default password `Password123!`).
+  - `--scale large`: Generates ~500 products, ~1500 orders, ~200 users, 25 stores.
+  - `--clear`: Wipes existing fake catalog and orders before populating.
+  - `--products <N>`, `--orders <N>`, `--users <N>`: Custom granular counts.
+- **Usage**:
+  ```sh
+  # Standard scale
+  .venv/bin/python server/manage.py populate_fake_data --scale standard
+
+  # Clean wipe with custom product/order counts
+  .venv/bin/python server/manage.py populate_fake_data --clear --products 200 --orders 500
+  ```
+
+### 3. `rebuild_product_index`
+- **File**: `server/product/management/commands/rebuild_product_index.py`
+- **Purpose**: Recreates and populates the Elasticsearch product index (`commerce-products`) directly from the PostgreSQL / SQLite database.
+- **When to run**:
+  - After importing products in bulk via CSV imports or direct SQL migrations.
+  - After starting or resetting the Elasticsearch container volume.
+  - When modifying search analyzers, autocomplete n-grams, or field weights in `server/product/search.py`.
+- **Behavior**: Drops the existing index, recreates analyzer mappings (fuzzy matching, brand/category filters, price aggregations), and iterates through all active published products. Safely bypasses if `ELASTICSEARCH_ENABLED=false`.
+- **Usage**:
+  ```sh
+  # Local Python virtual environment
+  .venv/bin/python server/manage.py rebuild_product_index
+
+  # Inside Docker Compose
+  docker compose -f server/compose.yaml exec api python manage.py rebuild_product_index
+  ```
+
 ## Search
 
 Public catalog search uses Elasticsearch when `ELASTICSEARCH_ENABLED=true`.
@@ -111,12 +180,6 @@ Search files:
   product index from the database.
 - `server/storefront/views.py`: uses Elasticsearch for the public
   `/api/v1/products/?search=` flow.
-
-Rebuild locally after seeding or importing products:
-
-```sh
-docker compose -f compose.yaml exec api python manage.py rebuild_product_index
-```
 
 ## Cache, database and media
 

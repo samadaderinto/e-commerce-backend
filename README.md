@@ -3,12 +3,14 @@
 A Next.js marketplace and Django API in one base repository.
 
 ```text
-client/                 Next.js frontend app, client docs and client container
-client/Documentation/   Frontend-local docs
-server/                 Django API and backend containers
-docs/                   Root architecture and cross-project docs
+client/                 Next.js 15 App Router frontend and browser UI
+server/                 Django REST Framework modular monolith API
+docs/                   Canonical documentation directory (all technical guides & architecture)
+monitoring/             Observability stack (Grafana, Loki, Prometheus, Tempo, Alloy)
 .github/                CI/CD and HostGator VPS deployment workflow
-package.json            npm workspace and root frontend commands
+package.json            npm workspace and root commands
+AGENTS.md               Global AI agent operational guidelines and architecture rules
+README.md               Root project summary, quickstart, and entry point
 ```
 
 The previous `codematics/` backend directory is now `server/`. The Python settings
@@ -16,27 +18,22 @@ package inside it is still named `codematics`. Existing backend work was moved,
 not replaced. The runnable commerce configuration is
 `codematics.storefront_settings`; the legacy settings remain available separately.
 
-## Code Documentation
+## Centralized Documentation Hub
 
-Backend and cross-project documentation is centralized in [`docs/`](docs/README.md).
-The client also has frontend-local docs:
+All detailed technical documentation is centralized exclusively in [`docs/`](docs/README.md). The root `README.md` is the primary repository entry point. New contributors should start with the [3-Minute Quickstart & Documentation Hub](docs/README.md), followed by the specific topic guides:
 
-- client docs: [`client/README.md`](client/README.md)
+- **Getting Started & Local Setup**: [`docs/getting-started.md`](docs/getting-started.md)
+- **Architecture & Route Registry**: [`docs/architecture.md`](docs/architecture.md)
+- **Frontend Architecture & Components**: [`docs/frontend.md`](docs/frontend.md)
+- **Backend Architecture & Business Logic**: [`docs/backend.md`](docs/backend.md)
+- **Access Control, Roles & Permissions**: [`docs/access-control.md`](docs/access-control.md)
+- **Shipping & Fulfillment Integrations**: [`docs/shipping-integrations.md`](docs/shipping-integrations.md)
+- **UI Design System, Tokens & Modals**: [`docs/ui-and-events.md`](docs/ui-and-events.md)
+- **Infrastructure & Container Stacks**: [`docs/infrastructure.md`](docs/infrastructure.md)
+- **Observability & Health Monitoring**: [`docs/observability.md`](docs/observability.md)
+- **Global AI Agent Operational Rules**: [`AGENTS.md`](AGENTS.md)
 
-New contributors should start with the
-[getting-started guide](docs/getting-started.md), then read the
-[architecture and API map](docs/architecture.md). The `docs/` pages are the
-canonical guides for the backend and cross-project details.
-
-When changing code, update the matching doc in the same pass:
-
-- frontend routes/components/API behavior: [`docs/frontend.md`](docs/frontend.md);
-- backend apps/models/serializers/views/auth/tests: [`docs/backend.md`](docs/backend.md);
-- Docker, Postgres, Redis, Kafka, Nginx, storage or deployment:
-  [`docs/infrastructure.md`](docs/infrastructure.md);
-- health, metrics, logs, traces, profiling, Grafana, Loki, Prometheus, Tempo or
-  Alloy: [`docs/observability.md`](docs/observability.md).
-- client-specific changes should also update `client/Documentation/`;
+Whenever code behavior, models, endpoints, or configurations change, developers and AI agents must update the matching guide in `docs/` AND the root `README.md` in the same pass.
 
 ## App Boundary
 
@@ -61,6 +58,8 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r server/requirements.txt
 .venv/bin/python server/manage.py migrate --settings=codematics.storefront_settings
 .venv/bin/python server/manage.py seed_demo --settings=codematics.storefront_settings --password 'ProaceDemo2026!'
+# Or generate realistic high-volume marketplace load (~150 products, ~350 orders):
+# .venv/bin/python server/manage.py populate_fake_data --scale standard
 ```
 
 Run the API and client in separate terminals:
@@ -163,8 +162,8 @@ docker compose -f monitoring/compose.yaml --profile messaging up -d kafka rabbit
 ```
 
 For production, use the HostGator VPS environment and GitHub Actions secrets,
-not checked-in env files. Full deployment details are in [`server/deployment.md`](server/deployment.md) and
-[`monitoring/README.md`](monitoring/README.md).
+not checked-in env files. Full deployment details are in [`docs/deployment.md`](docs/deployment.md) and
+[`docs/observability.md`](docs/observability.md).
 
 The GitHub Actions deploy job targets the HostGator VPS. It validates SSH and
 environment secrets, uploads the release, rebuilds the containers, and verifies
@@ -196,7 +195,9 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 - Email-verified registration, sign-in, password reset, and session management.
 - Profile, delivery addresses, order history, and detailed order pages.
 - **Order Tracking**: Recorded fulfillment milestones and official USPS, UPS, FedEx, and DHL tracking links. Shipping service and carrier quotes are preserved in each order.
-- **ProAce Wallet & Refunds**: Integrated customer wallet balance with 7-day physical return window, supporting instant store credit refund resolution.
+- **In-App Password Management**: In-dialog password updates (`/api/v1/password/change/`) verifying current passwords and enforcing secure credential hygiene.
+- **ProAce Wallet, Top-Ups & Refunds**: Integrated customer wallet balance with Stripe Checkout top-up sessions (`/api/v1/wallet/topup-session/`), 7-day physical return window, and instant store credit refund resolution.
+- **Order Cancellation**: Self-service shopper cancellation for unfulfilled orders with atomic physical inventory restock and wallet balance refund.
 - **Flexible Checkout**: Supports Cash-on-Delivery, ProAce Wallet balance, and Stripe Wallet payments with transactional stock deductions and idempotent retry handling.
 
 ## Seller Experience
@@ -204,7 +205,7 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 Visit `/merchant` after signing in:
 - **Seller Workspace Dashboard**: Daily order activity trend bar charts, low-stock inventory alerts, top-selling products, and tier milestone celebration banners.
 - **Product Management & Variants**: Create physical and digital goods, define customizable variant options with price deltas and individual stock allocations, set flash sale timers, and upload image galleries.
-- **Bulk CSV Catalog Import**: High-volume merchant catalog batch upload with automatic variant and tag parsing.
+- **Bulk CSV Catalog Import**: RFC 4180-compliant batch upload supporting quotes, multiline values, variants, and tags.
 - **Storefront Customization**: Configure store announcement banner, banner covers, avatars, bio, and direct customer inquiry channels.
 - **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`).
 - **Order Fulfillment**: Review store-specific customer orders, assign carrier & tracking numbers, update fulfillment milestones, and trigger instant buyer notifications.
@@ -214,9 +215,12 @@ Visit `/merchant` after signing in:
 Visit `/admin` (Platform Intelligence) and `/admin/staff` (Team Administration):
 - **Executive Analytics Dashboard**: Platform gross revenue, order volume, active user growth, and store fleet health across 7/30/90/365-day periods.
 - **Order Status Distribution Chart**: Visual fulfillment pipeline breakdown across order lifecycle stages.
-- **Moderation Queues**: Review 7-day customer refund requests (approve to wallet store credit or decline with reasons) and merchant payout requests.
+- **Moderation Queues**: Review 7-day customer refund requests, moderate or remove abusive product reviews, and approve/reject merchant payout requests (`/admin/staff/payouts`).
 - **Store Moderation**: Review pending store onboardings, approve verified sellers, or suspend non-compliant stores with instant catalog cache invalidation.
-- **Staff Provisioning (Technical and Business Admins)**: Invite staff through mailbox verification and private temporary credentials, assign operational stores, or block compromised accounts.
+- **Role Hierarchy & Credential Isolation**:
+  - **Technical Super Admin (`is_superuser=True`)**: Password resets via UI or `manage.py recover_privileged_user` automatically sync across Django, MinIO, and Grafana via `server/core/auth_sync.py`.
+  - **Business Admin (`is_business_admin=True`)**: Operators manage staff, verify stores, and review payouts; strictly isolated from infrastructure credential sync.
+  - **Staff (`is_staff=True`)**: Backoffice operators audit orders and manage official brand stores.
 
 ## API And Authentication
 
@@ -236,16 +240,33 @@ Swagger UI at `/api/docs/` and ReDoc at `/api/redoc/`. Authenticated API operati
 use a JWT bearer access token; the browser storefront keeps those tokens in HTTP-only
 cookies and calls the API through its same-origin Next.js proxy.
 
-## Verification & Testing
+## Verification & Testing Hierarchy
 
-```sh
-# Frontend build & typechecks (from root or via prefix)
-npm run build                     # or npm --prefix client run build
+The test suite is organized into two distinct verification tiers:
+
+### Tier 1: Fast Offline Verification (No Servers Required)
+Run locally before staging or committing changes:
+
+```bash
+# 1. Frontend TypeScript Validation (zero type errors required)
 npm run typecheck
+
+# 2. Frontend Unit Tests (19 tests via Node native runner)
 npm run test:unit
 
-# Backend test suite (Django & Pytest)
-PYTHONPATH=server .venv/bin/pytest server/storefront/tests.py server/store/tests.py
+# 3. Backend Test Suite (Django / Pytest — 184 passing tests)
+.venv/bin/pytest server/
+```
+
+### Tier 2: Integration & End-to-End Suites (Live Dev Servers)
+Run with the backend (`python server/manage.py runserver 127.0.0.1:8000`) and frontend (`npm run dev`) running with seeded demo data (`manage.py seed_demo`):
+
+```bash
+# Next.js API proxy integration tests
+npm run test:integration
+
+# Playwright browser end-to-end test suite (Desktop & Mobile)
+npm run test:e2e
 ```
 
 Unit tests exercise frontend API serialization/error handling, currency formatting,

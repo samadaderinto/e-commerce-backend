@@ -32,7 +32,7 @@ For HostGator, the deploy workflow uses SSH connection secrets and a base64
 encoded production environment file. It uploads the repository, rebuilds the
 containers, and verifies HTTPS after deployment. For the complete secret
 inventory and deployment sequence, see
-[`server/deployment.md`](../server/deployment.md).
+[`deployment.md`](deployment.md).
 
 The API superuser is provisioned from the six `DEFAULT_ADMIN_*` environment
 fields on startup after database migrations. Locally, set them in `server/.env`;
@@ -92,7 +92,7 @@ npm run docker:up
 The three application stacks run on the HostGator VPS and share the private
 `commerce-network`. Caddy provides automatic HTTPS and is the only public web
 entry point. Production orchestration lives in `deploy/hostgator/`; see the
-[deployment guide](../server/deployment.md).
+[deployment guide](deployment.md).
 
 ## Tool and config inventory
 

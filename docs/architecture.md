@@ -126,7 +126,7 @@ The client and server can be hosted separately. Configure the frontend's
 job targets HostGator and is gated on pushes to `main` or `master` after the test,
 security, CodeQL and frontend build jobs pass.
 
-Treat [`server/deployment.md`](../server/deployment.md) as the detailed
+Treat [`deployment.md`](deployment.md) as the detailed
 deployment procedure and secret inventory. The
 [infrastructure guide](infrastructure.md) describes local containers and
 production service boundaries. Never commit production secrets or env files.

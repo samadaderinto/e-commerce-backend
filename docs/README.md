@@ -15,7 +15,7 @@ Welcome to the centralized engineering documentation for Proace Commerce. This d
 | 🛡️ **[Access Control & Roles](access-control.md)** | Role hierarchy (Technical Admin vs. Business Admin vs. Staff vs. Customer), permissions matrix, and activation. | Security / Operations / Backend |
 | 🎨 **[UI & Interactive Primitives](ui-and-events.md)** | Design tokens, responsive conventions, modals, CartSheet, WalletTopup, and SSE live events. | Frontend / Designers |
 | 📦 **[Shipping & Carriers](shipping-integrations.md)** | USPS, UPS, FedEx, DHL live rates, OAuth tokens, and tracking links. | Logistics / Checkout |
-| 🏗️ **[Infrastructure & Deployment](infrastructure.md)** | Docker Compose, Postgres, Redis, MinIO, Elasticsearch, and HostGator production deployment. | DevOps / SRE |
+| 🏗️ **[Infrastructure](infrastructure.md)** & **[HostGator Deployment](deployment.md)** | Docker Compose, Postgres, Redis, MinIO, Elasticsearch, and HostGator production deployment. | DevOps / SRE |
 | 📊 **[Observability & Monitoring](observability.md)** | Prometheus metrics, Grafana dashboards, Loki log streaming, Tempo tracing, and Silk profiling. | DevOps / SRE |
 | 🔍 **[System Audit & Findings](system-audit-2026-10-06.md)** | Historic bug audits, gap analyses, and architectural resolutions. | Technical Leads |
 
@@ -88,15 +88,51 @@ Visit **`http://localhost:3000`** in your browser. The frontend automatically pr
 
 ---
 
-## 🧪 Verification Commands
+## 🧪 Verification & Testing Hierarchy
 
-Always run these suites before committing changes:
+The testing architecture is split into two clear tiers:
+
+### Tier 1: Offline / Fast Verification (No Servers Required)
+Run these commands locally for fast, offline verification on every code change:
 
 ```bash
-# Frontend Type Checking & Unit Tests
+# 1. Frontend TypeScript Validation (zero type errors)
 npm run typecheck
+
+# 2. Frontend Unit Tests (Node native runner)
 npm run test:unit
 
-# Backend Tests (Full suite: 184 tests)
+# 3. Backend Test Suite (Django / Pytest — 184 tests)
 .venv/bin/pytest server/
 ```
+
+### Tier 2: Integration & End-to-End (E2E) Suites
+Playwright runs these against live services to ensure full system fidelity:
+
+1. **Start Backend & Seed Data**:
+   ```bash
+   .venv/bin/python server/manage.py seed_demo
+   .venv/bin/python server/manage.py runserver 127.0.0.1:8000
+   ```
+2. **Start Frontend Proxy**:
+   ```bash
+   npm run dev
+   ```
+3. **Execute Test Suites**:
+   ```bash
+   # Run API proxy integration tests
+   npm run test:integration
+
+   # Run full browser end-to-end tests (desktop & mobile)
+   npm run test:e2e
+   ```
+
+**E2E Test Coverage Breakdown (`client/tests/`)**:
+- `api.integration.spec.ts`: Next.js proxy routing, cookie parsing, and auth token forwarding.
+- `commerce.spec.ts`: Customer shopping journey, options picker, cart management, and checkout.
+- `merchant-store.spec.ts`: Merchant onboarding, store settings, product/variant creation, RFC 4180 CSV imports.
+- `backoffice.spec.ts`: Staff/admin dashboards, store review, order audits, and user management.
+- `self-purchase.spec.ts`: Validation preventing merchants from buying their own items.
+- `variant-images.spec.ts`: Dynamic variant option selection and gallery synchronization.
+- `ui-stability.spec.ts` & `theme.spec.ts`: Focus trapping in dialogs, responsive breakpoints, and theme switching.
+

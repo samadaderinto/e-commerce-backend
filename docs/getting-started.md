@@ -45,7 +45,18 @@ Open <http://127.0.0.1:3000>. The client calls the Django API at
 
 The demo password above is for local seeded accounts only. `seed_demo` is
 refused when `DJANGO_DEBUG=false`; do not use demo credentials or template
-secrets in deployed environments. Email delivery uses Resend: set
+secrets in deployed environments.
+
+### Seeding & Demo Data Options
+- **Deterministic E2E Test Data (`seed_demo`)**: Prepares predictable accounts (`admin@proace.local`, `staff@proace.local`, `seller@proace.local`, `shopper@proace.local`) required by Playwright test suites.
+- **Realistic Marketplace Load (`populate_fake_data`)**: If you prefer exploring the UI with hundreds of realistic products, customer reviews, order lifecycles, and seller escrow balances, run:
+  ```sh
+  .venv/bin/python server/manage.py populate_fake_data --scale standard
+  ```
+- **Reindexing Search (`rebuild_product_index`)**: Rebuilds the Elasticsearch catalog index (`commerce-products`).
+  *(See [Backend Engineering](backend.md#management-commands--data-seeding) for full flag descriptions and Docker commands).*
+
+Email delivery uses Resend: set
 `RESEND_API_KEY` and a Resend-verified `RESEND_FROM_EMAIL` in `server/.env` when
 you want local flows to send real messages. Tests use an in-memory backend and
 do not send email.
@@ -79,7 +90,7 @@ The Django process reads `server/.env` when present; Next.js reads
 
 Production configuration is not stored in these files. The GitHub Actions
 workflow reads deployment values from Actions secrets and deploys all containers
-to HostGator over SSH. Follow [server/deployment.md](../server/deployment.md) for the
+to HostGator over SSH. Follow [deployment.md](deployment.md) for the
 required secret names and deployment procedure. Never commit real credentials.
 
 ## Check your setup
