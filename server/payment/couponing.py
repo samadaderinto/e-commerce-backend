@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Mapping, Optional, Sequence
 
 from django.db import IntegrityError
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from .models import Coupon, CouponRedemption
@@ -46,7 +47,7 @@ def calculate_coupon_discount(
     if reserve:
         try:
             CouponRedemption.objects.create(coupon=coupon, user=user)
+            Coupon.objects.filter(pk=coupon.pk).update(last_used_at=timezone.now())
         except IntegrityError:
             raise ValidationError({'coupon': 'You have already used this coupon.'})
     return discount
-

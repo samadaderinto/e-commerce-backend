@@ -38,4 +38,6 @@ class BackofficeJWTAuthentication(JWTAuthentication):
                 raise PermissionDenied("Session expired. Sign in again.")
             if user.must_change_password and request.path.rstrip('/') not in {'/api/v1/me', '/api/v1/password/change'}:
                 raise PermissionDenied("Set a new password before accessing the back office.")
+            from core.activity import record_activity
+            record_activity(user)
         return result

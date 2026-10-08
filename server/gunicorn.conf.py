@@ -8,6 +8,8 @@ threads = int(os.environ.get('GUNICORN_THREADS') or '32')
 timeout = 60
 accesslog = None  # Request summaries are emitted as JSON by Django middleware.
 errorlog = '-'
+# Docker manages process lifecycle; avoid sockets on host-shared filesystems.
+control_socket_disable = True
 
 
 def on_starting(server):

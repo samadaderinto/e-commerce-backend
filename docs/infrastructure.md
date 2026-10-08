@@ -103,7 +103,10 @@ Application container files:
 - `server/Dockerfile`: Python 3.12 slim API image. Installs
   `requirements.txt`, optionally installs `requirements-storage.txt` when
   `INSTALL_OBJECT_STORAGE=true`, runs as a non-root `app` user and starts
-  Gunicorn through `docker-entrypoint.sh`.
+  Gunicorn through `/bin/sh /app/docker-entrypoint.sh`, including when a local
+  bind mount supplies a non-executable script. The `mc` binary is copied from a
+  digest-pinned Chainguard MinIO client image; builds do not use the retired
+  `dl.min.io` binary download endpoint.
 - `server/docker-entrypoint.sh`: prepares runtime directories, optionally runs
   migrations and collectstatic, then starts the container command.
 - `server/compose.yaml`: local API, PostgreSQL, Redis and Elasticsearch stack.
@@ -319,3 +322,5 @@ object storage or production deployment instructions.
 
 See [role matrix, staff activation, and operator setup](access-control.md) and
 [multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).
+
+The API image creates `/app/media` owned by the non-root `app` user before Docker initializes the media volume. Existing volumes created with root ownership can be repaired without deleting uploads: `docker compose -f server/compose.yaml exec --user root api chown -R app:app /app/media`.

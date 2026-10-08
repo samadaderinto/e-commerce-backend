@@ -8,7 +8,7 @@ from cart.models import Cart, CartItem
 from cart.views import CartViewSet
 from core.models import User
 from product.models import Product
-from store.models import Store
+from store.models import StoreAddress, Store
 
 
 @override_settings(
@@ -43,6 +43,7 @@ class CartViewSetTests(TestCase):
             username="seller-store",
             name="Seller Store",
         )
+        StoreAddress.objects.create(store=self.store, is_default=True, address='1 Main St', city='Tampa', state='FL', country='US', zip='33602')
         self.product = Product.objects.create(
             store=self.store,
             title="Bluetooth Speaker",

@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import timedelta
+from django.utils import timezone
 from product.models import Product
 from payment.models import Coupon
 from store.models import Schedule
@@ -10,10 +11,10 @@ class deactivate_coupon(CronJobBase):
 
     schedule = CronShedule(run_every_mins=RUN_EVERY_MINS)
 
-    def do(self):
+    def do(self) -> None:
 
         coupons = Coupon.objects.all()
-        current_time = datetime.now()
+        current_time = timezone.now()
         for coupon in coupons:
             exp = coupon.valid_to
             if exp <= current_time:
@@ -26,7 +27,7 @@ class set_product_visibility(CronJobBase):
 
     schedule = CronShedule(run_every_mins=RUN_EVERY_MINS)
 
-    def do(self):
+    def do(self) -> None:
         from store.services import publish_due_products
 
         publish_due_products()
@@ -38,16 +39,16 @@ class update_product_label(CronJobBase):
 
     schedule = CronShedule(run_every_mins=RUN_EVERY_MINS)
 
-    def do(self):
+    def do(self) -> None:
 
-        current_time = datetime.now()
+        current_time = timezone.now()
         products = Product.objects.all()
         for product in products:
             # if product label has been unboarded over a week change label
-            if product.created:
+            if product.label == 'new' and product.created <= current_time - timedelta(days=7):
                 product.label = ""
                 product.save()
-            elif product.available <= 0:
+            elif product.product_type != 'affiliate_clickbank' and not product.is_digital and product.available <= 0:
                 product.label = "sold out"
                 product.save()
 

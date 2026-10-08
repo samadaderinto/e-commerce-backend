@@ -12,6 +12,7 @@ from core.models import Refund, UserWalletTransaction
 from core.services import credit_user_wallet
 from notification.views import create_notification
 from payment.models import Order
+from payment.accounting import order_paid_lines
 from store.models import Store
 from store.services import process_refund_deduction
 
@@ -32,12 +33,19 @@ ALLOWED_ORDER_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
-def call_stripe_refund(order: Order, refund: Refund | None = None, reason: str = "requested_by_customer", amount: Decimal | None = None) -> str:
+def call_stripe_refund(
+    order: Order,
+    refund: Refund | None = None,
+    reason: str = "requested_by_customer",
+    amount: Decimal | None = None,
+) -> str:
     stripe_key = getattr(settings, "STRIPE_SECRET", "")
     idempotency_key = f"refund_{refund.pk if refund else 'order'}_{order.orderId}"
 
     if stripe is None or not stripe_key:
-        return f"STRIPE-MOCK-{order.orderId}"
+        raise ValidationError(
+            {"detail": "Payment provider refunds are not configured."}
+        )
 
     stripe.api_key = stripe_key
     session_id = order.stripe_session_id
@@ -64,21 +72,98 @@ def call_stripe_refund(order: Order, refund: Refund | None = None, reason: str =
     elif session_id and not session_id.startswith("cs_"):
         refund_kwargs["payment_intent"] = session_id
     else:
-        return f"STRIPE-UNLINKED-{order.orderId}"
+        raise ValidationError(
+            {"detail": "This payment has no refundable provider reference."}
+        )
 
-    try:
-        cents = int(Decimal(str(amount if amount is not None else order.total)) * 100)
-        if cents > 0:
-            refund_kwargs["amount"] = cents
-    except Exception:
-        pass
+    refund_amount = Decimal(str(amount if amount is not None else order.paid_total))
+    if not refund_amount.is_finite() or refund_amount <= 0:
+        raise ValidationError(
+            {"detail": "A provider refund must have a positive amount."}
+        )
+    refund_kwargs["amount"] = int(refund_amount * 100)
 
     result = stripe.Refund.create(**refund_kwargs)
     return getattr(result, "id", str(result))
 
 
-def process_order_refund(refund: Refund, actor: Any, reason: str = '') -> Refund:
-    order = refund.order
+def split_wallet_paid(order: Order) -> Decimal:
+    if order.payment_type != "split_tender":
+        return Decimal("0")
+    if order.wallet_paid > 0:
+        return order.wallet_paid
+    from payment.models import CheckoutAttempt
+
+    attempt = CheckoutAttempt.objects.filter(session_id=order.stripe_session_id).first()
+    if attempt and attempt.wallet_amount > 0:
+        return attempt.wallet_amount
+    from django.db.models import Sum
+
+    return UserWalletTransaction.objects.filter(
+        wallet__user=order.user,
+        transaction_type=UserWalletTransaction.DEBIT,
+        reference=order.orderId,
+    ).aggregate(total=Sum("amount"))["total"] or Decimal("0")
+
+
+def refund_parts(order: Order, amount: Decimal) -> tuple[Decimal, Decimal]:
+    """Consume remaining original tender amounts, including cent rounding."""
+    wallet_remaining = max(
+        Decimal("0"), order.wallet_paid - order.wallet_refunded_total
+    )
+    card_remaining = max(
+        Decimal("0"), order.paid_total - order.wallet_paid - order.card_refunded_total
+    )
+    remaining = wallet_remaining + card_remaining
+    if amount <= 0 or amount > remaining:
+        raise ValidationError(
+            {"detail": "Refund exceeds the remaining settled payment."}
+        )
+    if amount == remaining:
+        return wallet_remaining, card_remaining
+    wallet_part = min(
+        wallet_remaining,
+        (amount * order.wallet_paid / order.paid_total).quantize(Decimal(".01")),
+    )
+    card_part = amount - wallet_part
+    if card_part > card_remaining:
+        card_part = card_remaining
+        wallet_part = amount - card_part
+    return wallet_part, card_part
+
+
+def remaining_inventory(order: Order) -> list[dict[str, Any]]:
+    quantities: dict[tuple[Any, str], int] = {}
+    for prior in Refund.objects.filter(order=order, status=Refund.STATUS_APPROVED):
+        for row in prior.selected_items or order.items_snapshot or []:
+            key = (row.get("product"), str(row.get("variant") or ""))
+            quantities[key] = quantities.get(key, 0) + int(row.get("quantity", 1))
+    rows: list[dict[str, Any]] = []
+    for row in order_paid_lines(order):
+        key = (row.get("product"), str(row.get("variant") or ""))
+        quantity = max(0, int(row.get("quantity", 1)) - quantities.get(key, 0))
+        if quantity:
+            rows.append({**row, "quantity": quantity})
+    return rows
+
+
+def process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund:
+    try:
+        return _process_order_refund(refund, actor, reason)
+    except ValidationError as exc:
+        if "Payment provider refund failed" in str(exc):
+            Refund.objects.filter(pk=refund.pk).update(
+                status=Refund.STATUS_FAILED,
+                failure_reason=str(exc),
+                updated=timezone.now(),
+            )
+        raise
+
+
+@transaction.atomic
+def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund:
+    order = Order.objects.select_for_update().filter(pk=refund.order_id).first()
+    refund = Refund.objects.select_for_update().get(pk=refund.pk)
     if not order:
         raise ValidationError({"detail": "Refund has no associated order."})
 
@@ -87,8 +172,59 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = '') -> Refund
     if refund.status == Refund.STATUS_DECLINED:
         raise ValidationError({"detail": "This refund was already declined."})
 
+    if (
+        order.status in {"cancelled", "refunded"}
+        or not order.ordered
+        or order.paid_total <= 0
+    ):
+        raise ValidationError(
+            {"detail": "This order has no remaining refundable payment."}
+        )
+    available_items = remaining_inventory(order)
+    selected_items: list[dict[str, Any]] = []
+    if refund.selected_items:
+        amount = Decimal("0")
+        seen: set[tuple[Any, str]] = set()
+        for selected in refund.selected_items:
+            key = (selected.get("product"), str(selected.get("variant") or ""))
+            row = next(
+                (
+                    item
+                    for item in available_items
+                    if (item.get("product"), str(item.get("variant") or "")) == key
+                ),
+                None,
+            )
+            quantity = int(selected.get("quantity", 1))
+            if (
+                key in seen
+                or row is None
+                or quantity <= 0
+                or quantity > row["quantity"]
+                or row.get("is_digital")
+            ):
+                raise ValidationError(
+                    {"detail": "Selected items are unavailable for refund."}
+                )
+            original = next(
+                item
+                for item in order_paid_lines(order)
+                if (item.get("product"), str(item.get("variant") or "")) == key
+            )
+            amount += (
+                Decimal(original["line_total"]) * quantity / int(original["quantity"])
+            ).quantize(Decimal(".01"))
+            selected_items.append({**original, "quantity": quantity})
+            seen.add(key)
+    else:
+        amount = refund.refund_amount or order.paid_total - order.refunded_total
+        if amount != order.paid_total - order.refunded_total:
+            raise ValidationError(
+                {"detail": "Partial refunds require selected order items."}
+            )
+        selected_items = available_items
+    wallet_part, card_part = refund_parts(order, amount)
     provider_reference = ""
-    amount = refund.refund_amount or order.total
     try:
         if refund.refund_type == Refund.REFUND_TYPE_ORIGINAL_PAYMENT:
             if order.payment_type in ("user_wallet", "wallet"):
@@ -99,16 +235,36 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = '') -> Refund
                         description=f"Refund to original payment (ProAce Wallet) for Order #{order.orderId}",
                         source=UserWalletTransaction.SOURCE_REFUND,
                         reference=f"REF-{order.orderId}",
+                        idempotency_key=f"refund-{refund.pk}-wallet",
                     )
                     provider_reference = f"WALLET-TX-{tx.pk}"
                 else:
                     provider_reference = f"WALLET-REF-{order.orderId}"
-            elif order.payment_type in ("stripe_wallet", "card") or order.stripe_session_id:
+            elif order.payment_type == "split_tender":
+                provider_reference = (
+                    call_stripe_refund(order, refund, amount=card_part)
+                    if card_part > 0
+                    else "WALLET-ONLY"
+                )
+                if wallet_part > 0 and order.user:
+                    credit_user_wallet(
+                        order.user,
+                        wallet_part,
+                        f"Split-tender refund for #{order.orderId}",
+                        reference=f"SPLIT-REF-{order.orderId}",
+                        idempotency_key=f"refund-{refund.pk}-wallet",
+                    )
+            elif (
+                order.payment_type in ("stripe_wallet", "card")
+                or order.stripe_session_id
+            ):
                 provider_reference = call_stripe_refund(order, refund, amount=amount)
             elif order.payment_type == "cash_on_delivery":
                 provider_reference = f"COD-REVERSAL-{order.orderId}"
             else:
-                provider_reference = f"ORIGINAL-PAYMENT-{order.payment_type}-{order.orderId}"
+                provider_reference = (
+                    f"ORIGINAL-PAYMENT-{order.payment_type}-{order.orderId}"
+                )
         else:
             if order.user:
                 tx = credit_user_wallet(
@@ -117,6 +273,7 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = '') -> Refund
                     description=f"Refund store credit for Order #{order.orderId}",
                     source=UserWalletTransaction.SOURCE_REFUND,
                     reference=f"STORE-CREDIT-{order.orderId}",
+                    idempotency_key=f"refund-{refund.pk}-wallet",
                 )
                 provider_reference = f"WALLET-TX-{tx.pk}"
             else:
@@ -131,6 +288,8 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = '') -> Refund
         refund = Refund.objects.select_for_update().get(pk=refund.pk)
         order = Order.objects.select_for_update().get(pk=order.pk)
 
+        refund.refund_amount = amount
+        refund.selected_items = selected_items
         refund.accepted = True
         refund.status = Refund.STATUS_APPROVED
         refund.provider_reference = provider_reference
@@ -138,42 +297,97 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = '') -> Refund
         refund.processed_by = actor
         refund.processed_at = timezone.now()
         refund.processing_reason = reason
-        refund.save(update_fields=["accepted", "status", "provider_reference", "failure_reason", "processed_by", "processed_at", "processing_reason", "updated"])
-
-        refundable_ids = {row.get('product') for row in (order.items_snapshot or []) if not row.get('is_digital')}
-        approved_ids = set()
-        for prior in Refund.objects.filter(order=order, status=Refund.STATUS_APPROVED):
-            approved_ids.update(row.get('product') for row in prior.selected_items)
-        approved_ids.update(row.get('product') for row in refund.selected_items)
-        is_fully_refunded = (
-            not refund.selected_items
-            or not refundable_ids
-            or refundable_ids.issubset(approved_ids)
-            or (refund.refund_amount and refund.refund_amount >= order.total)
+        refund.save(
+            update_fields=[
+                "refund_amount",
+                "selected_items",
+                "accepted",
+                "status",
+                "provider_reference",
+                "failure_reason",
+                "processed_by",
+                "processed_at",
+                "processing_reason",
+                "updated",
+            ]
         )
-        if is_fully_refunded:
+
+        order.refunded_total += amount
+        order.wallet_refunded_total += wallet_part
+        order.card_refunded_total += card_part
+        if order.refunded_total >= order.paid_total:
             order.status = "refunded"
+        order.refunded_at = timezone.now()
         events = list(order.tracking_events or [])
-        events.append({
-            "status": "refunded",
-            "description": f"Refund approved by {getattr(actor, 'email', 'staff')} ({refund.get_refund_type_display()}). Ref: {provider_reference}",
-            "timestamp": timezone.now().isoformat(),
-            "actor_id": getattr(actor, "pk", None),
-        })
+        events.append(
+            {
+                "status": "refunded",
+                "description": f"Refund approved by {getattr(actor, 'email', 'staff')} ({refund.get_refund_type_display()}). Ref: {provider_reference}",
+                "timestamp": timezone.now().isoformat(),
+                "actor_id": getattr(actor, "pk", None),
+            }
+        )
         order.tracking_events = events
-        order.save(update_fields=["status", "tracking_events", "updated"])
+        order.save(
+            update_fields=[
+                "status",
+                "tracking_events",
+                "refunded_at",
+                "refunded_total",
+                "wallet_refunded_total",
+                "card_refunded_total",
+                "updated",
+            ]
+        )
 
         # Reverse merchant earnings and adjust merchant wallet
-        process_refund_deduction(order, refund_amount=amount)
+        if selected_items:
+            from store.models import Store
+
+            shares: dict[int, Decimal] = {}
+            paid_lines = order_paid_lines(order)
+            for selected in refund.selected_items:
+                snapshot = next(
+                    (
+                        row
+                        for row in paid_lines
+                        if row.get("product") == selected.get("product")
+                        and row.get("variant", "") == selected.get("variant", "")
+                    ),
+                    None,
+                )
+                if snapshot and snapshot.get("store"):
+                    store_id = int(snapshot["store"])
+                    share = (
+                        Decimal(snapshot["net_total"])
+                        * int(selected.get("quantity", 1))
+                        / int(snapshot.get("quantity", 1))
+                    ).quantize(Decimal(".01"))
+                    shares[store_id] = shares.get(store_id, Decimal("0")) + share
+            for store_id, share in shares.items():
+                store_obj = Store.objects.filter(pk=store_id).first()
+                process_refund_deduction(order, refund_amount=share, store=store_obj)
+        else:
+            process_refund_deduction(order)
         from product.models import Product
         from store.views import invalidate_catalog
+
         for row in refund.selected_items:
-            product = Product.objects.select_for_update().filter(pk=row.get('product'), is_digital=False).first()
+            product = (
+                Product.objects.select_for_update()
+                .filter(pk=row.get("product"), is_digital=False)
+                .first()
+            )
             if product:
-                quantity = int(row.get('quantity', 1))
+                quantity = int(row.get("quantity", 1))
                 product.available += quantity
+                from product.policies import restock_variant
+
+                restock_variant(product, str(row.get("variant") or ""), quantity)
                 product.sales = max(0, product.sales - quantity)
-                product.save(update_fields=['available', 'sales', 'updated'])
+                product.save(
+                    update_fields=["available", "variants", "sales", "updated"]
+                )
                 transaction.on_commit(lambda p=product: invalidate_catalog(p))
 
         if order.user:
@@ -190,7 +404,11 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = '') -> Refund
                         else " Payment has been returned to your original payment method."
                     )
                 ),
-                data={"order_id": order.pk, "refund_id": refund.pk, "event": "refund_approved"},
+                data={
+                    "order_id": order.pk,
+                    "refund_id": refund.pk,
+                    "event": "refund_approved",
+                },
             )
 
     return refund
@@ -201,14 +419,30 @@ def decline_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund
         raise ValidationError({"detail": f"This refund was already {refund.status}."})
 
     with transaction.atomic():
+        if refund.order_id:
+            Order.objects.select_for_update().get(pk=refund.order_id)
         refund = Refund.objects.select_for_update().get(pk=refund.pk)
+        if refund.status not in (Refund.STATUS_PENDING, Refund.STATUS_FAILED):
+            raise ValidationError(
+                {"detail": f"This refund was already {refund.status}."}
+            )
         refund.accepted = False
         refund.status = Refund.STATUS_DECLINED
         refund.failure_reason = reason or "Refund request declined by moderation."
         refund.processing_reason = reason
         refund.processed_by = actor
         refund.processed_at = timezone.now()
-        refund.save(update_fields=["accepted", "status", "failure_reason", "processed_by", "processed_at", "processing_reason", "updated"])
+        refund.save(
+            update_fields=[
+                "accepted",
+                "status",
+                "failure_reason",
+                "processed_by",
+                "processed_at",
+                "processing_reason",
+                "updated",
+            ]
+        )
 
         if refund.order:
             order = Order.objects.select_for_update().get(pk=refund.order.pk)
@@ -223,47 +457,69 @@ def decline_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund
                     target=order,
                     verb=f"Refund Request Update for Order #{order.orderId}",
                     description=f"Your refund request for Order #{order.orderId} was declined. Reason: {refund.failure_reason}",
-                    data={"order_id": order.pk, "refund_id": refund.pk, "event": "refund_declined"},
+                    data={
+                        "order_id": order.pk,
+                        "refund_id": refund.pk,
+                        "event": "refund_declined",
+                    },
                 )
 
     return refund
 
 
-def restore_order_inventory(order: Order) -> None:
+def restore_order_inventory(
+    order: Order, items: list[dict[str, Any]] | None = None
+) -> None:
     from product.models import Product
     from store.views import invalidate_catalog
 
-    snapshots = order.items_snapshot or []
+    snapshots = items if items is not None else order.items_snapshot or []
     if snapshots:
         for item in snapshots:
             product_id = item.get("product")
             qty = int(item.get("quantity", 1))
             is_digital = item.get("is_digital", False)
             if product_id:
-                product = Product.objects.select_for_update().filter(pk=product_id).first()
+                product = (
+                    Product.objects.select_for_update().filter(pk=product_id).first()
+                )
                 if product:
                     if not is_digital and not product.is_digital:
                         product.available += qty
+                        from product.policies import restock_variant
+
+                        restock_variant(product, str(item.get("variant") or ""), qty)
                     product.sales = max(0, product.sales - qty)
-                    product.save(update_fields=["available", "sales", "updated"])
+                    product.save(
+                        update_fields=["available", "variants", "sales", "updated"]
+                    )
                     transaction.on_commit(lambda p=product: invalidate_catalog(p))
-    elif order.cart:
+    elif order.cart and items is None:
         for item in order.cart.cart_items.select_related("product").all():
-            product = Product.objects.select_for_update().filter(pk=item.product_id).first()
+            product = (
+                Product.objects.select_for_update().filter(pk=item.product_id).first()
+            )
             if product:
                 if not product.is_digital:
                     product.available += item.quantity
+                    from product.policies import restock_variant
+
+                    restock_variant(product, item.variant, item.quantity)
                 product.sales = max(0, product.sales - item.quantity)
-                product.save(update_fields=["available", "sales", "updated"])
+                product.save(
+                    update_fields=["available", "variants", "sales", "updated"]
+                )
                 transaction.on_commit(lambda p=product: invalidate_catalog(p))
 
 
+@transaction.atomic
 def execute_order_status_transition(
     order: Order,
     next_status: str,
     actor: Any,
     reason: str,
 ) -> Order:
+    order = Order.objects.select_for_update().get(pk=order.pk)
     if next_status == "refunded":
         raise ValidationError({"detail": "Use the refund workflow to refund an order."})
 
@@ -277,25 +533,58 @@ def execute_order_status_transition(
 
     allowed_targets = ALLOWED_ORDER_TRANSITIONS.get(previous, set())
     if next_status not in allowed_targets:
-        raise ValidationError({
-            "detail": f"Cannot transition order from '{previous}' to '{next_status}'. Allowed transitions: {sorted(list(allowed_targets))}"
-        })
+        raise ValidationError(
+            {
+                "detail": f"Cannot transition order from '{previous}' to '{next_status}'. Allowed transitions: {sorted(list(allowed_targets))}"
+            }
+        )
 
-    # If cancelling, perform cancellation payment reversal first if external
-    if next_status == "cancelled" and order.ordered:
-        if order.payment_type in ("stripe_wallet", "card") or order.stripe_session_id:
+    inventory = remaining_inventory(order)
+    if next_status == "cancelled":
+        remaining = order.paid_total - order.refunded_total
+        if remaining > 0:
+            wallet_part, card_part = refund_parts(order, remaining)
             try:
-                call_stripe_refund(order, reason="order_cancelled_by_staff")
+                if card_part > 0:
+                    call_stripe_refund(
+                        order, reason="order_cancelled", amount=card_part
+                    )
+                if wallet_part > 0 and order.user:
+                    credit_user_wallet(
+                        order.user,
+                        wallet_part,
+                        f"Refund for cancelled Order #{order.orderId}",
+                        source=UserWalletTransaction.SOURCE_REFUND,
+                        reference=f"CANCEL-{order.orderId}",
+                        idempotency_key=f"cancel-{order.pk}-wallet",
+                    )
             except Exception as exc:
-                raise ValidationError({"detail": f"Cannot cancel order: payment refund failed: {str(exc)}"})
-        elif order.payment_type == "user_wallet" and order.user:
-            credit_user_wallet(
-                user=order.user,
-                amount=order.total,
-                description=f"Refund for cancelled Order #{order.orderId}",
-                source=UserWalletTransaction.SOURCE_REFUND,
-                reference=f"CANCEL-{order.orderId}",
+                raise ValidationError(
+                    {
+                        "detail": f"Cannot cancel order: payment refund failed: {str(exc)}"
+                    }
+                )
+            order.refunded_total += remaining
+            order.wallet_refunded_total += wallet_part
+            order.card_refunded_total += card_part
+            order.save(
+                update_fields=[
+                    "refunded_total",
+                    "wallet_refunded_total",
+                    "card_refunded_total",
+                    "updated",
+                ]
             )
+        Refund.objects.filter(
+            order=order, status__in=[Refund.STATUS_PENDING, Refund.STATUS_FAILED]
+        ).update(
+            status=Refund.STATUS_DECLINED,
+            failure_reason="Order cancelled.",
+            processing_reason=reason,
+            processed_by=actor,
+            processed_at=timezone.now(),
+            updated=timezone.now(),
+        )
 
     with transaction.atomic():
         order = Order.objects.select_for_update().get(pk=order.pk)
@@ -318,20 +607,37 @@ def execute_order_status_transition(
             order.shipped_at = None
             order.delivered_at = None
 
+        if next_status in {"pending", "confirmed", "shipped", "delivered", "picked up"}:
+            order.fulfillments.update(
+                status="confirmed" if next_status == "pending" else next_status,
+                shipped_at=order.shipped_at,
+                delivered_at=order.delivered_at,
+                updated=now,
+            )
         if next_status == "cancelled":
-            restore_order_inventory(order)
+            restore_order_inventory(order, inventory if order.items_snapshot else None)
             process_refund_deduction(order)
 
         events = list(order.tracking_events or [])
-        events.append({
-            "status": next_status,
-            "description": f"Back-office status transition by {getattr(actor, 'email', 'staff')}: {reason}",
-            "timestamp": now.isoformat(),
-            "previous_status": previous,
-            "actor_id": getattr(actor, "pk", None),
-        })
+        events.append(
+            {
+                "status": next_status,
+                "description": f"Back-office status transition by {getattr(actor, 'email', 'staff')}: {reason}",
+                "timestamp": now.isoformat(),
+                "previous_status": previous,
+                "actor_id": getattr(actor, "pk", None),
+            }
+        )
         order.tracking_events = events
-        order.save(update_fields=["status", "shipped_at", "delivered_at", "tracking_events", "updated"])
+        order.save(
+            update_fields=[
+                "status",
+                "shipped_at",
+                "delivered_at",
+                "tracking_events",
+                "updated",
+            ]
+        )
 
         if order.user:
             create_notification(
@@ -340,12 +646,16 @@ def execute_order_status_transition(
                 target=order,
                 verb=f"Order #{order.orderId} updated to {next_status}",
                 description=f"Your order #{order.orderId} status was updated to {next_status}. Reason: {reason}",
-                data={"order_id": order.pk, "status": next_status, "event": "order_status_override"},
+                data={
+                    "order_id": order.pk,
+                    "status": next_status,
+                    "event": "order_status_override",
+                },
             )
 
         if next_status == "cancelled":
             store_ids = set()
-            for row in (order.items_snapshot or []):
+            for row in order.items_snapshot or []:
                 if row.get("store"):
                     store_ids.add(row["store"])
             for sid in store_ids:
@@ -357,7 +667,12 @@ def execute_order_status_transition(
                         target=order,
                         verb=f"Order #{order.orderId} was cancelled",
                         description=f"Order #{order.orderId} was cancelled by support. Restored stock and reversed earnings.",
-                        data={"order_id": order.pk, "status": "cancelled", "store_id": sid, "event": "order_cancelled"},
+                        data={
+                            "order_id": order.pk,
+                            "status": "cancelled",
+                            "store_id": sid,
+                            "event": "order_cancelled",
+                        },
                     )
 
     return order

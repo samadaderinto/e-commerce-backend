@@ -52,3 +52,132 @@ test('active store survives merchant navigation and reloads, and switching reset
   await expect(page.getByRole('combobox', { name: 'Filter orders by status' })).toHaveValue('');
   await expect(page.getByText('Your customer orders will appear here.')).toBeVisible();
 });
+
+test('official-store admin previews an unsaved digital product in a separate page', async ({ page, context }) => {
+  let writes: number = 0;
+  await context.route('**/api/**', async route => {
+    const request = route.request();
+    const path: string = new URL(request.url()).pathname.replace(/\/$/, '');
+    if (request.method() !== 'GET') writes += 1;
+    let json: unknown = {};
+    if (path === '/api/me') json = { id: 7, first_name: 'Admin', email: 'admin@test.com', is_staff: true, is_superuser: true };
+    else if (path === '/api/stores') json = { count: 1, results: [{ id: 1, name: 'Official store', status: 'active', is_official: true }] };
+    else if (path === '/api/cart') json = { items: [], subtotal: '0', shipping: '0', total: '0' };
+    else if (path === '/api/wishlist' || path.includes('notifications')) json = [];
+    await route.fulfill({ json });
+  });
+  await page.goto('/merchant/products/new');
+  await page.locator('input[name="title"]').fill('Official digital guide');
+  await page.locator('textarea[name="description"]').fill('A downloadable guide.');
+  await page.locator('input[name="price"]').fill('25.00');
+  await page.locator('input[name="is_digital"]').check();
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  const preview = await popupPromise;
+  await expect(preview).toHaveURL(/\/merchant\/products\/preview$/);
+  await expect(preview.getByRole('heading', { name: 'Official digital guide' })).toBeVisible({ timeout: 30000 });
+  await expect(preview.getByText('Instant digital download', { exact: true })).toBeVisible();
+  await expect(preview.getByRole('button', { name: 'Add to bag' })).toBeDisabled();
+  await expect(page.locator('input[name="title"]')).toHaveValue('Official digital guide');
+  expect(writes).toBe(0);
+  await preview.close();
+});
+
+test('retrying a failed cover upload updates the saved product without creating another listing', async ({ page, context }) => {
+  const mutations: { path: string; method: string }[] = [];
+  let uploads: number = 0;
+  let product: Record<string, unknown> = {
+    id: 42, title: 'Original product', description: 'A product description.', category: 'electronics',
+    brand: '', price: '25.00', discount: 0, available: 0, visibility: false, weight: '1.00',
+    length: '10.00', width: '8.00', height: '4.00', is_digital: false,
+    image_url: '', digital_file_url: '', images: [], variants: [], tags: [], specifications: [],
+  };
+  await context.route('**/api/**', async route => {
+    const request = route.request();
+    const path: string = new URL(request.url()).pathname.replace(/\/$/, '');
+    const method: string = request.method();
+    let json: unknown = {};
+    if (path === '/api/me') json = { id: 7, first_name: 'Admin', email: 'admin@test.com', is_staff: true, is_superuser: true };
+    else if (path === '/api/stores') json = { count: 1, results: [{ id: 1, name: 'Official store', status: 'active', is_official: true }] };
+    else if (path === '/api/stores/1/products' && method === 'POST') {
+      mutations.push({ path, method });
+      product = { ...product, ...request.postDataJSON() as Record<string, unknown> };
+      json = product;
+    } else if (path === '/api/stores/1/products/42') {
+      if (method === 'PATCH') {
+        mutations.push({ path, method });
+        product = { ...product, ...request.postDataJSON() as Record<string, unknown> };
+      }
+      json = product;
+    } else if (path === '/api/stores/1/products/42/images' && method === 'POST') {
+      uploads += 1;
+      if (uploads === 1) { await route.fulfill({ status: 500, json: { detail: 'Upload directory is not writable.' } }); return; }
+      json = { id: 8, image: '/cover.png' };
+    } else if (path === '/api/cart') json = { items: [], subtotal: '0', shipping: '0', total: '0' };
+    else if (path === '/api/wishlist' || path.includes('notifications')) json = [];
+    await route.fulfill({ json });
+  });
+  await page.goto('/merchant/products/new');
+  await page.locator('input[name="title"]').fill('Original product');
+  await page.locator('textarea[name="description"]').fill('A product description.');
+  await page.locator('select[name="category"]').selectOption('electronics');
+  await page.locator('input[name="price"]').fill('25.00');
+  await page.locator('.product-editor input[type="file"]').setInputFiles({
+    name: 'cover.png', mimeType: 'image/png',
+    buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX3sAAAAASUVORK5CYII=', 'base64'),
+  });
+  await page.getByRole('button', { name: 'Create product', exact: true }).click();
+  await expect(page.getByText(/Your product is saved, but this step failed/)).toBeVisible();
+  await page.locator('input[name="title"]').fill('Updated product');
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page).toHaveURL(/\/merchant\/products\/42$/);
+  await expect(page.locator('input[name="title"]')).toHaveValue('Updated product');
+  expect(mutations).toEqual([
+    { path: '/api/stores/1/products', method: 'POST' },
+    { path: '/api/stores/1/products/42', method: 'PATCH' },
+  ]);
+  expect(uploads).toBe(2);
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect.poll(() => mutations.length).toBe(3);
+  expect(mutations[2]).toEqual({ path: '/api/stores/1/products/42', method: 'PATCH' });
+  expect(uploads).toBe(2);
+});
+
+test('onboarding preview includes unsaved variants and a flash deal', async ({ page, context }) => {
+  let writes: number = 0;
+  await context.route('**/api/**', async route => {
+    const request = route.request();
+    const path: string = new URL(request.url()).pathname.replace(/\/$/, '');
+    if (request.method() !== 'GET') writes += 1;
+    let json: unknown = {};
+    if (path === '/api/me') json = { id: 7, first_name: 'Admin', email: 'admin@test.com', is_staff: true, is_superuser: true };
+    else if (path === '/api/stores') json = { count: 1, results: [{ id: 1, name: 'Official store', status: 'active', is_official: true }] };
+    else if (path === '/api/cart') json = { items: [], subtotal: '0', shipping: '0', total: '0' };
+    else if (path === '/api/wishlist' || path.includes('notifications')) json = [];
+    await route.fulfill({ json });
+  });
+  await page.goto('/merchant/products/new');
+  await page.locator('input[name="title"]').fill('Onboarding shirt');
+  await page.locator('textarea[name="description"]').fill('A shirt with options.');
+  await page.locator('input[name="price"]').fill('25.00');
+  await page.locator('input[name="discount"]').fill('20');
+  await page.locator('input[name="flash_sale_end"]').fill('2099-12-31T23:59');
+  await page.getByRole('button', { name: 'Add variant' }).click();
+  await page.getByPlaceholder('e.g. Black / Large').fill('Blue / Large');
+  await page.locator('.variant-card input[type="number"]').first().fill('5');
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  const preview = await popupPromise;
+  await expect(preview).toHaveURL(/\/merchant\/products\/preview$/);
+  await expect(preview.getByRole('heading', { name: 'Onboarding shirt' })).toBeVisible({ timeout: 30000 });
+  await expect(preview.getByRole('button', { name: /Blue \/ Large/ })).toBeVisible();
+  await expect(preview.getByLabel(/Flash deal ends in/)).toBeVisible();
+  await expect(preview.getByLabel(/Flash deal ends in/)).toContainText(/\d{2}:\d{2}:\d{2}:\d{2}/);
+  await preview.getByRole('button', { name: /Blue \/ Large/ }).click();
+  await expect(preview.getByRole('button', { name: /Blue \/ Large/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(preview.locator('.detail-price > strong')).toHaveText('$25.00');
+  await expect(preview.getByRole('button', { name: 'Add to bag' })).toBeDisabled();
+  await expect(page.locator('input[name="title"]')).toHaveValue('Onboarding shirt');
+  expect(writes).toBe(0);
+  await preview.close();
+});

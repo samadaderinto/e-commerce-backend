@@ -3,9 +3,14 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.utils import timezone
+from typing import Any
 
 
 class Notification(models.Model):
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get('update_fields'):
+            kwargs['update_fields'] = set(kwargs['update_fields']) | {'updated_at'}
+        super().save(*args, **kwargs)
     LEVELS = (
         ("success", "success"),
         ("info", "info"),
@@ -62,6 +67,8 @@ class Notification(models.Model):
         verbose_name="recipient",
     )
     timestamp = models.DateTimeField("timestamp", db_index=True, default=timezone.now)
+    read_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
     public = models.BooleanField("public", db_index=True, default=True)
     deleted = models.BooleanField("deleted", db_index=True, default=False)
     emailed = models.BooleanField("emailed", db_index=True, default=False)
@@ -78,18 +85,22 @@ class Notification(models.Model):
     def __str__(self):
         return f"{self.actor} {self.verb}"
 
-    def mark_as_read(self):
+    def mark_as_read(self) -> None:
         if self.unread:
             self.unread = False
-            self.save(update_fields=["unread"])
+            self.read_at = timezone.now()
+            self.save(update_fields=["unread", "read_at", "updated_at"])
 
-    def mark_as_unread(self):
+    def mark_as_unread(self) -> None:
         if not self.unread:
             self.unread = True
-            self.save(update_fields=["unread"])
+            self.read_at = None
+            self.save(update_fields=["unread", "read_at", "updated_at"])
 
 
 class PushDevice(models.Model):
+    last_active_at = models.DateTimeField(default=timezone.now)
+    last_sent_at = models.DateTimeField(null=True, blank=True)
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,

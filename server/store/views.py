@@ -1,3 +1,4 @@
+from zoneinfo import ZoneInfo
 from rest_framework import serializers
 from core.access import IsBusinessAdmin, is_admin, is_backoffice
 from datetime import timedelta
@@ -17,6 +18,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.request import Request
 from rest_framework.response import Response
 from drf_spectacular.utils import extend_schema, extend_schema_view
 
@@ -28,7 +30,7 @@ from store.models import (
     StoreInfo, StorePayout,
 )
 from store.serializers import (
-    DashboardQuerySerializer, InventorySerializer, MerchantImageSerializer,
+    MerchantTrackingSerializer, DashboardQuerySerializer, InventorySerializer, MerchantImageSerializer,
     MerchantPayoutCreateSerializer, MerchantProductSerializer, MerchantSpecificationSerializer,
     MerchantWalletSerializer, PayoutCreateSerializer, ScheduleSerializer,
     StoreAddressSerializer, StoreEarningsLedgerSerializer, StoreInfoSerializer,
@@ -135,6 +137,12 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     permission_classes = [IsAuthenticated]
     pagination_class = MerchantPagination
     serializer_class = StoreSerializer
+
+    def get_object(self) -> Store:
+        store = super().get_object()
+        from core.activity import record_store_activity
+        record_store_activity(store)
+        return store
 
     def get_queryset(self):
         user = self.request.user
@@ -243,14 +251,22 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     @action(detail=True, methods=['get'])
     def onboarding(self, request, pk=None):
         store = self.get_object()
+        from store.services import has_store_address
         checks = {
             'store_created': True,
             'contact_added': StoreInfo.objects.filter(store=store).exclude(email__isnull=True).exclude(email='').exists(),
-            'pickup_address_added': StoreAddress.objects.filter(store=store, is_default=True).exists(),
+            'pickup_address_added': has_store_address(store),
             'product_added': Product.objects.filter(store=store).exists(),
             'product_published': Product.objects.filter(store=store, visibility=True).exists(),
         }
         return Response({'steps': checks, 'complete': all(checks.values())})
+
+    @staticmethod
+    def fulfillment_value(order: Order, store: Store, field: str, fallback: object) -> object:
+        fulfillment = order.fulfillments.filter(store=store).first()
+        if order.status in {'cancelled', 'refunded'}:
+            return order.status if field == 'status' else fallback
+        return getattr(fulfillment, field) if fulfillment else fallback
 
     def store_orders(self, store):
         return Order.objects.filter(
@@ -265,153 +281,240 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         if order_status:
             if order_status not in dict(Order.ORDER_STATUS_CHOICE):
                 raise ValidationError({'status': 'Invalid order status.'})
-            orders = orders.filter(status=order_status)
+            if order_status in {'cancelled', 'refunded'}:
+                orders = orders.filter(status=order_status)
+            else:
+                orders = orders.filter(
+                    Q(fulfillments__store=store, fulfillments__status=order_status)
+                    | Q(fulfillments__isnull=True, status=order_status)
+                ).exclude(status__in=['cancelled', 'refunded'])
         orders = orders.select_related('user').prefetch_related(Prefetch(
             'cart__cart_items', queryset=CartItem.objects.filter(product__store=store)
             .select_related('product'), to_attr='merchant_items',
         ))
         page = self.paginate_queryset(orders)
-        data = [{
-            'id': order.pk, 'reference': order.orderId, 'status': order.status,
-            'carrier': order.carrier or 'USPS',
-            'tracking_number': order.tracking_number or '',
-            'tracking_url': order.tracking_url or '',
-            'shipped_at': order.shipped_at,
-            'delivered_at': order.delivered_at,
-            'tracking_events': order.tracking_events or [],
-            'shipping_address': order.address_snapshot or {},
-            'customer': {
-                'name': f"{order.user.first_name} {order.user.last_name}".strip() if order.user else '',
-                'email': order.user.email if order.user else '',
-                'phone': getattr(order.user, 'phone1', '') if order.user else '',
-            },
-            'created': order.created, 'ordered': order.ordered,
-            'items': [{'product': item.product_id, 'title': item.product.title,
-                       'quantity': item.quantity} for item in getattr(order.cart, 'merchant_items', [])] or [
-                       {'product': it.get('product', 0), 'title': it.get('title', 'Item'),
-                        'quantity': it.get('quantity', 1)} for it in (order.items_snapshot or []) if not it.get('store') or it.get('store') == store.pk],
-        } for order in page]
+        data = [
+            {
+                "id": order.pk,
+                "reference": order.orderId,
+                "status": self.fulfillment_value(order, store, "status", order.status),
+                "order_status": order.status,
+                "carrier": self.fulfillment_value(
+                    order, store, "carrier", order.carrier
+                )
+                or "USPS",
+                "tracking_number": self.fulfillment_value(
+                    order, store, "tracking_number", order.tracking_number
+                )
+                or "",
+                "tracking_url": order.tracking_url
+                if order.fulfillments.count() <= 1
+                else "",
+                "shipped_at": self.fulfillment_value(
+                    order, store, "shipped_at", order.shipped_at
+                ),
+                "delivered_at": self.fulfillment_value(
+                    order, store, "delivered_at", order.delivered_at
+                ),
+                "tracking_events": order.tracking_events or [],
+                "shipping_address": order.address_snapshot or {},
+                "customer": {
+                    "name": f"{order.user.first_name} {order.user.last_name}".strip()
+                    if order.user
+                    else "",
+                    "email": (order.user.email if order.user else "")
+                    or getattr(order, "buyer_email", "")
+                    or "",
+                    "phone": str(
+                        getattr(order.user, "phone1", "")
+                        or getattr(order, "buyer_phone", "")
+                        or ""
+                    )
+                    if order.user
+                    else str(getattr(order, "buyer_phone", "") or ""),
+                },
+                "created": order.created,
+                "ordered": order.ordered,
+                "items": [
+                    {
+                        "product": item.product_id,
+                        "title": item.product.title,
+                        "quantity": item.quantity,
+                    }
+                    for item in getattr(order.cart, "merchant_items", [])
+                ]
+                or [
+                    {
+                        "product": it.get("product", 0),
+                        "title": it.get("title", "Item"),
+                        "quantity": it.get("quantity", 1),
+                    }
+                    for it in (order.items_snapshot or [])
+                    if not it.get("store") or it.get("store") == store.pk
+                ],
+            }
+            for order in page
+        ]
         return self.get_paginated_response(data)
 
-    @action(detail=True, methods=['patch', 'post'], url_path=r'orders/(?P<order_pk>[^/.]+)/tracking')
+    @action(
+        detail=True,
+        methods=["patch", "post"],
+        url_path=r"orders/(?P<order_pk>[^/.]+)/tracking",
+    )
+    @extend_schema(request=MerchantTrackingSerializer, responses=dict)
     @transaction.atomic
-    def update_order_tracking(self, request, pk=None, order_pk=None):
+    def update_order_tracking(
+        self, request: Request, pk: str | None = None, order_pk: str | None = None
+    ) -> Response:
         store = self.get_object()
-        order_filter = Q(pk=int(order_pk)) if str(order_pk).isdigit() else Q(orderId=order_pk)
+        order_filter = (
+            Q(pk=int(order_pk)) if str(order_pk).isdigit() else Q(orderId=order_pk)
+        )
         order = Order.objects.filter(order_filter).select_for_update().first()
         if not order:
             raise Http404("Order not found.")
-        has_store_item = (
-            order.cart.cart_items.filter(product__store=store).exists() or
-            any(item.get('store') == store.pk for item in (order.items_snapshot or []))
+        from payment.fulfillment import update_fulfillment
+
+        belongs_to_store = any(
+            row.get("store") == store.pk for row in order.items_snapshot or []
         )
-        if not has_store_item:
+        if not belongs_to_store and order.cart_id:
+            belongs_to_store = order.cart.cart_items.filter(
+                product__store=store
+            ).exists()
+        if not belongs_to_store:
             raise Http404("Order does not belong to this store.")
-        if order.status in ('cancelled', 'refunded'):
-            raise ValidationError({'order': f'Cannot update tracking for an order with status {order.status}.'})
-        tracking_number = str(request.data.get('tracking_number', '')).strip()
-        carrier = str(request.data.get('carrier', 'USPS')).strip() or 'USPS'
-        new_status = request.data.get('status')
-
-        if carrier.upper() not in {'USPS', 'UPS', 'FEDEX', 'DHL'}:
-            raise ValidationError({'carrier': 'Choose USPS, UPS, FedEx, or DHL.'})
-        if len(tracking_number) > 100:
-            raise ValidationError({'tracking_number': 'Use at most 100 characters.'})
-
-        if tracking_number:
-            order.tracking_number = tracking_number
-            order.carrier = carrier
-            if not order.shipped_at:
-                order.shipped_at = timezone.now()
-            if order.status in ('pending', 'confirmed'):
-                order.status = 'shipped'
-
-        if new_status and new_status in dict(Order.ORDER_STATUS_CHOICE):
-            order.status = new_status
-            if new_status == 'shipped' and not order.shipped_at:
-                order.shipped_at = timezone.now()
-            elif new_status == 'delivered' and not order.delivered_at:
-                order.delivered_at = timezone.now()
-
-        event_description = request.data.get('event_description')
-        if event_description or tracking_number:
+        serializer = MerchantTrackingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        fulfillment = update_fulfillment(
+            order,
+            store,
+            data.get("status"),
+            data["carrier"],
+            data["tracking_number"],
+        )
+        event_description = data["event_description"]
+        if event_description or data["tracking_number"] or data.get("status"):
             events = list(order.tracking_events or [])
-            events.append({
-                'status': order.status,
-                'description': event_description or f"Package marked {order.status.upper()} via {carrier} (Tracking #{tracking_number or 'N/A'})",
-                'timestamp': timezone.now().isoformat(),
-            })
+            events.append(
+                {
+                    "status": fulfillment.status,
+                    "store_id": store.pk,
+                    "description": event_description
+                    or f"Store shipment marked {fulfillment.status}.",
+                    "timestamp": timezone.now().isoformat(),
+                }
+            )
             order.tracking_events = events
 
-        order.save(update_fields=['status', 'carrier', 'tracking_number', 'shipped_at', 'delivered_at', 'tracking_events', 'updated'])
+        order.save(
+            update_fields=[
+                "status",
+                "carrier",
+                "tracking_number",
+                "shipped_at",
+                "delivered_at",
+                "tracking_events",
+                "updated",
+            ]
+        )
 
         from notification.views import create_notification
+
         create_notification(
             recipient=order.user,
             actor=store.user,
             target=order,
-            verb=f"Order #{order.orderId} {order.status.title()}",
-            description=f"Your order status has been updated to {order.status}. Carrier: {order.carrier}, Tracking #{order.tracking_number or 'N/A'}",
-            data={"event": "order_tracking_update", "order_id": order.pk, "tracking_number": order.tracking_number, "status": order.status},
+            verb=f"Order #{order.orderId} — {store.name} {fulfillment.status.title()}",
+            description=f"Your {store.name} shipment is {fulfillment.status}. Carrier: {fulfillment.carrier}, Tracking #{fulfillment.tracking_number or 'N/A'}",
+            data={
+                "event": "order_tracking_update",
+                "order_id": order.pk,
+                "store_id": store.pk,
+                "tracking_number": fulfillment.tracking_number,
+                "status": fulfillment.status,
+            },
         )
 
-        return Response({
-            'id': order.pk,
-            'reference': order.orderId,
-            'status': order.status,
-            'carrier': order.carrier,
-            'tracking_number': order.tracking_number,
-            'tracking_url': order.tracking_url,
-            'shipped_at': order.shipped_at,
-            'delivered_at': order.delivered_at,
-            'tracking_events': order.tracking_events,
-        })
+        return Response(
+            {
+                "id": order.pk,
+                "reference": order.orderId,
+                "order_status": order.status,
+                "status": fulfillment.status,
+                "carrier": fulfillment.carrier,
+                "tracking_number": fulfillment.tracking_number,
+                "tracking_url": order.tracking_url,
+                "shipped_at": fulfillment.shipped_at.isoformat()
+                if fulfillment.shipped_at
+                else None,
+                "delivered_at": fulfillment.delivered_at.isoformat()
+                if fulfillment.delivered_at
+                else None,
+                "tracking_events": order.tracking_events,
+            }
+        )
 
-
-    @action(detail=True, methods=['get'])
+    @action(detail=True, methods=["get"])
     def dashboard(self, request, pk=None):
         store = self.get_object()
         query = DashboardQuerySerializer(data=request.query_params)
         query.is_valid(raise_exception=True)
-        days = query.validated_data['days']
-        threshold = query.validated_data['low_stock_threshold']
-        today = timezone.localdate()
-        start = today - timedelta(days=days - 1)
-        products = Product.objects.filter(store=store)
-        orders = self.store_orders(store).filter(created__date__gte=start, created__date__lte=today)
-        sales_orders = orders.filter(ordered=True, status__in=['confirmed', 'shipped', 'delivered', 'picked up'])
-        items = CartItem.objects.filter(product__store=store, cart__in=sales_orders.values('cart_id'))
-        line_value = ExpressionWrapper(
-            F('quantity') * F('product__price') * (100 - F('product__discount')) / Decimal('100.0'),
-            output_field=DecimalField(max_digits=24, decimal_places=2),
-        )
-        totals = items.aggregate(units=Sum('quantity'), value=Sum(line_value))
-        financials = calculate_store_financials(store)
+        with timezone.override(ZoneInfo(query.validated_data["time_zone"])):
+            days = query.validated_data["days"]
+            threshold = query.validated_data["low_stock_threshold"]
+            today = timezone.localdate()
+            start = today - timedelta(days=days - 1)
+            products = Product.objects.filter(store=store)
+            orders = self.store_orders(store).filter(
+                created__date__gte=start, created__date__lte=today
+            )
+            sales_orders = orders.filter(
+                ordered=True,
+                status__in=["confirmed", "shipped", "delivered", "picked up"],
+            )
+            items = CartItem.objects.filter(
+                product__store=store, cart__in=sales_orders.values("cart_id")
+            )
+            line_value = ExpressionWrapper(
+                F("quantity")
+                * F("product__price")
+                * (100 - F("product__discount"))
+                / Decimal("100.0"),
+                output_field=DecimalField(max_digits=24, decimal_places=2),
+            )
+            totals = items.aggregate(units=Sum("quantity"), value=Sum(line_value))
+            financials = calculate_store_financials(store)
 
-        inventory = products.aggregate(
-            total=Count('id'), published=Count('id', filter=Q(visibility=True)),
-            drafts=Count('id', filter=Q(visibility=False)),
-            out_of_stock=Count('id', filter=Q(is_digital=False, available=0)),
-            low_stock=Count('id', filter=Q(available__gt=0, available__lte=threshold)),
-            units=Sum('available'),
-        )
-        inventory['units'] = inventory['units'] or 0
-        trend = {row['day']: row['count'] for row in orders.order_by().annotate(
-            day=TruncDate('created')).values('day').annotate(count=Count('pk', distinct=True))}
-        top_products = items.values('product_id', 'product__title').annotate(
-            units=Sum('quantity')).order_by('-units', 'product_id')[:10]
-        return Response({
-            'period': {'from': start, 'to': today, 'days': days},
-            'inventory': inventory,
-            'orders': {'total': orders.count(), 'by_status': list(orders.order_by().values('status').annotate(count=Count('pk', distinct=True)))},
-            'sales': {'units': totals['units'] or 0,
-                      'estimated_item_value': format(totals['value'] or Decimal('0'), '.2f'),
-                      'basis': 'Current item prices for confirmed, shipped, delivered and picked-up orders. Excludes coupons, tax, shipping and fees; not payout revenue.'},
-            'wallet': financials,
-            'orders_by_day': [{'date': start + timedelta(days=i), 'count': trend.get(start + timedelta(days=i), 0)} for i in range(days)],
-            'top_products': list(top_products),
-            'low_stock_products': list(products.filter(available__lte=threshold).order_by('available', 'pk').values('id', 'title', 'available')[:20]),
-        })
+            inventory = products.aggregate(
+                total=Count("id"),
+                published=Count("id", filter=Q(visibility=True)),
+                drafts=Count("id", filter=Q(visibility=False)),
+                out_of_stock=Count("id", filter=Q(is_digital=False, available=0)),
+                low_stock=Count(
+                    "id", filter=Q(available__gt=0, available__lte=threshold)
+                ),
+                units=Sum("available"),
+            )
+            inventory['units'] = inventory['units'] or 0
+            trend = {row['day']: row['count'] for row in orders.order_by().annotate(
+                day=TruncDate('created')).values('day').annotate(count=Count('pk', distinct=True))}
+            top_products = items.values('product_id', 'product__title').annotate(
+                units=Sum('quantity')).order_by('-units', 'product_id')[:10]
+            return Response({
+                'period': {'from': start, 'to': today, 'days': days, 'time_zone': query.validated_data['time_zone']},
+                'inventory': inventory,
+                'orders': {'total': orders.count(), 'by_status': list(orders.order_by().values('status').annotate(count=Count('pk', distinct=True)))},
+                'sales': {'units': totals['units'] or 0,
+                          'estimated_item_value': format(totals['value'] or Decimal('0'), '.2f'),
+                          'basis': 'Current item prices for confirmed, shipped, delivered and picked-up orders. Excludes coupons, tax, shipping and fees; not payout revenue.'},
+                'wallet': financials,
+                'orders_by_day': [{'date': start + timedelta(days=i), 'count': trend.get(start + timedelta(days=i), 0)} for i in range(days)],
+                'top_products': list(top_products),
+                'low_stock_products': list(products.filter(available__lte=threshold).order_by('available', 'pk').values('id', 'title', 'available')[:20]),
+            })
 
     @action(detail=False, methods=['get'], url_path='wallet')
     def merchant_wallet(self, request):
@@ -479,6 +582,11 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         else:
             store = user_stores.first()
 
+        if store and store.is_official:
+            raise ValidationError({
+                'detail': 'Official company store earnings are consolidated into the Platform Treasury and cannot be withdrawn via merchant payouts. Withdrawals are managed by administrators at /admin/commission.'
+            })
+
         # Synchronize merchant financials to ensure fresh balances
         calculate_merchant_financials(request.user)
 
@@ -514,6 +622,11 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             payouts = store.payouts.all()
             serializer = StorePayoutSerializer(payouts, many=True)
             return Response(serializer.data)
+
+        if store.is_official:
+            raise ValidationError({
+                'detail': 'Official company store earnings are consolidated into the Platform Treasury and cannot be withdrawn via merchant payouts. Withdrawals are managed by administrators at /admin/commission.'
+            })
 
         if store.user_id != request.user.pk:
             raise PermissionDenied('Only the store owner can initiate a withdrawal.')
@@ -572,16 +685,20 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
     ordering_fields = ['created', 'updated', 'price', 'available', 'title', 'sales']
     ordering = ['-created', '-pk']
 
-    def get_store(self):
-        return get_object_or_404(
+    def get_store(self) -> Store:
+        store = get_object_or_404(
             StoreViewSet.get_queryset(self),
             pk=self.kwargs['store_pk'],
         )
+        from core.activity import record_store_activity
+        record_store_activity(store)
+        return store
 
-    def validate_store_publication(self, serializer):
-        # Unverified stores can create and save products (including visibility=True for store preview).
-        # Products remain hidden from the public marketplace until the store is active and staff-verified.
-        pass
+    def validate_store_publication(self, serializer: MerchantProductSerializer) -> None:
+        from store.services import has_store_address
+        visible = serializer.validated_data.get('visibility', getattr(serializer.instance, 'visibility', False))
+        if visible and not has_store_address(self.get_store()):
+            raise ValidationError({'visibility': 'Add a complete default store address before publishing physical or digital products.'})
 
     def get_queryset(self):
         products = Product.objects.filter(store=self.get_store()).prefetch_related('tags', 'images').select_related('specification')
@@ -611,12 +728,18 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
 
     @transaction.atomic
     def perform_create(self, serializer):
+        store = self.get_store()
+        if serializer.validated_data.get('product_type') == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK and not store.is_official:
+            raise ValidationError({'product_type': 'ClickBank partner offers can only be configured for official platform catalog stores.'})
         self.validate_store_publication(serializer)
-        product = serializer.save(store=self.get_store())
+        product = serializer.save(store=store)
         transaction.on_commit(lambda: invalidate_catalog(product))
 
     @transaction.atomic
     def perform_update(self, serializer):
+        store = self.get_store()
+        if serializer.validated_data.get('product_type') == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK and not store.is_official:
+            raise ValidationError({'product_type': 'ClickBank partner offers can only be configured for official platform catalog stores.'})
         self.validate_store_publication(serializer)
         product = serializer.save()
         transaction.on_commit(lambda: invalidate_catalog(product))

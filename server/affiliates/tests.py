@@ -139,3 +139,232 @@ class AffiliateRegistrationTests(TestCase):
         self.assertEqual(response.status_code, 201, response.data)
         self.assertEqual(AffiliateWallet.objects.get(user=referrer).balance, Decimal("25.00"))
         self.assertEqual(Referral.objects.count(), 1)
+
+
+class ClickBankOutboundTests(TestCase):
+    def setUp(self):
+        from store.models import Store
+        from product.models import Product
+        self.user = User.objects.create_user(
+            email="vendor@test.com",
+            password="Strong-test-password-123",
+            first_name="Vendor",
+            last_name="Owner",
+            gender="male",
+            phone1="+2348012345683",
+        )
+        self.store = Store.objects.create(name="Affiliate Partner Hub", username="affiliate-hub", user=self.user, status=Store.STATUS_ACTIVE, is_official=True)
+        self.affiliate_product = Product.objects.create(
+            store=self.store,
+            title="Keto Diet Masterclass",
+            description="Comprehensive guide to ketogenic lifestyle.",
+            price=Decimal("47.00"),
+            discount=0,
+            available=999,
+            category="beverages",
+            product_type="affiliate_clickbank",
+            affiliate_hoplink="https://hop.clickbank.net/?affiliate=proace&vendor=ketomaster",
+            affiliate_vendor_nickname="ketomaster",
+            affiliate_button_text="Get Keto Masterclass",
+        )
+        self.standard_product = Product.objects.create(
+            store=self.store,
+            title="Standard ProAce Protein",
+            description="Whey protein powder.",
+            price=Decimal("30.00"),
+            discount=0,
+            available=10,
+            category="sports",
+            product_type="standard",
+        )
+
+    def test_outbound_redirect_generates_tid_and_records_click(self):
+        from affiliates.models import ClickBankOutboundClick
+        factory = APIRequestFactory()
+        from affiliates.views import AffiliatesViewSet
+        view = AffiliatesViewSet.as_view({"get": "clickbank_outbound"})
+
+        request = factory.get(f"/affiliate/clickbank/outbound/{self.affiliate_product.id}/")
+        response = view(request, product_id=self.affiliate_product.id)
+
+        self.assertEqual(response.status_code, 302)
+        redirect_url = response["Location"]
+        self.assertIn("hop.clickbank.net", redirect_url)
+        self.assertIn("tid=cb_guest_", redirect_url)
+
+        click = ClickBankOutboundClick.objects.get(product=self.affiliate_product)
+        self.assertTrue(click.tracking_id.startswith("cb_guest_"))
+        self.assertEqual(click.hoplink_used, redirect_url)
+
+    @override_settings(CLICKBANK_AFFILIATE_NICKNAME="customproace")
+    def test_outbound_redirect_injects_affiliate_nickname_from_settings(self):
+        from affiliates.views import AffiliatesViewSet
+        from product.models import Product
+        p = Product.objects.create(
+            store=self.store,
+            title="Affiliate Without Aff Query",
+            description="Testing nickname injection.",
+            price=Decimal("19.00"),
+            discount=0,
+            available=999,
+            category="beverages",
+            product_type="affiliate_clickbank",
+            affiliate_hoplink="https://hop.clickbank.net/?vendor=supervendor",
+        )
+        factory = APIRequestFactory()
+        view = AffiliatesViewSet.as_view({"get": "clickbank_outbound"})
+        request = factory.get(f"/affiliate/clickbank/outbound/{p.id}/")
+        response = view(request, product_id=p.id)
+        self.assertEqual(response.status_code, 302)
+        redirect_url = response["Location"]
+        self.assertIn("affiliate=customproace", redirect_url)
+        self.assertIn("vendor=supervendor", redirect_url)
+        self.assertIn("tid=cb_guest_", redirect_url)
+
+    def test_cart_rejects_affiliate_clickbank_product(self):
+        from cart.views import CartViewSet
+        from rest_framework.test import force_authenticate
+        factory = APIRequestFactory()
+        view = CartViewSet.as_view({"post": "add_to_cart"})
+
+        request = factory.post("/cart/add/", {"product": self.affiliate_product.id, "quantity": 1}, format="json")
+        force_authenticate(request, user=self.user)
+        response = view(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("fulfilled directly by our partner", response.data["message"])
+
+    def test_merchant_product_serializer_affiliate_validation(self):
+        from store.serializers import MerchantProductSerializer
+        # 1. Missing hoplink fails
+        invalid_data = {
+            "title": "Affiliate Guide",
+            "description": "A guide.",
+            "price": "19.99",
+            "category": "books",
+            "product_type": "affiliate_clickbank",
+            "affiliate_hoplink": "",
+        }
+        serializer = MerchantProductSerializer(data=invalid_data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("affiliate_hoplink", serializer.errors)
+
+        # 2. Invalid URL scheme fails
+        invalid_data["affiliate_hoplink"] = "javascript:alert(1)"
+        serializer = MerchantProductSerializer(data=invalid_data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("affiliate_hoplink", serializer.errors)
+
+        # 3. Valid hoplink succeeds and defaults inventory & weight
+        valid_data = {
+            "title": "Affiliate Guide",
+            "description": "A guide.",
+            "price": "19.99",
+            "category": "books",
+            "product_type": "affiliate_clickbank",
+            "affiliate_hoplink": "https://hop.clickbank.net/?affiliate=proace&vendor=test",
+            "affiliate_vendor_nickname": "test",
+            "affiliate_button_text": "Buy Guide",
+        }
+        serializer = MerchantProductSerializer(data=valid_data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        validated = serializer.validated_data
+        self.assertEqual(validated["product_type"], "affiliate_clickbank")
+        self.assertEqual(validated["weight"], Decimal("0.00"))
+        self.assertEqual(validated["available"], 999)
+        self.assertEqual(validated["variants"], [])
+
+    def test_staff_store_products_audit_includes_affiliate_fields_and_filters(self):
+        from staff.views import StaffViewSet
+        from rest_framework.test import force_authenticate
+        staff_user = User.objects.create_user(
+            email="staff-test@test.com",
+            password="Strong-test-password-123",
+            first_name="Staff",
+            last_name="Auditor",
+            gender="male",
+            phone1="+2348012345689",
+            is_staff=True,
+        )
+        factory = APIRequestFactory()
+        view = StaffViewSet.as_view({"get": "store_products"})
+
+        # Query with product_type=affiliate_clickbank
+        request = factory.get(f"/admin/staff/stores/{self.store.id}/products/?product_type=affiliate_clickbank")
+        force_authenticate(request, user=staff_user)
+        response = view(request, store_pk=self.store.id)
+
+        self.assertEqual(response.status_code, 200)
+        results = response.data["results"] if "results" in response.data else response.data
+        self.assertEqual(len(results), 1)
+        item = results[0]
+        self.assertEqual(item["id"], self.affiliate_product.id)
+        self.assertEqual(item["product_type"], "affiliate_clickbank")
+        self.assertEqual(item["affiliate_vendor_nickname"], "ketomaster")
+        self.assertIn("hop.clickbank.net", item["affiliate_hoplink"])
+
+    def test_non_official_store_cannot_create_affiliate_clickbank_product(self):
+        from store.views import MerchantProductViewSet
+        from rest_framework.test import force_authenticate
+        from store.models import Store
+        non_official = Store.objects.create(name="Regular Seller", username="regular-seller", user=self.user, status=Store.STATUS_ACTIVE, is_official=False)
+
+        factory = APIRequestFactory()
+        view = MerchantProductViewSet.as_view({"post": "create"})
+        request = factory.post(f"/stores/{non_official.id}/products/", {
+            "title": "Unauthorized Affiliate Deal",
+            "description": "Some description.",
+            "price": "29.99",
+            "category": "books",
+            "product_type": "affiliate_clickbank",
+            "affiliate_hoplink": "https://hop.clickbank.net/?affiliate=proace&vendor=test",
+        }, format="json")
+        force_authenticate(request, user=self.user)
+        response = view(request, store_pk=non_official.id)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("official platform catalog stores", str(response.data))
+
+    def test_storefront_store_filter_excludes_affiliate_products_for_non_official_store(self):
+        from storefront.views import ProductsView
+        from store.models import Store
+        from django.utils import timezone
+        regular_store = Store.objects.create(name="Local Merchant", username="local-merchant", user=self.user, status=Store.STATUS_ACTIVE, verified_at=timezone.now(), is_official=False)
+        from product.models import Product
+        # Standard product owned by merchant
+        p_std = Product.objects.create(
+            store=regular_store,
+            title="Local Handmade Candle",
+            description="Nice candle.",
+            price=Decimal("15.00"),
+            discount=0,
+            available=20,
+            category="sports",
+            product_type="standard",
+            visibility=True,
+        )
+        # Even if an affiliate item had regular_store foreign key
+        p_aff = Product.objects.create(
+            store=regular_store,
+            title="External Guide",
+            description="Guide.",
+            price=Decimal("10.00"),
+            discount=0,
+            available=999,
+            category="books",
+            product_type="affiliate_clickbank",
+            affiliate_hoplink="https://hop.clickbank.net/?affiliate=proace&vendor=test",
+            visibility=True,
+        )
+
+        factory = APIRequestFactory()
+        view = ProductsView.as_view()
+        request = factory.get(f"/products/?store={regular_store.id}")
+        response = view(request)
+
+        self.assertEqual(response.status_code, 200)
+        product_ids = [item["id"] for item in (response.data["results"] if "results" in response.data else response.data)]
+        self.assertIn(p_std.id, product_ids)
+        self.assertNotIn(p_aff.id, product_ids)
+
+
+

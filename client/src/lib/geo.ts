@@ -503,3 +503,62 @@ export function validateCity(city: string): { valid: boolean; formatted: string;
   return { valid: true, formatted: sanitized };
 }
 
+
+export type MilitaryAddress = { city?: string; state?: string; zip?: string; country?: string };
+const militaryStates: Record<string, string> = {
+  AA: 'AA', AE: 'AE', AP: 'AP',
+  'ARMED FORCES AMERICAS': 'AA',
+  'ARMED FORCES EUROPE / AFRICA / MIDDLE EAST': 'AE',
+  'ARMED FORCES PACIFIC': 'AP',
+};
+
+export function militaryZipRegion(zip: string = ''): string | undefined {
+  if (!/^\d{5}(-\d{4})?$/.test(zip.trim())) return undefined;
+  const prefix = Number(zip.trim().slice(0, 3));
+  if (prefix >= 90 && prefix <= 98) return 'AE';
+  if (prefix === 340) return 'AA';
+  if (prefix >= 962 && prefix <= 966) return 'AP';
+  return undefined;
+}
+
+export function isMilitaryAddress(address?: MilitaryAddress): boolean {
+  if (!address) return false;
+
+  const state = (address.state || '').trim().toUpperCase();
+  if (militaryStates[state]) return true;
+
+  const city = (address.city || '').trim().toUpperCase();
+  if (['APO', 'FPO', 'DPO'].includes(city)) return true;
+
+  const normalizedCountry = (address.country || '').toUpperCase().replace(/[^A-Z]/g, '');
+  const isUsCountry =
+    !address.country ||
+    ['US', 'USA', 'UNITEDSTATES', 'UNITEDSTATESOFAMERICA'].includes(normalizedCountry);
+
+  return Boolean(isUsCountry && militaryZipRegion(address.zip));
+}
+
+export function validateMilitaryAddress(address: MilitaryAddress): string | undefined {
+  if (!isMilitaryAddress(address)) return undefined;
+
+  const normalizedCountry = (address.country || '').toUpperCase().replace(/[^A-Z]/g, '');
+  if (!['US', 'USA', 'UNITEDSTATES', 'UNITEDSTATESOFAMERICA'].includes(normalizedCountry)) {
+    return 'Use United States for military postal addresses.';
+  }
+
+  const city = (address.city || '').trim().toUpperCase();
+  if (!['APO', 'FPO', 'DPO'].includes(city)) {
+    return 'Military addresses must use APO, FPO or DPO as the city.';
+  }
+
+  const region = militaryStates[(address.state || '').trim().toUpperCase()];
+  if (!region) {
+    return 'Military addresses must use AA, AE or AP as the state.';
+  }
+
+  if (militaryZipRegion(address.zip) !== region) {
+    return 'Military ZIP must match the region: AA 340xx, AE 090xx–098xx, AP 962xx–966xx.';
+  }
+
+  return undefined;
+}

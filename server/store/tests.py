@@ -1,4 +1,5 @@
 from datetime import timedelta
+from decimal import Decimal
 from io import BytesIO
 from tempfile import TemporaryDirectory
 
@@ -42,6 +43,7 @@ class MerchantTests(TestCase):
             status=Store.STATUS_ACTIVE,
             verified_at=verified_at,
         )
+        StoreAddress.objects.create(store=self.store, address='1 Main St', city='Tampa', state='FL', country='US', zip='33602', is_default=True)
         self.client = APIClient()
         self.client.force_authenticate(self.owner)
         self.url = f'/stores/{self.store.pk}/'
@@ -61,7 +63,7 @@ class MerchantTests(TestCase):
         data.update(kwargs)
         return data
 
-    def make_order(self, status='confirmed', ordered=True, mixed=False, quantity=2, product=None):
+    def make_order(self, status: str = 'confirmed', ordered: bool = True, mixed: bool = False, quantity: int = 2, product: Product | None = None) -> Order:
         target_product = product or self.product
         cart = Cart.objects.create(user=self.other, ordered=ordered)
         CartItem.objects.create(cart=cart, product=target_product, quantity=quantity)
@@ -71,8 +73,106 @@ class MerchantTests(TestCase):
                                          zip='100001', country='Nigeria', state='Lagos', city='Ikeja')
         delivery = DeliveryInfo.objects.create(user=self.other, address=address,
                                                method='home delivery', delivery_type='standard')
+        from storefront.serializers import unit_price
+        total = sum((unit_price(item.product) * item.quantity for item in cart.cart_items.select_related('product')), Decimal('0'))
         return Order.objects.create(user=self.other, cart=cart, delivery=delivery,
-                                    status=status, ordered=ordered)
+                                    status=status, ordered=ordered,
+                                    total=total,
+                                    subtotal=total,
+                                    paid_total=total)
+
+    def test_address_required_for_store_creation_and_all_publication(self) -> None:
+        response = self.client.post('/stores/', {'name': 'Missing address'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('address', response.data['error']['details'])
+        StoreAddress.objects.filter(store=self.store).delete()
+        for digital in (False, True):
+            response = self.client.post(self.products_url, self.product_payload(
+                visibility=True, is_digital=digital,
+                digital_file_url='https://example.com/file.pdf' if digital else '',
+            ), format='json')
+            self.assertEqual(response.status_code, 400, response.data)
+            self.assertIn('visibility', response.data['error']['details'])
+        response = self.client.post(self.products_url, self.product_payload(visibility=False), format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+
+    def test_incomplete_address_and_scheduled_publication_are_rejected(self) -> None:
+        response = self.client.put(self.url + 'pickup-address/', {
+            'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': ' ',
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+        StoreAddress.objects.filter(store=self.store).delete()
+        self.product.visibility = False
+        self.product.save()
+        Schedule.objects.create(store=self.store, product=self.product, make_visible_at=timezone.now() - timedelta(minutes=1))
+        self.assertEqual(publish_due_products(), 0)
+        self.product.refresh_from_db()
+        self.assertFalse(self.product.visibility)
+
+    def test_dashboard_groups_orders_in_requested_local_timezone(self) -> None:
+        from datetime import datetime, timezone as utc_timezone
+        from unittest.mock import patch
+        order = self.make_order()
+        instant = datetime(2026, 10, 8, 2, tzinfo=utc_timezone.utc)
+        Order.objects.filter(pk=order.pk).update(created=instant)
+        with patch('django.utils.timezone.now', return_value=instant):
+            response = self.client.get(self.url + 'dashboard/?days=1&time_zone=America/Los_Angeles')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(str(response.data['orders_by_day'][0]['date']), '2026-10-07')
+        self.assertEqual(response.data['orders_by_day'][0]['count'], 1)
+
+    def test_refund_debt_survives_financial_recalculation_and_repeat_reversal(self) -> None:
+        from store.services import record_order_earnings_for_merchant, process_refund_deduction, calculate_merchant_financials
+        from store.models import StoreEarningsLedger, StorePayout
+        order = self.make_order(quantity=1)
+        entry = record_order_earnings_for_merchant(order)[0]
+        entry.status = StoreEarningsLedger.STATUS_AVAILABLE
+        entry.available_at = timezone.now() - timedelta(days=1)
+        entry.save()
+        StorePayout.objects.create(wallet=entry.wallet, store=self.store, amount=entry.net_amount, status=StorePayout.STATUS_COMPLETED, reference='debt-test')
+        entry.wallet.available_balance = 0
+        entry.wallet.pending_balance = 0
+        entry.wallet.save()
+        process_refund_deduction(order)
+        process_refund_deduction(order)
+        entry.wallet.refresh_from_db()
+        self.assertEqual(entry.wallet.available_balance, -entry.net_amount)
+        result = calculate_merchant_financials(self.owner)
+        self.assertEqual(Decimal(result['available_balance']), -entry.net_amount)
+        self.assertEqual(StoreEarningsLedger.objects.filter(order=order, entry_type=StoreEarningsLedger.TYPE_REFUND).count(), 1)
+
+    def test_partial_refunds_require_store_attribution_and_do_not_over_reverse(self) -> None:
+        from store.services import record_order_earnings_for_merchant, process_refund_deduction
+        from store.models import StoreEarningsLedger
+        from rest_framework.exceptions import ValidationError
+        order = self.make_order(quantity=1, mixed=True)
+        entries = record_order_earnings_for_merchant(order)
+        own = next(entry for entry in entries if entry.store_id == self.store.pk)
+        with self.assertRaises(ValidationError):
+            process_refund_deduction(order, Decimal('10'))
+        process_refund_deduction(order, Decimal('10'), store=self.store)
+        process_refund_deduction(order, store=self.store)
+        from django.db.models import Sum
+        total = StoreEarningsLedger.objects.filter(order=order, store=self.store, entry_type=StoreEarningsLedger.TYPE_REFUND).aggregate(total=Sum('gross_amount'))['total']
+        self.assertEqual(total, -own.gross_amount)
+        self.assertFalse(StoreEarningsLedger.objects.filter(order=order, store=self.other_store, entry_type=StoreEarningsLedger.TYPE_REFUND).exists())
+
+    def test_digital_product_accepts_zero_weight_and_updates_without_weight(self) -> None:
+        response = self.client.post(self.products_url, self.product_payload(
+            is_digital=True, weight='0.00', digital_file_url='https://example.com/book.pdf',
+            length=None, width=None, height=None,
+        ), format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        product = Product.objects.get(pk=response.data['id'])
+        self.assertEqual(str(product.weight), '0.00')
+        response = self.client.patch(self.products_url + f'{product.pk}/', {'title': 'Updated download'}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['weight'], '0.00')
+
+    def test_physical_product_rejects_zero_weight(self) -> None:
+        response = self.client.post(self.products_url, self.product_payload(weight='0.00'), format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('weight', str(response.data))
 
     def test_anonymous_is_denied(self):
         self.client.force_authenticate(None)
@@ -84,7 +184,7 @@ class MerchantTests(TestCase):
     @override_settings(ROOT_URLCONF='store.test_urls')
     def test_usps_tracking_update_saves_and_notifies_customer(self):
         from notification.models import Notification
-        order = self.make_order(mixed=True)
+        order = self.make_order()
         response = self.client.post(self.url + f'orders/{order.pk}/tracking/', {
             'carrier': 'USPS', 'tracking_number': '9400100000000000000000', 'status': 'shipped',
         }, format='json')
@@ -126,7 +226,7 @@ class MerchantTests(TestCase):
         response = self.client.post('/stores/', {
             'name': 'New shop', 'user': self.other.pk,
             'profile': {'email': 'merchant@example.com', 'bio': 'Electronics'},
-            'address': {'address': '1 Main Road', 'country': 'Nigeria', 'state': 'Lagos', 'city': 'Ikeja'},
+            'address': {'address': '1 Main Road', 'country': 'Nigeria', 'state': 'Lagos', 'city': 'Ikeja', 'zip': '100001'},
         }, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         store = Store.objects.get(pk=response.data['id'])
@@ -154,7 +254,7 @@ class MerchantTests(TestCase):
             self.assertEqual(self.client.patch(self.url + 'profile/', {'bio': bio, 'email': 'shop@example.com'}, format='json').status_code, 200)
         self.assertEqual(StoreInfo.objects.filter(store=self.store).count(), 1)
         self.assertEqual(self.client.get(self.url + 'profile/').data['bio'], 'Updated')
-        address = {'address': '2 Main Road', 'country': 'Nigeria', 'state': 'Lagos', 'city': 'Ikeja'}
+        address = {'address': '2 Main Road', 'country': 'Nigeria', 'state': 'Lagos', 'city': 'Ikeja', 'zip': '100001'}
         for _ in range(2):
             self.assertEqual(self.client.put(self.url + 'pickup-address/', address, format='json').status_code, 200)
         self.assertEqual(StoreAddress.objects.filter(store=self.store, is_default=True).count(), 1)
@@ -270,14 +370,19 @@ class MerchantTests(TestCase):
             self.assertEqual(self.client.get(self.url + 'dashboard/', {'days': days}).status_code, 400)
 
     def test_order_list_does_not_expose_other_sellers_items_or_cart_total(self):
+        self.other.phone1 = '+12025550123'
+        self.other.save()
         self.make_order(mixed=True)
-        response = self.client.get(self.url + 'orders/')
+        response = self.client.get(self.url + 'orders/', HTTP_ACCEPT='application/json')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(response.content)
         self.assertEqual(response.data['count'], 1)
         row = response.data['results'][0]
         self.assertEqual(len(row['items']), 1)
         self.assertEqual(row['items'][0]['product'], self.product.pk)
         self.assertNotIn('total', row)
         self.assertNotIn('user', row)
+        self.assertEqual(row['customer']['phone'], '+12025550123')
         self.assertEqual(self.client.get(self.url + 'orders/', {'status': 'invalid'}).status_code, 400)
 
     def test_schedule_ownership_and_validation(self):
@@ -406,18 +511,34 @@ class MerchantTests(TestCase):
         self.assertTrue(product.image_url)
         self.assertIn('cover', product.image_url)
 
+        response = self.client.patch(
+            f'{self.products_url}{product.id}/',
+            {'image_url': product.image_url, 'title': 'Updated Canvas Art'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        product.refresh_from_db()
+        self.assertEqual(product.title, 'Updated Canvas Art')
+
+        response = self.client.patch(
+            f'{self.products_url}{product.id}/',
+            {'image_url': 'not-a-url'}, format='json',
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('image_url', response.data['error']['details'])
+
     def test_customer_can_create_tenth_store_but_not_eleventh(self):
         for index in range(8):
             Store.objects.create(user=self.owner, name=f'Shop {index}')
-        response = self.client.post('/stores/create/', {'name': 'Tenth shop'}, format='json')
+        response = self.client.post('/stores/create/', {'name': 'Tenth shop', 'address': {'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'}}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         for endpoint in ['/stores/create/', '/stores/']:
-            response = self.client.post(endpoint, {'name': 'Eleventh shop'}, format='json')
+            response = self.client.post(endpoint, {'name': 'Eleventh shop', 'address': {'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'}}, format='json')
             self.assertEqual(response.status_code, 400, response.data)
             self.assertIn('10 stores', str(response.data))
         self.assertEqual(Store.objects.filter(user=self.owner).count(), 10)
         self.client.force_authenticate(self.other)
-        response = self.client.post('/stores/create/', {'name': 'Other owner shop'}, format='json')
+        response = self.client.post('/stores/create/', {'name': 'Other owner shop', 'address': {'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'}}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
 
     def test_admin_created_store_is_auto_verified_and_official(self):
@@ -428,7 +549,7 @@ class MerchantTests(TestCase):
         admin_client = APIClient()
         admin_client.force_authenticate(admin_user)
 
-        response = admin_client.post('/stores/create/', {'name': 'Proace Official Store'}, format='json')
+        response = admin_client.post('/stores/create/', {'name': 'Proace Official Store', 'address': {'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'}}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
         store = Store.objects.get(pk=response.data['id'])
         self.assertTrue(store.is_official)
@@ -587,5 +708,39 @@ class MerchantTests(TestCase):
         assign_resp = admin_client.put(f'/stores/{official_store.pk}/staff/', {'staff_ids': [staff.pk]}, format='json')
         self.assertEqual(assign_resp.status_code, 200)
         self.assertIn('deprecated', assign_resp.data['detail'])
+
+    def test_official_store_payout_requests_are_rejected(self):
+        admin = User.objects.create_superuser(
+            email='official.owner@example.com',
+            password='Admin-password-123!',
+        )
+        official_store = Store.objects.create(
+            user=admin,
+            name='ProAce Direct',
+            is_official=True,
+            status=Store.STATUS_ACTIVE,
+            verified_at=timezone.now(),
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin)
+
+        # 1. Direct store payouts endpoint
+        resp = admin_client.post(f'/stores/{official_store.pk}/payouts/', {
+            'amount': '50.00',
+            'payout_method': 'bank_transfer',
+            'account_details': {'bank_name': 'Chase', 'account_number': '123456789'},
+        }, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertIn('Platform Treasury', resp.data['error']['message'])
+
+        # 2. Unified merchant wallet payouts endpoint
+        wallet_resp = admin_client.post('/stores/wallet/payouts/', {
+            'store_id': official_store.pk,
+            'amount': '50.00',
+            'payout_method': 'bank_transfer',
+            'account_details': {'bank_name': 'Chase', 'account_number': '123456789'},
+        }, format='json')
+        self.assertEqual(wallet_resp.status_code, 400)
+        self.assertIn('Platform Treasury', wallet_resp.data['error']['message'])
 
 

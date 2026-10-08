@@ -12,6 +12,7 @@ from nanoid import generate
 
 
 class Store(DatesMixin):
+    last_active_at = models.DateTimeField(null=True, blank=True, db_index=True)
     assigned_staff = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name="assigned_stores")
     STATUS_PENDING = "pending"
     STATUS_ACTIVE = "active"
@@ -257,5 +258,4 @@ class StorePayout(DatesMixin):
 
     class Meta:
         ordering = ["-created"]
-
 

@@ -456,6 +456,8 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TIME_LIMIT = 120
 CELERY_TASK_IGNORE_RESULT = True
 CELERY_BEAT_SCHEDULE = {
+    "recover-wallet-funding": {"task": "payment.recover_wallet_funding", "schedule": timedelta(seconds=60)},
+    "recover-checkout-attempts": {"task": "payment.recover_checkout_attempts", "schedule": timedelta(seconds=60)},
     "recover-notification-deliveries": {
         "task": "notification.tasks.recover_notification_deliveries",
         "schedule": timedelta(seconds=60),
@@ -519,6 +521,14 @@ configure_observability(globals())
 
 # Fraction of taxable merchandise subtotal; zero until configured by deployment.
 CHECKOUT_TAX_RATE = Decimal(os.environ.get('CHECKOUT_TAX_RATE') or '0')
+DEFAULT_TAX_RATE = Decimal(os.environ.get('DEFAULT_TAX_RATE') or os.environ.get('CHECKOUT_TAX_RATE') or '0')
+TAX_PROVIDER = os.environ.get('TAX_PROVIDER', 'local').lower().strip()
+STRIPE_TAX_ENABLED = os.environ.get('STRIPE_TAX_ENABLED', 'false').lower().strip() == 'true'
 
 # Optional dedicated broker; blank falls back to the shared cache Redis.
 REALTIME_REDIS_URL = os.environ.get("REALTIME_REDIS_URL") or CACHE_URL
+
+# ClickBank Affiliate & Partner Network Integration
+CLICKBANK_AFFILIATE_NICKNAME = os.environ.get("CLICKBANK_AFFILIATE_NICKNAME", "proace").strip()
+CLICKBANK_SECRET_KEY = os.environ.get("CLICKBANK_SECRET_KEY", "").strip()
+CLICKBANK_DEV_KEY = os.environ.get("CLICKBANK_DEV_KEY", "").strip()

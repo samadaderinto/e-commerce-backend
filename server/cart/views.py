@@ -13,7 +13,7 @@ from cart.cache import (
 )
 from cart.models import Cart, CartItem
 
-from cart.seralizers import CartSerializer
+from cart.serializers import CartSerializer
 
 from rest_framework import status
 from rest_framework.response import Response
@@ -82,6 +82,15 @@ class CartViewSet(viewsets.GenericViewSet):
         quantity = parse_quantity(data)
         product = get_object_or_404(self.merchant_product, pk=data["product"])
 
+        if product.product_type == 'affiliate_clickbank':
+            return Response(
+                {
+                    'message': 'This item is fulfilled directly by our partner. Please use the official partner link.',
+                    'affiliate_hoplink': product.affiliate_hoplink,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         validate_purchase(product, request.user)
         # Digital goods represent a single entitlement. Re-downloads are
         # provided from completed orders, so quantity can never exceed one.
@@ -97,7 +106,10 @@ class CartViewSet(viewsets.GenericViewSet):
             user=request.user,
             ordered=False
         )
-        cart_item, created = self.cart_item.objects.get_or_create(cart=cart, product=product)
+        from product.policies import selected_variant
+        variant_name = str(data.get('variant') or '')
+        option = selected_variant(product, variant_name)
+        cart_item, created = self.cart_item.objects.get_or_create(cart=cart, product=product, variant=variant_name)
         if not created:
             quantity += cart_item.quantity
 
@@ -107,6 +119,8 @@ class CartViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_409_CONFLICT
             )
 
+        if option and quantity > option.get('available', product.available):
+            raise ValidationError({'variant': 'Insufficient option stock.'})
         cart_item.quantity = quantity
         cart_item.save()
         if created_cart:
@@ -115,18 +129,32 @@ class CartViewSet(viewsets.GenericViewSet):
         return Response(serialize_cart(cart), status=status.HTTP_201_CREATED)
 
     @extend_schema(responses={status.HTTP_200_OK: CartSerializer})
+    def _resolve_cart_item(self, request, data):
+        product_id = data.get("product")
+        if not product_id:
+            raise ValidationError({"product": "Product ID is required."})
+        cart_id = data.get("cart")
+        cart_filter = {"cart_id": cart_id} if cart_id else {}
+        return get_object_or_404(
+            self.cart_item,
+            cart__user=request.user,
+            cart__ordered=False,
+            product_id=product_id,
+            variant=str(data.get("variant") or ""),
+            **cart_filter,
+        )
+
+    @extend_schema(responses={status.HTTP_200_OK: CartSerializer})
     @action(detail=False, methods=['patch'], url_path='update')
     def update_cart_item(self, request):
         data = request_payload(request)
         quantity = parse_quantity(data)
-        cart_item = get_object_or_404(
-            self.cart_item,
-            cart=data["cart"],
-            cart__user=request.user,
-            cart__ordered=False,
-            product=data["product"],
-        )
+        cart_item = self._resolve_cart_item(request, data)
 
+        from product.policies import selected_variant
+        option = selected_variant(cart_item.product, cart_item.variant)
+        if option and quantity > option.get('available', cart_item.product.available):
+            raise ValidationError({'variant': 'Insufficient option stock.'})
         validate_purchase(cart_item.product, request.user)
         if cart_item.product.is_digital:
             quantity = 1
@@ -146,14 +174,12 @@ class CartViewSet(viewsets.GenericViewSet):
     def increase_cart_item(self, request):
         data = request_payload(request)
         increment_by = parse_quantity(data)
-        cart_item = get_object_or_404(
-            self.cart_item,
-            cart=data["cart"],
-            cart__user=request.user,
-            cart__ordered=False,
-            product=data["product"],
-        )
+        cart_item = self._resolve_cart_item(request, data)
         quantity = cart_item.quantity + increment_by
+        from product.policies import selected_variant
+        option = selected_variant(cart_item.product, cart_item.variant)
+        if option and quantity > option.get('available', cart_item.product.available):
+            raise ValidationError({'variant': 'Insufficient option stock.'})
 
         validate_purchase(cart_item.product, request.user)
         if cart_item.product.is_digital:
@@ -174,13 +200,7 @@ class CartViewSet(viewsets.GenericViewSet):
     def decrease_cart_item(self, request):
         data = request_payload(request)
         decrement_by = parse_quantity(data)
-        cart_item = get_object_or_404(
-            self.cart_item,
-            cart=data["cart"],
-            cart__user=request.user,
-            cart__ordered=False,
-            product=data["product"],
-        )
+        cart_item = self._resolve_cart_item(request, data)
         cart = cart_item.cart
         quantity = cart_item.quantity - decrement_by
 
@@ -197,13 +217,7 @@ class CartViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['delete'], url_path='delete')
     def delete_cart_item(self, request):
         data = request_payload(request)
-        cart_item = get_object_or_404(
-            self.cart_item,
-            cart=data["cart"],
-            cart__user=request.user,
-            cart__ordered=False,
-            product=data["product"],
-        )
+        cart_item = self._resolve_cart_item(request, data)
         cart = cart_item.cart
         cart_item.delete()
         invalidate_cart_cache(cart)
@@ -213,7 +227,9 @@ class CartViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=['delete'], url_path='clear')
     def clear_cart(self, request):
         data = request_payload(request)
-        cart = get_object_or_404(self.user_cart, id=data["cart"], user=request.user, ordered=False)
+        cart_id = data.get("cart")
+        cart_filter = {"id": cart_id} if cart_id else {}
+        cart = get_object_or_404(self.user_cart, user=request.user, ordered=False, **cart_filter)
         self.cart_item.objects.filter(cart=cart).delete()
         invalidate_cart_cache(cart)
         return Response(serialize_cart(cart), status=status.HTTP_202_ACCEPTED)

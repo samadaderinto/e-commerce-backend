@@ -5,14 +5,21 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from django.conf import settings
-from django.db import transaction
-from django.db.models import DecimalField, ExpressionWrapper, F, Sum
+from django.db import models, transaction
+from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
 from django.utils import timezone
 from nanoid import generate
 
 from cart.models import CartItem
 from product.models import Product
-from store.models import MerchantWallet, Schedule, Store, StoreEarningsLedger, StorePayout
+from store.models import MerchantWallet, Schedule, Store, StoreAddress, StoreEarningsLedger, StorePayout
+
+
+def has_store_address(store: Store) -> bool:
+    """Require a complete default business address for every seller."""
+    address = StoreAddress.objects.filter(store=store, is_default=True).first()
+    return bool(address and all(str(getattr(address, field) or '').strip()
+                                for field in ('address', 'city', 'state', 'country', 'zip')))
 
 
 @transaction.atomic
@@ -25,7 +32,7 @@ def publish_due_products() -> int:
     )
     for schedule in schedules:
         store = schedule.store
-        if store.status != Store.STATUS_ACTIVE or store.verified_at is None:
+        if store.status != Store.STATUS_ACTIVE or store.verified_at is None or not has_store_address(store):
             continue
         product = Product.objects.select_for_update().filter(pk=schedule.product_id, store_id=schedule.store_id).first()
         if product is not None:
@@ -164,46 +171,55 @@ def record_order_earnings_for_merchant(order: Any) -> list[StoreEarningsLedger]:
     """
     from payment.models import Order
 
-    if not order or not order.ordered:
+    if not order or not order.ordered or order.paid_total <= 0:
         return []
 
-    refund_window = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
+    refund_window = getattr(settings, "REFUND_WINDOW_DAYS", 7)
     available_at = (order.created or timezone.now()) + timedelta(days=refund_window)
-    default_fee_rate = getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')) / Decimal('100.0')
+    default_fee_rate = getattr(
+        settings, "PLATFORM_FEE_PERCENT", Decimal("4.00")
+    ) / Decimal("100.0")
 
     # Gather items by store from cart or snapshot
     created_entries: list[StoreEarningsLedger] = []
-    
+
     items_by_store: dict[int, Decimal] = {}
-    if order.cart_id:
-        items = CartItem.objects.filter(cart_id=order.cart_id).select_related('product', 'product__store')
+    if order.cart_id and not order.items_snapshot:
+        items = CartItem.objects.filter(cart_id=order.cart_id).select_related(
+            "product", "product__store"
+        )
         for item in items:
-            store_id = item.product.store_id if item.product and item.product.store else None
+            store_id = (
+                item.product.store_id if item.product and item.product.store else None
+            )
             if not store_id:
                 continue
             line_val = (
                 Decimal(item.quantity)
                 * Decimal(str(item.product.price))
-                * (Decimal('100.0') - Decimal(str(item.product.discount)))
-                / Decimal('100.0')
-            ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            items_by_store[store_id] = items_by_store.get(store_id, Decimal('0.00')) + line_val
+                * (Decimal("100.0") - Decimal(str(item.product.discount)))
+                / Decimal("100.0")
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            items_by_store[store_id] = (
+                items_by_store.get(store_id, Decimal("0.00")) + line_val
+            )
     elif order.items_snapshot:
-        for snap in order.items_snapshot:
-            store_id = snap.get('store')
+        from payment.accounting import order_paid_lines
+
+        for snap in order_paid_lines(order):
+            store_id = snap.get("store")
             if not store_id:
                 continue
-            qty = Decimal(str(snap.get('quantity', 1)))
-            price = Decimal(str(snap.get('unit_price') or snap.get('price', 0)))
-            disc = Decimal(str(snap.get('discount', 0)))
-            line_val = (qty * price * (Decimal('100.0') - disc) / Decimal('100.0')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            items_by_store[store_id] = items_by_store.get(store_id, Decimal('0.00')) + line_val
+            line_val = Decimal(snap["net_total"])
+            items_by_store[store_id] = (
+                items_by_store.get(store_id, Decimal("0.00")) + line_val
+            )
 
     for store_id, gross_amount in items_by_store.items():
-        if gross_amount <= Decimal('0.00'):
+        if gross_amount <= Decimal("0.00"):
             continue
 
-        store = Store.objects.filter(pk=store_id).select_related('user').first()
+        store = Store.objects.filter(pk=store_id).select_related("user").first()
         if not store or not store.user:
             continue
 
@@ -217,16 +233,26 @@ def record_order_earnings_for_merchant(order: Any) -> list[StoreEarningsLedger]:
             continue
 
         is_official = store.is_official or bool(store.user and store.user.is_superuser)
-        fee_rate = Decimal('0.00') if is_official else default_fee_rate
-        fee_amount = (gross_amount * fee_rate).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-        net_amount = (gross_amount - fee_amount).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+        fee_rate = Decimal("0.00") if is_official else default_fee_rate
+        fee_amount = (gross_amount * fee_rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        net_amount = (gross_amount - fee_amount).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
 
-        wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=store.user)
-        
+        wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(
+            user=store.user
+        )
+
         # Check if order is already past refund window (e.g. backdated in tests or delayed processing)
         now = timezone.now()
         is_cleared = available_at <= now
-        entry_status = StoreEarningsLedger.STATUS_AVAILABLE if is_cleared else StoreEarningsLedger.STATUS_PENDING
+        entry_status = (
+            StoreEarningsLedger.STATUS_AVAILABLE
+            if is_cleared
+            else StoreEarningsLedger.STATUS_PENDING
+        )
         cleared_at = now if is_cleared else None
 
         ledger_entry = StoreEarningsLedger.objects.create(
@@ -266,7 +292,7 @@ def settle_pending_merchant_earnings() -> int:
     pending_entries = StoreEarningsLedger.objects.select_for_update().filter(
         status=StoreEarningsLedger.STATUS_PENDING,
         available_at__lte=now,
-    ).select_related('wallet')
+    ).filter(models.Q(order__isnull=True) | models.Q(order__paid_total__gt=0)).select_related('wallet')
 
     count = 0
     wallet_adjustments: dict[int, Decimal] = {}
@@ -276,7 +302,12 @@ def settle_pending_merchant_earnings() -> int:
         entry.cleared_at = now
         entry.save(update_fields=['status', 'cleared_at', 'updated'])
 
-        wallet_adjustments[entry.wallet_id] = wallet_adjustments.get(entry.wallet_id, Decimal('0.00')) + entry.net_amount
+        if entry.order_id:
+            refunded_net = StoreEarningsLedger.objects.filter(order_id=entry.order_id, store=entry.store, entry_type=StoreEarningsLedger.TYPE_REFUND).aggregate(total=Sum('net_amount'))['total'] or Decimal('0.00')
+        else:
+            refunded_net = Decimal('0.00')
+        remaining_net = max(Decimal('0.00'), entry.net_amount + refunded_net)
+        wallet_adjustments[entry.wallet_id] = wallet_adjustments.get(entry.wallet_id, Decimal('0.00')) + remaining_net
         count += 1
 
     for wallet_id, amount in wallet_adjustments.items():
@@ -304,10 +335,16 @@ def process_refund_deduction(order: Any, refund_amount: Decimal | None = None, s
         entries = entries.filter(store=store)
 
     entries = list(entries)
-    total_gross = sum((entry.gross_amount for entry in entries), Decimal('0.00'))
+    from rest_framework.exceptions import ValidationError
+    if refund_amount is not None and store is None and len({entry.store_id for entry in entries}) > 1:
+        raise ValidationError({'store': 'Partial refunds across multiple stores require explicit store attribution.'})
+    remaining = {entry.pk: max(Decimal('0.00'), entry.gross_amount + (StoreEarningsLedger.objects.filter(order=order, store=entry.store, entry_type=StoreEarningsLedger.TYPE_REFUND).aggregate(total=Sum('gross_amount'))['total'] or Decimal('0.00'))) for entry in entries}
+    total_gross = sum(remaining.values(), Decimal('0.00'))
     target = min(Decimal(str(refund_amount)), total_gross) if refund_amount is not None else total_gross
     for entry in entries:
-        gross_share = (target * entry.gross_amount / total_gross).quantize(Decimal('0.01')) if total_gross else Decimal('0.00')
+        gross_share = (target * remaining[entry.pk] / total_gross).quantize(Decimal('0.01')) if total_gross else Decimal('0.00')
+        if gross_share <= 0:
+            continue
         net_share = (gross_share * entry.net_amount / entry.gross_amount).quantize(Decimal('0.01')) if entry.gross_amount else Decimal('0.00')
         fee_share = gross_share - net_share
         wallet = entry.wallet or (entry.store and entry.store.user and MerchantWallet.objects.filter(user=entry.store.user).first())
@@ -317,7 +354,7 @@ def process_refund_deduction(order: Any, refund_amount: Decimal | None = None, s
             if entry.status == StoreEarningsLedger.STATUS_PENDING:
                 wallet.pending_balance = max(Decimal('0.00'), wallet.pending_balance - net_share)
             elif entry.status == StoreEarningsLedger.STATUS_AVAILABLE:
-                wallet.available_balance = max(Decimal('0.00'), wallet.available_balance - net_share)
+                wallet.available_balance -= net_share
             wallet.save(update_fields=['pending_balance', 'available_balance', 'updated'])
 
         StoreEarningsLedger.objects.create(wallet=wallet, store=entry.store, order=order, entry_type=StoreEarningsLedger.TYPE_REFUND, gross_amount=-gross_share, fee_amount=-fee_share, net_amount=-net_share, status=StoreEarningsLedger.STATUS_COMPLETED, description=f"Partial refund for order #{order.orderId}", reference=f"REF-{order.orderId}-{StoreEarningsLedger.objects.filter(order=order, entry_type=StoreEarningsLedger.TYPE_REFUND).count() + 1}")
@@ -394,7 +431,15 @@ def process_payout_status_change(
     """
     Staff approval or rejection of a merchant payout request.
     """
+    from rest_framework.exceptions import ValidationError
+
+    StorePayout.objects.select_for_update().get(pk=payout.pk)
+    payout.refresh_from_db()
+    if payout.status != StorePayout.STATUS_PENDING:
+        raise ValidationError({"detail": f"This payout request has already been processed ({payout.status})."})
+
     wallet = payout.wallet or (payout.store and get_or_create_merchant_wallet(payout.store.user))
+    wallet_obj = MerchantWallet.objects.select_for_update().get(pk=wallet.pk) if wallet else None
 
     if action == "approve":
         # A connected Express account receives the approved payout through Stripe.
@@ -408,6 +453,7 @@ def process_payout_status_change(
                 currency=getattr(settings, 'STRIPE_CURRENCY', 'usd').lower(),
                 destination=wallet.stripe_account_id,
                 metadata={'payout_id': str(payout.pk), 'reference': payout.reference},
+                idempotency_key=f"payout-transfer-{payout.reference}",
             )
             notes = f"Stripe transfer {transfer.id}" if not notes else f"{notes} · Stripe transfer {transfer.id}"
         payout.status = StorePayout.STATUS_COMPLETED
@@ -417,8 +463,7 @@ def process_payout_status_change(
             payout.notes = notes
         payout.save(update_fields=['status', 'processed_at', 'processed_by', 'notes', 'updated'])
 
-        if wallet:
-            wallet_obj = MerchantWallet.objects.select_for_update().get(pk=wallet.pk)
+        if wallet_obj:
             wallet_obj.total_withdrawn += payout.amount
             wallet_obj.save(update_fields=['total_withdrawn', 'updated'])
 
@@ -432,12 +477,13 @@ def process_payout_status_change(
         payout.notes = notes or "Payout declined by compliance."
         payout.processed_at = timezone.now()
         payout.processed_by = processed_by
-        payout.save(update_fields=['status', 'notes', 'processed_at', 'processed_by', 'updated'])
+        payout.save(
+            update_fields=["status", "notes", "processed_at", "processed_by", "updated"]
+        )
 
-        if wallet:
-            wallet_obj = MerchantWallet.objects.select_for_update().get(pk=wallet.pk)
+        if wallet_obj:
             wallet_obj.available_balance += payout.amount
-            wallet_obj.save(update_fields=['available_balance', 'updated'])
+            wallet_obj.save(update_fields=["available_balance", "updated"])
 
         StoreEarningsLedger.objects.filter(
             reference=payout.reference,
@@ -453,16 +499,75 @@ def calculate_store_financials(store: Store, days: int = 30) -> dict:
     """
     from payment.models import Order
 
+    ledger = StoreEarningsLedger.objects.filter(
+        store=store,
+        entry_type__in=[StoreEarningsLedger.TYPE_SALE, StoreEarningsLedger.TYPE_REFUND],
+    ).filter(models.Q(order__isnull=True) | models.Q(order__paid_total__gt=0))
+    if ledger.exists():
+        gross = ledger.aggregate(total=Sum("gross_amount"))["total"] or Decimal("0")
+        fee = ledger.aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+        net = ledger.aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
+        pending = Decimal("0")
+        now = timezone.now()
+        pending_sales = ledger.filter(
+            entry_type=StoreEarningsLedger.TYPE_SALE,
+        ).filter(
+            models.Q(available_at__gt=now)
+            | models.Q(
+                available_at__isnull=True, status=StoreEarningsLedger.STATUS_PENDING
+            )
+        )
+        for sale in pending_sales:
+            refunds = (
+                ledger.filter(
+                    order_id=sale.order_id, entry_type=StoreEarningsLedger.TYPE_REFUND
+                ).aggregate(total=Sum("net_amount"))["total"]
+                or Decimal("0")
+                if sale.order_id
+                else Decimal("0")
+            )
+            pending += max(Decimal("0"), sale.net_amount + refunds)
+        cleared = net - pending
+        completed = store.payouts.filter(status=StorePayout.STATUS_COMPLETED).aggregate(
+            total=Sum("amount")
+        )["total"] or Decimal("0")
+        reserved = store.payouts.filter(status=StorePayout.STATUS_PENDING).aggregate(
+            total=Sum("amount")
+        )["total"] or Decimal("0")
+        return {
+            "gross_sales": format(gross, ".2f"),
+            "platform_fee_percent": format(
+                Decimal("0")
+                if store.is_official
+                else Decimal(str(getattr(settings, "PLATFORM_FEE_PERCENT", 4))),
+                ".2f",
+            ),
+            "platform_fee_deducted": format(fee, ".2f"),
+            "net_sales": format(net, ".2f"),
+            "in_review": format(pending, ".2f"),
+            "cleared_total": format(cleared, ".2f"),
+            "payouts_completed": format(completed, ".2f"),
+            "payouts_pending": format(reserved, ".2f"),
+            "available_balance": format(cleared - completed - reserved, ".2f"),
+            "refund_window_days": getattr(settings, "REFUND_WINDOW_DAYS", 7),
+        }
+
     sales_orders = Order.objects.filter(
         ordered=True,
-        status__in=['confirmed', 'shipped', 'delivered', 'picked up'],
+        paid_total__gt=0,
+        status__in=["confirmed", "shipped", "delivered", "picked up"],
     )
-    items = CartItem.objects.filter(product__store=store, cart__in=sales_orders.values('cart_id'))
+    items = CartItem.objects.filter(
+        product__store=store, cart__in=sales_orders.values("cart_id")
+    )
     line_value = ExpressionWrapper(
-        F('quantity') * F('product__price') * (100 - F('product__discount')) / Decimal('100.0'),
+        F("quantity")
+        * F("product__price")
+        * (100 - F("product__discount"))
+        / Decimal("100.0"),
         output_field=DecimalField(max_digits=24, decimal_places=2),
     )
-    totals = items.aggregate(value=Sum(line_value), units=Sum('quantity'))
+    totals = items.aggregate(value=Sum(line_value), units=Sum("quantity"))
 
     is_official = store.is_official or bool(store.user and store.user.is_superuser)
     fee_rate = Decimal('0.00') if is_official else (getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00')) / Decimal('100.0'))
@@ -489,7 +594,7 @@ def calculate_store_financials(store: Store, days: int = 30) -> dict:
 
     payouts_completed = store.payouts.filter(status=StorePayout.STATUS_COMPLETED).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
     payouts_pending = store.payouts.filter(status=StorePayout.STATUS_PENDING).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
-    available_balance = max(Decimal('0.00'), cleared_net - payouts_completed - payouts_pending)
+    available_balance = cleared_net - payouts_completed - payouts_pending
 
     return {
         'gross_sales': format(gross_value, '.2f'),
@@ -505,12 +610,13 @@ def calculate_store_financials(store: Store, days: int = 30) -> dict:
     }
 
 
+@transaction.atomic
 def calculate_merchant_financials(user: Any) -> dict:
     """
     Consolidates financial metrics across all stores owned by a user/merchant,
     including ledger consistency and store breakdown.
     """
-    wallet = get_or_create_merchant_wallet(user)
+    wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=user)
     stores = Store.objects.filter(user=user).order_by('-created', '-pk')
 
     stores_breakdown = []
@@ -541,7 +647,7 @@ def calculate_merchant_financials(user: Any) -> dict:
         total_payouts_pending += Decimal(fin['payouts_pending'])
 
     # Synchronize wallet balance fields to match verified cleared funds
-    computed_available = max(Decimal('0.00'), total_cleared - total_payouts_completed - total_payouts_pending)
+    computed_available = total_cleared - total_payouts_completed - total_payouts_pending
     if wallet.available_balance != computed_available or wallet.pending_balance != total_in_review or wallet.total_withdrawn != total_payouts_completed:
         wallet.available_balance = computed_available
         wallet.pending_balance = total_in_review

@@ -545,7 +545,8 @@ function NotificationCard({
   );
 }
 
-function timeAgo(value: string) {
+function timeAgo(value: string): string {
+  if (!value || !Number.isFinite(new Date(value).getTime())) return 'Not recorded';
   const seconds = Math.max(1, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
   if (seconds < 60) return 'Just now';
   const minutes = Math.floor(seconds / 60);

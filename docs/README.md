@@ -17,7 +17,8 @@ Welcome to the centralized engineering documentation for Proace Commerce. This d
 | 📦 **[Shipping & Carriers](shipping-integrations.md)** | USPS, UPS, FedEx, DHL live rates, OAuth tokens, and tracking links. | Logistics / Checkout |
 | 🏗️ **[Infrastructure](infrastructure.md)** & **[HostGator Deployment](deployment.md)** | Docker Compose, Postgres, Redis, MinIO, Elasticsearch, and HostGator production deployment. | DevOps / SRE |
 | 📊 **[Observability & Monitoring](observability.md)** | Prometheus metrics, Grafana dashboards, Loki log streaming, Tempo tracing, and Silk profiling. | DevOps / SRE |
-| 🔍 **[System Audit & Findings](system-audit-2026-10-06.md)** | Historic bug audits, gap analyses, and architectural resolutions. | Technical Leads |
+| **[Bug Audit — 8 October 2026](bug-audit-2026-10-08.md)** | Confirmed financial/inventory defects, source-level findings, and verification limits. | Engineering / Security |
+| 🔍 **[Security & Audit Remediation](security-audit-remediation.md)** | Security remediations, checkout compensation, and architectural resolutions. | Technical Leads |
 
 ---
 
@@ -59,9 +60,9 @@ npm ci
 python3 -m venv .venv
 .venv/bin/python -m pip install -r server/requirements.txt
 
-# 3. Apply database migrations & seed realistic demo accounts
+# 3. Apply database migrations & seed realistic accounts and catalog
 .venv/bin/python server/manage.py migrate
-.venv/bin/python server/manage.py seed_demo --password 'ProaceDemo2026!'
+.venv/bin/python server/manage.py populate_fake_data --password 'ProaceDemo2026!'
 
 # 4. Start Django API server (Terminal 1)
 .venv/bin/python server/manage.py runserver 127.0.0.1:8000
@@ -85,6 +86,7 @@ Visit **`http://localhost:3000`** in your browser. The frontend automatically pr
    - **Customer / Merchant**: Regular shopper or independent vendor managing their own store.
 4. **7-Day Review Escrow**: Customer refunds are allowed within 7 days. Seller sales balances remain `in_review` before unlocking to `cleared_net` for payouts.
 5. **Split-Tender & Store Credit**: Shoppers can combine their ProAce Wallet balance with Stripe card payments. Order cancellations credit the wallet balance immediately.
+6. **Hybrid Multi-Jurisdiction Destination Sales Tax**: Destination statutory sales taxes are calculated locally via `payment.TaxJurisdiction` (with 5-decimal precision and municipal ZIP overrides) or via Stripe Tax, with immutable order snapshots and Next.js backoffice management at `/admin/taxes`.
 
 ---
 
@@ -99,10 +101,10 @@ Run these commands locally for fast, offline verification on every code change:
 # 1. Frontend TypeScript Validation (zero type errors)
 npm run typecheck
 
-# 2. Frontend Unit Tests (Node native runner)
+# 2. Frontend Unit Tests (24 tests via Node native runner)
 npm run test:unit
 
-# 3. Backend Test Suite (Django / Pytest — 184 tests)
+# 3. Backend Test Suite (Django / Pytest — 283 tests; 8 environment-dependent skips offline)
 .venv/bin/pytest server/
 ```
 
@@ -111,7 +113,7 @@ Playwright runs these against live services to ensure full system fidelity:
 
 1. **Start Backend & Seed Data**:
    ```bash
-   .venv/bin/python server/manage.py seed_demo
+   .venv/bin/python server/manage.py populate_fake_data
    .venv/bin/python server/manage.py runserver 127.0.0.1:8000
    ```
 2. **Start Frontend Proxy**:

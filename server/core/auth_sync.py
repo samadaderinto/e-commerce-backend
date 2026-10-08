@@ -1,5 +1,7 @@
 import logging
 import os
+import shutil
+import subprocess
 import requests
 from django.conf import settings
 
@@ -92,18 +94,67 @@ def sync_grafana_admin_password(new_password: str) -> dict:
 
 def sync_minio_admin_password(new_password: str) -> dict:
     """
-    Updates the root / admin password in MinIO.
-    Logs and records environment sync expectation.
+    Updates the technical admin password in MinIO via the MinIO Client (mc) CLI.
+    Rotates the password for the technical admin user and guarantees the 'consoleAdmin' policy
+    so the administrator can log directly into the MinIO Console (:9001).
     """
     minio_url = getattr(settings, 'MINIO_ENDPOINT_URL', os.environ.get('MINIO_ENDPOINT_URL', 'http://127.0.0.1:9000')).rstrip('/')
-    try:
-        # MinIO Admin API operates over signature v4 or mc CLI.
-        # Check endpoint responsiveness
-        resp = requests.get(f'{minio_url}/minio/health/live', timeout=2)
-        if resp.status_code == 200:
-            logger.info("MinIO health verified at %s. Noted password rotation for root admin.", minio_url)
-            return {'success': True, 'endpoint': minio_url}
-    except Exception as ex:
-        logger.debug("MinIO not reachable at %s: %s", minio_url, ex)
+    if '127.0.0.1' in minio_url or 'localhost' in minio_url:
+        container_endpoint = os.environ.get('MINIO_INTERNAL_URL', 'http://minio:9000').rstrip('/')
+    else:
+        container_endpoint = minio_url
 
-    return {'success': False, 'endpoint': minio_url, 'message': 'MinIO service health check skipped or unreachable'}
+    root_user = os.environ.get('MINIO_ROOT_USER', os.environ.get('TECHNICAL_ADMIN_EMAIL', os.environ.get('DEFAULT_ADMIN_EMAIL', 'commerce-admin')))
+    root_pwd = os.environ.get('MINIO_ROOT_PASSWORD', os.environ.get('TECHNICAL_ADMIN_PASSWORD', os.environ.get('DEFAULT_ADMIN_PASSWORD', '')))
+    target_user = os.environ.get('TECHNICAL_ADMIN_EMAIL', os.environ.get('DEFAULT_ADMIN_EMAIL', 'admin@proace.local'))
+
+    mc_bin = shutil.which('mc')
+    if not mc_bin:
+        for candidate in ['/usr/local/bin/mc', '/opt/homebrew/bin/mc', os.path.expanduser('~/.local/bin/mc')]:
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                mc_bin = candidate
+                break
+
+    if not mc_bin:
+        # Fallback health check if mc CLI is not locally installed
+        try:
+            resp = requests.get(f'{minio_url}/minio/health/live', timeout=2)
+            if resp.status_code == 200:
+                logger.info("MinIO is online, but mc CLI is required for password rotation. Install mc or use .env.")
+                return {'success': False, 'endpoint': minio_url, 'message': 'MinIO online, mc CLI required to rotate IAM user password.'}
+        except Exception:
+            pass
+        return {'success': False, 'endpoint': minio_url, 'message': 'MinIO Client (mc) not found in PATH or standard locations.'}
+
+    endpoints_to_try = [container_endpoint, minio_url] if container_endpoint != minio_url else [minio_url]
+    last_err = None
+
+    for endpoint in endpoints_to_try:
+        try:
+            alias_name = 'local-admin-sync'
+            # 1. Configure MinIO alias using root credentials
+            alias_cmd = [mc_bin, 'alias', 'set', alias_name, endpoint, root_user, root_pwd]
+            alias_proc = subprocess.run(alias_cmd, capture_output=True, text=True, timeout=5)
+            if alias_proc.returncode != 0:
+                last_err = alias_proc.stderr.strip()
+                continue
+
+            # 2. Add or update technical admin user with new password
+            user_cmd = [mc_bin, 'admin', 'user', 'add', alias_name, target_user, new_password]
+            user_proc = subprocess.run(user_cmd, capture_output=True, text=True, timeout=5)
+            if user_proc.returncode != 0:
+                last_err = user_proc.stderr.strip()
+                continue
+
+            # 3. Attach consoleAdmin policy
+            policy_cmd = [mc_bin, 'admin', 'policy', 'attach', alias_name, 'consoleAdmin', '--user', target_user]
+            subprocess.run(policy_cmd, capture_output=True, text=True, timeout=5)
+
+            logger.info("Successfully synced technical admin password to MinIO at %s for %s", endpoint, target_user)
+            return {'success': True, 'endpoint': endpoint, 'user': target_user}
+        except subprocess.TimeoutExpired:
+            last_err = f"mc command timed out connecting to {endpoint}"
+        except Exception as ex:
+            last_err = str(ex)
+
+    return {'success': False, 'message': last_err or 'Failed to update MinIO user credentials via mc'}

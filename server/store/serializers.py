@@ -1,4 +1,8 @@
+from utils.timezones import TimeZoneField
+import json
+import urllib.parse
 from decimal import Decimal
+from typing import Any
 
 from django.db import transaction
 from rest_framework import serializers
@@ -22,12 +26,12 @@ class StoreSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'username', 'name', 'status', 'is_official', 'seller_tier', 'assigned_staff',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
-            'created', 'updated',
+            'created', 'updated', 'last_active_at',
         ]
         read_only_fields = [
             'id', 'user', 'status', 'is_official', 'seller_tier', 'assigned_staff',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
-            'created', 'updated',
+            'created', 'updated', 'last_active_at',
         ]
         extra_kwargs = {'username': {'required': False}}
 
@@ -52,12 +56,12 @@ class StoreAddressSerializer(serializers.ModelSerializer):
         fields = ['id', 'store', 'address', 'zip', 'country', 'state', 'city',
                   'is_default', 'created', 'updated']
         read_only_fields = ['id', 'store', 'created', 'updated']
-        extra_kwargs = {'is_default': {'default': True}}
+        extra_kwargs = {'is_default': {'default': True}, **{field: {'required': True, 'allow_blank': False, 'allow_null': False} for field in ('address', 'city', 'state', 'country', 'zip')}}
 
 
 class StoreOnboardingSerializer(StoreSerializer):
     profile = StoreInfoSerializer(required=False, write_only=True)
-    address = StoreAddressSerializer(required=False, write_only=True)
+    address = StoreAddressSerializer(required=True, write_only=True)
 
     class Meta(StoreSerializer.Meta):
         fields = StoreSerializer.Meta.fields + ['profile', 'address']
@@ -99,6 +103,7 @@ class MerchantSpecificationSerializer(serializers.ModelSerializer):
 
 
 class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
+    image_url = serializers.CharField(required=False, allow_blank=True, max_length=1000)
     tags = TagListSerializerField(required=False)
     images = MerchantImageSerializer(many=True, read_only=True)
     specifications = MerchantSpecificationSerializer(source='specification', read_only=True)
@@ -109,7 +114,8 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         fields = ['id', 'store', 'title', 'description', 'category', 'price', 'brand', 'image_url',
                   'discount', 'sale_price', 'available', 'visibility', 'label',
                   'tags', 'images', 'specifications', 'sales', 'flash_sale_end', 'variants', 'average_rating',
-                  'sponsored', 'weight', 'length', 'width', 'height', 'is_digital', 'digital_file_url', 'digital_preview_watermark', 'created', 'updated']
+                  'sponsored', 'weight', 'length', 'width', 'height', 'is_digital', 'digital_file_url', 'digital_preview_watermark',
+                  'product_type', 'affiliate_hoplink', 'affiliate_vendor_nickname', 'affiliate_button_text', 'created', 'updated']
         read_only_fields = ['id', 'store', 'sales', 'average_rating', 'sponsored',
                             'created', 'updated']
         extra_kwargs = {
@@ -117,11 +123,59 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             'discount': {'default': 0},
             'available': {'default': 0},
             'visibility': {'default': False},
-            'weight': {'min_value': Decimal('0.01'), 'default': Decimal('1.00')},
+            'weight': {'min_value': Decimal('0.00'), 'default': Decimal('1.00')},
             'length': {'min_value': Decimal('0.01')}, 'width': {'min_value': Decimal('0.01')}, 'height': {'min_value': Decimal('0.01')},
         }
 
-    def validate(self, attrs):
+    def validate_variants(self, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not isinstance(value, list) or len(value) > 100:
+            raise serializers.ValidationError('Use at most 100 variants per product.')
+        if len(json.dumps(value)) > 65536:
+            raise serializers.ValidationError('Variant data must be at most 64 KB.')
+        names: set[str] = set()
+        for row in value:
+            if not isinstance(row, dict) or not isinstance(row.get('name'), str) or not row['name'].strip() or len(row['name']) > 80:
+                raise serializers.ValidationError('Each variant needs a name of 1–80 characters.')
+            if row['name'] in names:
+                raise serializers.ValidationError('Variant names must be unique.')
+            names.add(row['name'])
+            if 'available' in row:
+                row['available'] = serializers.IntegerField(min_value=0, max_value=1000000).run_validation(row['available'])
+            row['price_delta'] = str(serializers.DecimalField(max_digits=12, decimal_places=2).run_validation(row.get('price_delta') or '0'))
+        return value
+
+    def validate_image_url(self, value: str) -> str:
+        # Storage-generated URLs may use local hostnames that URLField rejects.
+        if self.instance is not None and value == self.instance.image_url:
+            return value
+        return serializers.URLField(allow_blank=True, max_length=1000).run_validation(value)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        product_type = attrs.get('product_type', getattr(self.instance, 'product_type', Product.PRODUCT_TYPE_STANDARD))
+        if product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
+            hoplink = attrs.get('affiliate_hoplink', getattr(self.instance, 'affiliate_hoplink', '') or '').strip()
+            if not hoplink:
+                raise serializers.ValidationError({
+                    'affiliate_hoplink': 'An affiliate HopLink URL is required for ClickBank partner products.'
+                })
+            split_url = urllib.parse.urlsplit(hoplink)
+            if split_url.scheme not in ('http', 'https') or not split_url.netloc:
+                raise serializers.ValidationError({
+                    'affiliate_hoplink': 'Provide a valid web address starting with http:// or https://.'
+                })
+            attrs['product_type'] = Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
+            attrs['affiliate_hoplink'] = hoplink
+            attrs['is_digital'] = False
+            attrs['digital_file_url'] = ''
+            attrs['variants'] = []
+            attrs['weight'] = Decimal('0.00')
+            attrs['length'] = None
+            attrs['width'] = None
+            attrs['height'] = None
+            if not attrs.get('available') and not getattr(self.instance, 'available', None):
+                attrs['available'] = 999
+            return attrs
+
         is_digital = attrs.get('is_digital', getattr(self.instance, 'is_digital', False))
         file_url = attrs.get('digital_file_url', getattr(self.instance, 'digital_file_url', ''))
         if is_digital:
@@ -133,9 +187,17 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
                     'digital_file_url': 'Add a download URL for a digital product.',
                 })
         else:
+            price = attrs.get('price', getattr(self.instance, 'price', Decimal('0')))
+            discount = attrs.get('discount', getattr(self.instance, 'discount', 0))
+            for option in attrs.get('variants', getattr(self.instance, 'variants', [])):
+                if price * (100 - discount) / 100 + Decimal(str(option.get('price_delta') or '0')) <= 0:
+                    raise serializers.ValidationError({'variants': 'Each option must have a positive price.'})
             attrs['digital_file_url'] = ''
             if 'weight' not in attrs and not getattr(self.instance, 'weight', None):
                 attrs['weight'] = Decimal('1.00')
+            weight = attrs.get('weight', getattr(self.instance, 'weight', None))
+            if weight is not None and weight < Decimal('0.01'):
+                raise serializers.ValidationError({'weight': 'Ensure this value is greater than or equal to 0.01.'})
             for field, default_val in (('length', Decimal('6.00')), ('width', Decimal('4.00')), ('height', Decimal('1.00'))):
                 value = attrs.get(field, getattr(self.instance, field, None))
                 if value is None:
@@ -148,6 +210,7 @@ class InventorySerializer(serializers.Serializer):
 
 
 class DashboardQuerySerializer(serializers.Serializer):
+    time_zone = TimeZoneField(default="UTC", max_length=100)
     days = serializers.IntegerField(default=30, min_value=1, max_value=365)
     low_stock_threshold = serializers.IntegerField(default=5, min_value=1, max_value=1000)
 
@@ -253,3 +316,15 @@ class MerchantPayoutCreateSerializer(serializers.Serializer):
     account_details = serializers.DictField(required=False, default=dict)
     store_id = serializers.IntegerField(required=False, allow_null=True)
     notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+class UppercaseCarrierField(serializers.ChoiceField):
+    def to_internal_value(self, data: object) -> str:
+        return super().to_internal_value(str(data).upper())
+
+
+class MerchantTrackingSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=['confirmed', 'shipped', 'delivered', 'picked up'], required=False)
+    carrier = UppercaseCarrierField(choices=['USPS', 'UPS', 'FEDEX', 'DHL'], default='USPS')
+    tracking_number = serializers.CharField(max_length=100, allow_blank=True, required=False, default='')
+    event_description = serializers.CharField(max_length=1000, allow_blank=True, required=False, default='')

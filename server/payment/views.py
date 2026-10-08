@@ -14,7 +14,7 @@ from core.models import Address, User
 from drf_spectacular.utils import extend_schema
 
 from payment.serializers import OrdersSerializer
-from cart.seralizers import CartSerializer
+from cart.serializers import CartSerializer
 
 from notification.views import created_order_nofication
 

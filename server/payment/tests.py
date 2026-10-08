@@ -85,6 +85,8 @@ class PaymentRefundAndTransitionServiceTests(TestCase):
             payment_type=payment_type,
             stripe_session_id=stripe_session_id,
             total=Decimal("110.00"),
+            paid_total=Decimal('110.00'),
+            wallet_paid=Decimal('110.00') if payment_type in {'user_wallet', 'wallet'} else Decimal('0'),
             subtotal=Decimal("100.00"),
             items_snapshot=[
                 {
@@ -112,6 +114,19 @@ class PaymentRefundAndTransitionServiceTests(TestCase):
         self.merchant_wallet.available_balance += Decimal("96.00")
         self.merchant_wallet.save()
         return order
+
+    @patch('payment.services.call_stripe_refund', return_value='re_split')
+    def test_split_tender_refund_restores_original_wallet_and_card_portions(self, stripe_refund) -> None:
+        from payment.models import CheckoutAttempt
+        from uuid import uuid4
+        order = self._create_order(payment_type='split_tender', stripe_session_id='cs_split_refund')
+        order.wallet_paid = Decimal('30')
+        order.save(update_fields=['wallet_paid'])
+        CheckoutAttempt.objects.create(user=self.customer, checkout_key=uuid4(), session_id=order.stripe_session_id, wallet_amount=30, status='completed', expires_at=timezone.now())
+        refund = Refund.objects.create(email=self.customer.email, order=order, reason='Return', refund_type=Refund.REFUND_TYPE_ORIGINAL_PAYMENT)
+        process_order_refund(refund, self.staff)
+        self.assertEqual(stripe_refund.call_args.kwargs['amount'], Decimal('80'))
+        self.assertEqual(UserWallet.objects.get(user=self.customer).balance, Decimal('30'))
 
     def test_original_payment_refund_for_user_wallet_credits_wallet_and_reverses_ledger(self):
         order = self._create_order(payment_type="user_wallet")

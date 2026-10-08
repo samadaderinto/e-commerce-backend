@@ -22,6 +22,12 @@ class DemoScenarioTests(TestCase):
         self.assertEqual(client.post('/api/v1/auth/login/', {
             'email': 'shopper@proace.local', 'password': 'Demo-password-123!',
         }, format='json').status_code, 200)
+        admin = User.objects.get(email='admin@proace.local')
+        self.assertTrue(admin.is_superuser and admin.is_staff and not admin.is_business_admin)
+        biz_admin = User.objects.get(email='business-admin@proace.local')
+        self.assertTrue(biz_admin.is_business_admin and biz_admin.is_staff and not biz_admin.is_superuser)
+        staff = User.objects.get(email='staff@proace.local')
+        self.assertTrue(staff.is_staff and not staff.is_superuser and not staff.is_business_admin)
         for email in ['blocked-staff@proace.local', 'unverified@proace.local']:
             self.assertFalse(User.objects.get(email=email).is_active)
             self.assertEqual(client.post('/api/v1/auth/login/', {

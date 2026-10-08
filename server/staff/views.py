@@ -1,3 +1,4 @@
+from zoneinfo import ZoneInfo
 import logging
 from datetime import timedelta
 from decimal import Decimal
@@ -17,6 +18,7 @@ from rest_framework.parsers import JSONParser
 from rest_framework.permissions import BasePermission
 from core.access import IsBackoffice as IsAdminUser, IsBusinessAdmin, is_admin
 from rest_framework.response import Response
+from rest_framework.request import Request
 from django.shortcuts import redirect
 from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.generics import ListAPIView
@@ -42,7 +44,7 @@ from payment.services import (
     decline_order_refund,
 )
 
-from staff.serilalizers import (
+from staff.serializers import (
     BackofficeCouponSerializer,
     CouponUpdateSerializer,
     OrderStatusOverrideSerializer,
@@ -53,6 +55,7 @@ from staff.serilalizers import (
     StaffCreateSerializer,
     StaffPermissionSerializer,
     StaffUserSerializer,
+    StaffUserDetailSerializer,
     StoreModerationSerializer,
     StoreAuditProductSerializer,
 )
@@ -120,99 +123,100 @@ class StaffViewSet(viewsets.GenericViewSet):
     def dashboard(self, request):
         query = DashboardQuerySerializer(data=request.query_params)
         query.is_valid(raise_exception=True)
-        days = query.validated_data["days"]
-        today = timezone.localdate()
-        start = today - timedelta(days=days - 1)
+        with timezone.override(ZoneInfo(query.validated_data['time_zone'])):
+            days = query.validated_data["days"]
+            today = timezone.localdate()
+            start = today - timedelta(days=days - 1)
 
-        orders = Order.objects.filter(created__date__gte=start, created__date__lte=today)
-        paid_orders = orders.filter(
-            ordered=True,
-            status__in=["confirmed", "shipped", "delivered", "picked up"],
-        )
-        order_total = paid_orders.aggregate(total=Sum("total"))["total"] or Decimal("0")
-        ledger = StoreEarningsLedger.objects.exclude(status=StoreEarningsLedger.STATUS_REVERSED)
-        escrow_total = ledger.filter(status=StoreEarningsLedger.STATUS_PENDING).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
-        commission_total = ledger.aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+            orders = Order.objects.filter(created__date__gte=start, created__date__lte=today)
+            paid_orders = orders.filter(
+                ordered=True,
+                status__in=["confirmed", "shipped", "delivered", "picked up"],
+            )
+            order_total = paid_orders.aggregate(total=Sum("total"))["total"] or Decimal("0")
+            ledger = StoreEarningsLedger.objects.exclude(status=StoreEarningsLedger.STATUS_REVERSED)
+            escrow_total = ledger.filter(status=StoreEarningsLedger.STATUS_PENDING).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
+            commission_total = ledger.aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
 
-        return Response({
-            "period": {"from": start, "to": today, "days": days},
-            "users": {
-                "total": User.objects.count(),
-                "active": User.objects.filter(is_active=True).count(),
-                "staff": User.objects.filter(is_staff=True).count(),
-                "new": User.objects.filter(date_joined__date__gte=start).count(),
-            },
-            "stores": {
-                "total": Store.objects.count(),
-                "active": Store.objects.filter(status=Store.STATUS_ACTIVE).count(),
-                "blocked": Store.objects.filter(status=Store.STATUS_BLOCKED).count(),
-                "new": Store.objects.filter(created__date__gte=start).count(),
-                "new_last_30_days": Store.objects.filter(created__date__gte=today - timedelta(days=29)).count(),
-            },
-            "products": {
-                "total": Product.objects.count(),
-                "published": Product.objects.filter(visibility=True).count(),
-                "hidden": Product.objects.filter(visibility=False).count(),
-                "out_of_stock": Product.objects.filter(is_digital=False, available=0).count(),
-                "sponsored": Product.objects.filter(sponsored=True).count(),
-            },
-            "orders": {
-                "total": orders.count(),
-                "ordered": orders.filter(ordered=True).count(),
-                "by_status": list(
-                    orders.order_by().values("status").annotate(count=Count("pk")).order_by("status")
-                ),
-                "gross_total": format(order_total, ".2f"),
-            },
-            "financials": {
-                "escrow_total": format(escrow_total, ".2f"),
-                "commission_earned": format(commission_total, ".2f"),
-            },
-            "pending_actions": {
-                "withdrawals": StorePayout.objects.filter(status=StorePayout.STATUS_PENDING).count(),
-                "refunds": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
-            },
-            "coupons": {
-                "total": Coupon.objects.count(),
-                "active": Coupon.objects.filter(active=True).count(),
-            },
-            "refunds": {
-                "total": Refund.objects.count(),
-                "accepted": Refund.objects.filter(status=Refund.STATUS_APPROVED).count(),
-                "declined": Refund.objects.filter(status=Refund.STATUS_DECLINED).count(),
-                "pending": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
-            },
-            "marketers": {"total": Marketer.objects.count()},
-            "recent_orders": BackofficeOrderSerializer(
-                Order.objects.select_related("user").order_by("-created", "-pk")[:10],
-                many=True,
-            ).data,
-            "top_stores": list(
-                Store.objects.annotate(
-                    products=Count("product", distinct=True),
-                    orders=Count(
-                        "product__cartitem__cart__order",
-                        filter=Q(
-                            product__cartitem__cart__order__ordered=True,
-                            product__cartitem__cart__order__status__in=["confirmed", "shipped", "delivered", "picked up"],
-                        ),
-                        distinct=True,
+            return Response({
+                "period": {"from": start, "to": today, "days": days, "time_zone": query.validated_data["time_zone"]},
+                "users": {
+                    "total": User.objects.count(),
+                    "active": User.objects.filter(is_active=True).count(),
+                    "staff": User.objects.filter(is_staff=True).count(),
+                    "new": User.objects.filter(date_joined__date__gte=start).count(),
+                },
+                "stores": {
+                    "total": Store.objects.count(),
+                    "active": Store.objects.filter(status=Store.STATUS_ACTIVE).count(),
+                    "blocked": Store.objects.filter(status=Store.STATUS_BLOCKED).count(),
+                    "new": Store.objects.filter(created__date__gte=start).count(),
+                    "new_last_30_days": Store.objects.filter(created__date__gte=today - timedelta(days=29)).count(),
+                },
+                "products": {
+                    "total": Product.objects.count(),
+                    "published": Product.objects.filter(visibility=True).count(),
+                    "hidden": Product.objects.filter(visibility=False).count(),
+                    "out_of_stock": Product.objects.filter(is_digital=False, available=0).count(),
+                    "sponsored": Product.objects.filter(sponsored=True).count(),
+                },
+                "orders": {
+                    "total": orders.count(),
+                    "ordered": orders.filter(ordered=True).count(),
+                    "by_status": list(
+                        orders.order_by().values("status").annotate(count=Count("pk")).order_by("status")
                     ),
-                )
-                .order_by("-orders", "-products", "pk")
-                .values("id", "name", "username", "status", "products", "orders")[:10]
-            ),
-            "scopes": {
-                "orders": f"Last {days} days",
-                "top_stores": "All-time completed orders",
-                "recent_orders": "All-time (recent 10)",
-                "coupons": "All-time configuration",
-                "refunds": "All-time requests",
-                "products": "Current catalog inventory",
-                "users": f"Platform total (new: last {days} days)",
-                "stores": f"Platform total (new: last {days} days)",
-            },
-        })
+                    "gross_total": format(order_total, ".2f"),
+                },
+                "financials": {
+                    "escrow_total": format(escrow_total, ".2f"),
+                    "commission_earned": format(commission_total, ".2f"),
+                },
+                "pending_actions": {
+                    "withdrawals": StorePayout.objects.filter(status=StorePayout.STATUS_PENDING).count(),
+                    "refunds": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
+                },
+                "coupons": {
+                    "total": Coupon.objects.count(),
+                    "active": Coupon.objects.filter(active=True).count(),
+                },
+                "refunds": {
+                    "total": Refund.objects.count(),
+                    "accepted": Refund.objects.filter(status=Refund.STATUS_APPROVED).count(),
+                    "declined": Refund.objects.filter(status=Refund.STATUS_DECLINED).count(),
+                    "pending": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
+                },
+                "marketers": {"total": Marketer.objects.count()},
+                "recent_orders": BackofficeOrderSerializer(
+                    Order.objects.select_related("user").order_by("-created", "-pk")[:10],
+                    many=True,
+                ).data,
+                "top_stores": list(
+                    Store.objects.annotate(
+                        products=Count("product", distinct=True),
+                        orders=Count(
+                            "product__cartitem__cart__order",
+                            filter=Q(
+                                product__cartitem__cart__order__ordered=True,
+                                product__cartitem__cart__order__status__in=["confirmed", "shipped", "delivered", "picked up"],
+                            ),
+                            distinct=True,
+                        ),
+                    )
+                    .order_by("-orders", "-products", "pk")
+                    .values("id", "name", "username", "status", "products", "orders")[:10]
+                ),
+                "scopes": {
+                    "orders": f"Last {days} days",
+                    "top_stores": "All-time completed orders",
+                    "recent_orders": "All-time (recent 10)",
+                    "coupons": "All-time configuration",
+                    "refunds": "All-time requests",
+                    "products": "Current catalog inventory",
+                    "users": f"Platform total (new: last {days} days)",
+                    "stores": f"Platform total (new: last {days} days)",
+                },
+            })
 
     @action(detail=False, methods=["get"])
     def users(self, request):
@@ -307,8 +311,9 @@ class StaffViewSet(viewsets.GenericViewSet):
         return Response({"detail": "A fresh verification email has been queued.", "staff": StaffUserSerializer(staff_user).data})
 
     @extend_schema(request=StaffPermissionSerializer, responses=StaffUserSerializer, methods=["PATCH"])
+    @extend_schema(responses=StaffUserDetailSerializer, methods=["GET"])
     @action(detail=False, methods=["get", "patch"], url_path=r"users/(?P<user_pk>\d+)")
-    def user_detail(self, request, user_pk=None):
+    def user_detail(self, request: Request, user_pk: str | None = None) -> Response:
         user = get_object_or_404(User, pk=user_pk)
         if request.method == "GET":
             wallet = get_or_create_user_wallet(user)
@@ -326,16 +331,16 @@ class StaffViewSet(viewsets.GenericViewSet):
                 orders = orders.filter(orderId__icontains=order_search)
             if order_status:
                 orders = orders.filter(status=order_status)
-            activities = Notification.objects.filter(recipient=user).order_by('-created')[:30]
-            return Response({
-                'user': StaffUserSerializer(user).data,
+            activities = Notification.objects.filter(recipient=user).order_by('-timestamp')[:30]
+            return Response(StaffUserDetailSerializer({
+                'user': user,
                 'wallet': {'balance': format(wallet.balance, '.2f'), 'transactions': [
                     {'id': tx.pk, 'type': tx.transaction_type, 'source': tx.source, 'amount': format(tx.amount, '.2f'), 'description': tx.description, 'created': tx.created}
                     for tx in ledger[:100]
                 ]},
-                'orders': [{'id': order.pk, 'reference': order.orderId, 'created': order.created, 'status': order.status, 'total': format(order.total, '.2f')} for order in orders[:100]],
-                'activity': [{'id': item.pk, 'verb': item.verb, 'description': item.description, 'created': item.created, 'level': item.level} for item in activities],
-            })
+                'orders': [{'id': order.pk, 'reference': order.orderId, 'created': order.created, 'updated': order.updated, 'status': order.status, 'total': format(order.total, '.2f')} for order in orders[:100]],
+                'activity': [{'id': item.pk, 'verb': item.verb, 'description': item.description, 'created': item.timestamp.isoformat(), 'level': item.level} for item in activities],
+            }).data)
         if not is_admin(request.user):
             return Response(
                 {"detail": "Only an admin can change account permissions."},
@@ -394,6 +399,9 @@ class StaffViewSet(viewsets.GenericViewSet):
             products = products.filter(is_digital=True)
         elif is_digital in ("false", "0"):
             products = products.filter(is_digital=False)
+        product_type = request.query_params.get("product_type")
+        if product_type in ("standard", "affiliate_clickbank"):
+            products = products.filter(product_type=product_type)
         visibility = request.query_params.get("visibility")
         if visibility in ("true", "1"):
             products = products.filter(visibility=True)
@@ -562,10 +570,35 @@ class StaffViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=["get"], url_path="commission-wallet")
     def commission_wallet(self, request):
-        earned = StoreEarningsLedger.objects.filter(status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED]).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+        commission_earned = StoreEarningsLedger.objects.filter(
+            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
+            store__is_official=False,
+        ).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+        official_store_earned = StoreEarningsLedger.objects.filter(
+            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
+            store__is_official=True,
+        ).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
+        earned = commission_earned + official_store_earned
         withdrawn = PlatformCommissionWithdrawal.objects.exclude(status=PlatformCommissionWithdrawal.STATUS_FAILED).aggregate(total=Sum("amount"))["total"] or Decimal("0")
         rows = PlatformCommissionWithdrawal.objects.select_related('requested_by').order_by('-created')[:50]
-        return Response({"earned": format(earned, '.2f'), "withdrawn_or_pending": format(withdrawn, '.2f'), "available": format(max(Decimal('0'), earned - withdrawn), '.2f'), "withdrawals": [{"id": row.pk, "amount": format(row.amount, '.2f'), "payout_method": row.payout_method, "status": row.status, "reference": row.reference, "created": row.created} for row in rows]})
+        return Response({
+            "earned": format(earned, '.2f'),
+            "marketplace_commission": format(commission_earned, '.2f'),
+            "official_stores_revenue": format(official_store_earned, '.2f'),
+            "withdrawn_or_pending": format(withdrawn, '.2f'),
+            "available": format(max(Decimal('0'), earned - withdrawn), '.2f'),
+            "withdrawals": [
+                {
+                    "id": row.pk,
+                    "amount": format(row.amount, '.2f'),
+                    "payout_method": row.payout_method,
+                    "status": row.status,
+                    "reference": row.reference,
+                    "created": row.created,
+                }
+                for row in rows
+            ],
+        })
 
     @action(detail=False, methods=["post"], url_path="commission-wallet/withdraw")
     @transaction.atomic
@@ -573,12 +606,26 @@ class StaffViewSet(viewsets.GenericViewSet):
         amount = Decimal(str(request.data.get('amount', '0')))
         if amount <= 0:
             return Response({'amount': 'Enter an amount greater than zero.'}, status=400)
-        earned = StoreEarningsLedger.objects.filter(status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED]).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+        commission_earned = StoreEarningsLedger.objects.filter(
+            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
+            store__is_official=False,
+        ).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+        official_store_earned = StoreEarningsLedger.objects.filter(
+            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
+            store__is_official=True,
+        ).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
+        earned = commission_earned + official_store_earned
         reserved = PlatformCommissionWithdrawal.objects.exclude(status=PlatformCommissionWithdrawal.STATUS_FAILED).aggregate(total=Sum("amount"))["total"] or Decimal("0")
         if amount > earned - reserved:
-            return Response({'amount': 'Amount exceeds available platform commission.'}, status=400)
+            return Response({'amount': 'Amount exceeds available platform treasury funds.'}, status=400)
         from nanoid import generate
-        row = PlatformCommissionWithdrawal.objects.create(amount=amount, payout_method=str(request.data.get('payout_method', 'bank')), account_details=request.data.get('account_details') or {}, requested_by=request.user, reference=f'PCW-{generate(size=12)}')
+        row = PlatformCommissionWithdrawal.objects.create(
+            amount=amount,
+            payout_method=str(request.data.get('payout_method', 'stripe')),
+            account_details=request.data.get('account_details') or {},
+            requested_by=request.user,
+            reference=f'PCW-{generate(size=12)}'
+        )
         return Response({'id': row.pk, 'reference': row.reference, 'status': row.status}, status=201)
 
     @action(detail=False, methods=["post"], url_path=r"payouts/(?P<payout_pk>\d+)/process")
@@ -588,7 +635,7 @@ class StaffViewSet(viewsets.GenericViewSet):
         recipient_user = (payout.store and payout.store.user) or (payout.wallet and payout.wallet.user)
 
         if action_type == "approve":
-            process_payout_status_change(payout, action="approve", processed_by=request.user)
+            payout = process_payout_status_change(payout, action="approve", processed_by=request.user)
 
             if recipient_user:
                 create_notification(
@@ -600,7 +647,7 @@ class StaffViewSet(viewsets.GenericViewSet):
             return Response({"detail": "Payout marked as completed.", "payout": StorePayoutSerializer(payout).data})
         else:
             reason = request.data.get("reason", "Payout declined by compliance.")
-            process_payout_status_change(payout, action="reject", processed_by=request.user, notes=reason)
+            payout = process_payout_status_change(payout, action="reject", processed_by=request.user, notes=reason)
 
             if recipient_user:
                 create_notification(

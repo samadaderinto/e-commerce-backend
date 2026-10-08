@@ -1,3 +1,4 @@
+from utils.timezones import TimeZoneField
 from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
@@ -97,6 +98,9 @@ class StaffUserSerializer(UserSerializer):
             "staff_email_verified",
             "staff_blocked_at",
             "date_joined",
+            "updated",
+            "last_login",
+            "last_active_at",
         ]
         read_only_fields = fields
 
@@ -202,6 +206,7 @@ class OrderStatusOverrideSerializer(serializers.Serializer):
 
 
 class DashboardQuerySerializer(serializers.Serializer):
+    time_zone = TimeZoneField(default="UTC", max_length=100)
     days = serializers.IntegerField(default=30, min_value=1, max_value=365)
 
 
@@ -214,11 +219,14 @@ class StoreAuditProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             "id", "title", "category", "price", "visibility",
-            "is_digital", "has_digital_asset", "available", "created",
+            "is_digital", "has_digital_asset", "available", "created", "updated",
+            "product_type", "affiliate_hoplink", "affiliate_vendor_nickname", "affiliate_button_text",
         ]
 
     def get_has_digital_asset(self, obj) -> bool:
         return bool(obj.digital_file_url)
 
     def get_available(self, obj):
-        return None if obj.is_digital else obj.available
+        if obj.is_digital:
+            return None
+        return obj.available

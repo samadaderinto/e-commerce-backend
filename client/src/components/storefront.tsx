@@ -1,5 +1,6 @@
 "use client";
 
+import { activityDate } from './activity';
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
@@ -454,6 +455,7 @@ export function ShopPage() {
                   {storeProfile.email}
                 </a>
               )}
+              {storeData && <span>Last active: {activityDate(storeData.last_active_at)} · Catalog updated: {activityDate(storeData.updated)}</span>}
               {storeData?.created && (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
                   <Calendar size={14} />
@@ -772,18 +774,49 @@ export function ProductPage({ id }: { id: string }) {
         </div>
       )}
       <div className="product-detail">
-        <ProductGallery key={product.id} images={[...product.images, product.image, ...(product.variants || []).map(variant => variant.image_url || '')]} title={product.title} discount={product.discount} activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? product.image} onImageChange={setSelectedGalleryImage} />
+        <ProductGallery
+          key={product.id}
+          images={[
+            ...product.images,
+            product.image,
+            ...(product.variants || []).map((variant) => variant.image_url || ""),
+          ]}
+          title={product.title}
+          discount={product.discount}
+          activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? product.image}
+          onImageChange={setSelectedGalleryImage}
+        />
         <div className="product-information">
-          <span className="eyebrow green" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            {product.brand || product.store_name}
-            {product.store_verified !== false && (
-              <VerifiedBadge
-                tier={product.is_official_store ? "official" : "starter"}
-                tierData={product.seller_tier}
-                size={14}
-              />
-            )}
-          </span>
+          {product.product_type === "affiliate_clickbank" ? (
+            <span
+              className="eyebrow partner-eyebrow"
+            >
+              <span>Curated Partner Offer</span>
+              <span
+                className="seller-tier-pill partner-pill"
+              >
+                ClickBank
+              </span>
+            </span>
+          ) : (
+            <span
+              className="eyebrow green"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+              }}
+            >
+              {product.brand || product.store_name}
+              {product.store_verified !== false && (
+                <VerifiedBadge
+                  tier={product.is_official_store ? "official" : "starter"}
+                  tierData={product.seller_tier}
+                  size={14}
+                />
+              )}
+            </span>
+          )}
           <h1>{product.title}</h1>
           <div className="rating-line" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -874,7 +907,9 @@ export function ProductPage({ id }: { id: string }) {
 
           <div className={`stock ${effectiveStock ? "" : "sold-out"}`}>
             <span />
-            {product.is_digital
+            {product.product_type === 'affiliate_clickbank'
+              ? "Official Partner Listing · In Stock"
+              : product.is_digital
               ? "Unlimited digital inventory"
               : effectiveStock > 5
               ? "In stock. Ready for your everyday."
@@ -882,7 +917,7 @@ export function ProductPage({ id }: { id: string }) {
                 ? `Only ${effectiveStock} left in stock`
                 : "Currently out of stock"}
           </div>
-          {!product.is_digital && <label className="field">
+          {!product.is_digital && product.product_type !== 'affiliate_clickbank' && <label className="field">
             <span>Quantity</span>
             <Quantity
               value={quantity}
@@ -891,7 +926,7 @@ export function ProductPage({ id }: { id: string }) {
             />
           </label>}
           <div className="purchase-actions">
-            <AddToBagButton quantity={quantity} product={{ ...product, available: effectiveStock, title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title, sale_price: effectiveSalePrice, price: effectiveOriginalPrice }} />
+            <AddToBagButton quantity={quantity} product={{ ...product, selected_variant: activeVariant?.name || '', available: effectiveStock, title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title, sale_price: effectiveSalePrice, price: effectiveOriginalPrice }} />
             <button
               className={`button secondary ${liked ? "saved" : ""}`}
               aria-label="Save product"
@@ -908,7 +943,14 @@ export function ProductPage({ id }: { id: string }) {
           <div className="delivery-note">
             <Truck size={21} />
             <div>
-              {product.is_digital ? (
+              {product.product_type === 'affiliate_clickbank' ? (
+                <>
+                  <strong>Official Brand Partner Delivery</strong>
+                  <p>
+                    Fulfilled and shipped directly by official partner ({product.affiliate_vendor_nickname || 'ClickBank Vendor'}). Access links and shipping tracking will be emailed directly upon completion.
+                  </p>
+                </>
+              ) : product.is_digital ? (
                 <>
                   <strong>Worldwide digital download</strong>
                   <p>
@@ -932,58 +974,103 @@ export function ProductPage({ id }: { id: string }) {
             <div>
               <strong>Secure payment</strong>
               <p>
-                PayPal, Cash App, cards and Stripe are supported where
-                available.
+                {product.product_type === 'affiliate_clickbank'
+                  ? 'ClickBank guarantees secure payment processing and customer purchase protection.'
+                  : 'Major credit and debit cards, Apple Pay, Google Pay via Stripe, and ProAce Wallet are supported.'}
               </p>
             </div>
           </div>
-          <Link
-            className="seller-link"
-            href={`/shop?store=${product.store}`}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "12px 16px",
-              background: "var(--soft)",
-              border: "1px solid var(--line)",
-              borderRadius: "10px",
-              textDecoration: "none",
-              color: "inherit",
-              marginTop: "16px"
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <div
-                style={{
-                  width: "36px",
-                  height: "36px",
-                  borderRadius: "50%",
-                  background: product.is_official_store ? "rgba(217, 119, 6, 0.16)" : "var(--green-light)",
-                  display: "grid",
-                  placeItems: "center",
-                  color: product.is_official_store ? "#d97706" : "var(--green)",
-                  flexShrink: 0
-                }}
-              >
-                <StoreIcon size={18} />
+          {product.product_type === 'affiliate_clickbank' ? (
+            <div
+              className="seller-link"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "12px 16px",
+                background: "var(--soft)",
+                border: "1px solid var(--line)",
+                borderRadius: "10px",
+                marginTop: "16px"
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div
+                  style={{
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    background: "var(--partner-surface)",
+                    display: "grid",
+                    placeItems: "center",
+                    color: "var(--partner-ink)",
+                    flexShrink: 0
+                  }}
+                >
+                  <ShieldCheck size={18} />
+                </div>
+                <div>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "13px" }}>
+                    Platform Curated · <strong style={{ color: "var(--ink)" }}>ProAce Network</strong>
+                  </span>
+                  <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
+                    {product.affiliate_vendor_nickname ? `Fulfilled on ClickBank by ${product.affiliate_vendor_nickname}` : 'External verified partner offer'}
+                  </p>
+                </div>
               </div>
-              <div>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "13px" }}>
-                  Sold by <strong style={{ color: "var(--ink)" }}>{product.store_name}</strong>
-                  <VerifiedBadge
-                    tier={product.is_official_store ? "official" : "starter"}
-                    tierData={product.seller_tier}
-                    size={16}
-                  />
-                </span>
-                <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
-                  @{product.store_username || "store"} · Visit store & all listings
-                </p>
-              </div>
+              <span className="seller-tier-pill partner-pill">
+                ClickBank Partner
+              </span>
             </div>
-            <ArrowUpRight size={18} className="muted" />
-          </Link>
+          ) : (
+            <Link
+              className="seller-link"
+              href={`/shop?store=${product.store}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "12px 16px",
+                background: "var(--soft)",
+                border: "1px solid var(--line)",
+                borderRadius: "10px",
+                textDecoration: "none",
+                color: "inherit",
+                marginTop: "16px"
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div
+                  style={{
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    background: product.is_official_store ? "rgba(217, 119, 6, 0.16)" : "var(--green-light)",
+                    display: "grid",
+                    placeItems: "center",
+                    color: product.is_official_store ? "#d97706" : "var(--green)",
+                    flexShrink: 0
+                  }}
+                >
+                  <StoreIcon size={18} />
+                </div>
+                <div>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "13px" }}>
+                    Sold by <strong style={{ color: "var(--ink)" }}>{product.store_name}</strong>
+                    <VerifiedBadge
+                      tier={product.is_official_store ? "official" : "starter"}
+                      tierData={product.seller_tier}
+                      size={16}
+                    />
+                  </span>
+                  <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
+                    @{product.store_username || "store"} · Visit store & all listings
+                  </p>
+                </div>
+              </div>
+              <ArrowUpRight size={18} className="muted" />
+            </Link>
+          )}
         </div>
       </div>
       <section className="product-tabs">
@@ -1165,7 +1252,7 @@ export function ProductPage({ id }: { id: string }) {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
                         <small>
                           {item.author || "ProAce customer"} ·{" "}
-                          {new Date(item.created).toLocaleDateString()}
+                          {new Date(item.created).toLocaleDateString()}{item.is_edited && <small> · Edited {activityDate(item.updated)}</small>}
                         </small>
                         {(item.can_moderate || item.is_own_review) && (
                           <button

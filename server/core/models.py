@@ -2,6 +2,9 @@ from django.db import models
 from django.contrib.auth.models import BaseUserManager, AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.conf import settings
+from django.utils import timezone
+from datetime import datetime
+from typing import Any
 
 from payment.models import Order
 from utils.mixins import DatesMixin
@@ -49,6 +52,17 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser):
+    updated = models.DateTimeField(auto_now=True)
+    last_active_at = models.DateTimeField(null=True, blank=True, db_index=True)
+
+    @property
+    def created(self) -> datetime:
+        return self.date_joined
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get('update_fields') and set(kwargs['update_fields']) - {'last_login', 'last_active_at'}:
+            kwargs['update_fields'] = set(kwargs['update_fields']) | {'updated'}
+        super().save(*args, **kwargs)
     GENDER_STATUS = (
         ("male", "male"),
         ("female", "female")
@@ -96,6 +110,18 @@ class Address(DatesMixin):
 
 
 class Review(DatesMixin):
+    is_edited = models.BooleanField(default=False)
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        if self.pk:
+            fields = ['label', 'comment', 'rating', 'images']
+            previous = type(self).objects.filter(pk=self.pk).values(*fields).first()
+            persisted_fields = kwargs.get('update_fields')
+            if previous and any(previous[field] != getattr(self, field) for field in fields if persisted_fields is None or field in persisted_fields):
+                self.is_edited = True
+                if persisted_fields is not None:
+                    kwargs['update_fields'] = set(persisted_fields) | {'is_edited', 'updated'}
+        super().save(*args, **kwargs)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     label = models.CharField(max_length=120)
@@ -195,7 +221,7 @@ class Device(DatesMixin):
     verified = models.BooleanField(default=False)
     type = models.CharField(max_length=50)
     version = models.CharField(max_length=50)
-    last_login = models.DateTimeField(auto_now_add=True)
+    last_login = models.DateTimeField(default=timezone.now)
 
 
 class UserWallet(DatesMixin):
@@ -243,6 +269,7 @@ class UserWalletTransaction(DatesMixin):
     source = models.CharField(max_length=20, choices=SOURCE_CHOICES, default=SOURCE_REFUND)
     description = models.CharField(max_length=255)
     reference = models.CharField(max_length=100, blank=True, default="")
+    idempotency_key = models.CharField(max_length=150, null=True, blank=True, unique=True)
 
     class Meta:
         ordering = ["-created"]

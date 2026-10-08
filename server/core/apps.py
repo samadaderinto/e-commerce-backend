@@ -7,3 +7,4 @@ class CoreConfig(AppConfig):
 
     def ready(self):
         from . import schema  # noqa: F401
+        from . import activity_signals  # noqa: F401

@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.utils import timezone
 from affiliates.models import (
     AffiliateWallet,
     AffiliateWalletTransaction,
@@ -56,13 +57,16 @@ class RedirectSerializer(serializers.ModelSerializer):
             "product_url",
             "refferal_url",
             "click_rate",
+            "last_clicked_at",
             "created",
         ]
+        read_only_fields = ['click_rate', 'last_clicked_at', 'created']
 
     def create(self, validated_data):
         redirect = Redirect.objects.create(**validated_data)
         redirect.click_rate += 1
-        redirect.save(update_fields=["click_rate", "updated"])
+        redirect.last_clicked_at = timezone.now()
+        redirect.save(update_fields=["click_rate", "last_clicked_at", "updated"])
         return redirect
 
 
@@ -96,3 +100,8 @@ class ReferralSerializer(serializers.ModelSerializer):
             "updated",
         ]
         read_only_fields = fields
+
+
+class AffiliateLinkRequestSerializer(serializers.Serializer):
+    product = serializers.IntegerField(min_value=1)
+    identifier = serializers.RegexField(regex=r'^[A-Za-z0-9_-]+$', max_length=100, required=False, allow_blank=True)

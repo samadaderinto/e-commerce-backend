@@ -1,0 +1,186 @@
+/* Shared visual primitives, loaded after page styles and theme variables. */
+:root {
+  --radius-control: 8px;
+  --radius-card: 14px;
+  --radius-dialog: 20px;
+  --shadow-card: 0 4px 20px rgb(20 40 28 / 5%);
+  --shadow-dialog: 0 24px 80px rgb(0 0 0 / 24%);
+  --partner-ink: #924519;
+  --partner-surface: #fff1e5;
+  --muted: #626d63;
+}
+
+:root[data-theme='dark'] {
+  --muted: #a4afa5;
+  --partner-ink: #ffc393;
+  --partner-surface: #3c2b20;
+  --shadow-card: 0 4px 20px rgb(0 0 0 / 12%);
+}
+
+p { color: var(--muted); }
+
+input, select, textarea {
+  border-color: var(--line);
+  border-radius: var(--radius-control);
+  background: var(--paper);
+  color: var(--ink);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.field > :is(input, select, textarea) { width: 100%; }
+.field > span { font-size: 12px; font-weight: 600; }
+.field :is(input, select) { min-height: 44px; }
+.field :is(input, select, textarea):focus-visible {
+  border-color: var(--green);
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
+.button {
+  border-radius: var(--radius-control);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--button-text);
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+.button:hover:not(:disabled) { background: var(--button-hover); }
+.button.secondary {
+  background: var(--paper);
+  border-color: var(--line);
+  color: var(--ink);
+}
+.button.secondary:hover:not(:disabled) { background: var(--soft); }
+.button.dark { color: #fff; }
+.button.secondary.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 10%, var(--paper));
+}
+.icon-button { border-radius: var(--radius-control); }
+.icon-button:hover { background: var(--soft); }
+.search-box, .quantity { border-radius: var(--radius-control); }
+.text-link, .text-button { font-size: 13px; }
+.account-link, .bag-link, .category-nav { font-size: 12px; }
+.category-nav a { min-height: 40px; }
+.breadcrumb { font-size: 12px; }
+.footer-grid h3, .footer-grid > div > a:not(.wordmark) { font-size: 12px; }
+.footer-grid p { font-size: 12px; }
+.benefits strong { font-size: 12px; }
+.benefits small { font-size: 11px; }
+.auth-story { border-radius: var(--radius-card); overflow: hidden; }
+.auth-switch, .fine-print { font-size: 12px; }
+.account-sidebar a { min-height: 44px; }
+
+.product-photo, .gallery-main { border-radius: var(--radius-card); background: var(--soft); }
+.product-card { display: flex; flex-direction: column; }
+.product-meta { gap: 10px; font-size: 11px; margin-top: 14px; }
+.product-meta > span:first-child { min-width: 0; flex-wrap: wrap; }
+.product-meta > span:last-child { flex-shrink: 0; color: var(--muted); }
+.product-title { font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.product-card .price { margin-top: auto; padding-top: 8px; flex-wrap: wrap; font-size: 15px; }
+.product-card .price del { font-size: 12px; }
+.quick-add { border-radius: var(--radius-control); min-height: 40px; font-size: 12px; }
+.product-photo > a.quick-add {
+  height: 40px;
+  display: flex;
+  color: var(--ink);
+  background: var(--overlay-surface);
+}
+.save-button { width: 36px; height: 36px; border-radius: 50%; }
+.partner-badge { background: var(--partner-surface); color: var(--partner-ink); }
+:root[data-theme='dark'] .product-badges .discount.partner-badge {
+  background: var(--partner-surface) !important;
+  color: var(--partner-ink) !important;
+}
+.partner-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--partner-ink);
+}
+.partner-pill {
+  border-radius: 100px;
+  background: var(--partner-surface);
+  color: var(--partner-ink);
+  font-size: 10px;
+  padding: 2px 7px;
+  font-weight: 600;
+}
+.gallery-thumbs { overflow-x: auto; padding: 3px; }
+.gallery-thumbs button { flex-shrink: 0; border-radius: var(--radius-control); }
+
+.review-form, .address-card, .order-summary, .analytics-panel,
+.checkout-delivery-card, .digital-asset-card, .admin-staff-table,
+.upload-preview-card, .shipping-tier-card, .carrier-option {
+  border-radius: var(--radius-card);
+  border-color: var(--line);
+  background: var(--paper);
+}
+.review-form, .analytics-panel, .address-card, .checkout-delivery-card {
+  box-shadow: var(--shadow-card);
+}
+.upload-dropzone { border-radius: var(--radius-card); }
+.empty-state p, .form-error, .address-field-error { font-size: 13px; }
+.empty-state h2 { line-height: 1.4; }
+.form-error { border-radius: var(--radius-control); }
+.tabs { overflow-x: auto; }
+.tabs > button { min-height: 44px; font-size: 13px; }
+.pagination button { width: 40px; height: 40px; border-radius: var(--radius-control); }
+th { font-size: 11px; font-weight: 600; }
+td { line-height: 1.6; }
+
+.modal-backdrop, .dialog-backdrop, .admin-dialog-backdrop, .checkout-modal-backdrop {
+  background: rgb(10 20 13 / 60%);
+  backdrop-filter: blur(5px);
+}
+.modal-card, .dialog-card, .admin-dialog, .checkout-address-modal, .admin-detail-dialog {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-dialog);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--shadow-dialog);
+  max-height: calc(100dvh - 40px);
+  overscroll-behavior: contain;
+}
+.modal-head, .admin-dialog-head, .checkout-modal-head { gap: 16px; }
+.modal-head h2, .admin-dialog-head h2, .checkout-modal-head h2 { font-size: 23px; line-height: 1.35; }
+.modal-address-info p { font-size: 13px; }
+.modal-address-info small { font-size: 11px; }
+.modal-address-actions { flex-wrap: wrap; justify-content: flex-end; }
+.modal-deliver-btn { min-height: 36px; font-size: 12px; }
+.toast { border-radius: 12px; font-size: 13px; }
+
+@media (hover: none), (pointer: coarse) {
+  .quick-add { opacity: 1; transform: none; }
+  .icon-button { min-width: 44px; min-height: 44px; }
+  .save-button { min-width: 36px; min-height: 36px; }
+}
+
+@media (max-width: 650px) {
+  /* 16px prevents iOS from zooming the page when a field receives focus. */
+  input, select, textarea, .search-box input, .sort-control select { font-size: 16px; }
+  .section-heading { flex-wrap: wrap; align-items: flex-start; }
+  .product-title { font-size: 13px; }
+  .product-meta { font-size: 10px; gap: 5px; }
+  .product-card .price { font-size: 14px; }
+  .modal-card, .dialog-card, .admin-dialog, .checkout-address-modal {
+    padding: 20px;
+    max-height: calc(100dvh - 24px);
+    border-radius: var(--radius-dialog);
+  }
+  .dialog-backdrop, .admin-dialog-backdrop { padding: 12px; align-items: center; }
+  .modal-address-actions { align-self: flex-start; }
+  .checkout-modal-address-card { flex-wrap: wrap; }
+  .checkout-modal-address-card .modal-address-actions { margin-left: 32px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  .order-summary, .analytics-panel, .address-card, .admin-detail-dialog { box-shadow: none; }
+}

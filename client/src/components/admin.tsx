@@ -1,5 +1,8 @@
 'use client';
 
+import { browserTimeZone } from '@/lib/datetime';
+
+import { ActivityDetails, activityDate } from './activity';
 import { FormEvent, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -12,6 +15,8 @@ import {
   Check,
   DollarSign,
   Eye,
+  FileText,
+  Landmark,
   LockKeyhole,
   Package, Printer,
   Plus,
@@ -29,33 +34,114 @@ import {
   X,
 } from 'lucide-react';
 import { api, money } from '@/lib/api';
-import type { AdminCoupon, AdminDashboardData, AdminOrder, AdminRefund, AdminUserProfile, Page, StaffUser, StorePayout } from '@/lib/types';
+import type { AdminCoupon, AdminDashboardData, AdminOrder, AdminRefund, AdminTaxJurisdiction, AdminTaxesResponse, AdminUserProfile, Page, StaffUser, StorePayout } from '@/lib/types';
 import { useShop } from './providers';
 import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, Status, VerifiedBadge } from './ui';
 
-type ActionDialogRequest = { title: string; message: string; confirmLabel?: string; reasonLabel?: string };
+type ActionDialogRequest = {
+  title: string;
+  message: string;
+  confirmLabel?: string;
+  reasonLabel?: string;
+};
 
 function useActionDialog() {
   const [request, setRequest] = useState<ActionDialogRequest | null>(null);
   const resolver = useRef<((value: string | null) => void) | null>(null);
-  const ask = (next: ActionDialogRequest) => new Promise<string | null>(resolve => { resolver.current = resolve; setRequest(next); });
-  const close = (value: string | null) => { resolver.current?.(value); resolver.current = null; setRequest(null); };
-  return { ask, dialog: <ActionDialog key={request?.title || 'closed'} request={request} onClose={close} /> };
+
+  const ask = (next: ActionDialogRequest) =>
+    new Promise<string | null>((resolve) => {
+      resolver.current = resolve;
+      setRequest(next);
+    });
+
+  const close = (value: string | null) => {
+    resolver.current?.(value);
+    resolver.current = null;
+    setRequest(null);
+  };
+
+  return {
+    ask,
+    dialog: (
+      <ActionDialog
+        key={request?.title || 'closed'}
+        request={request}
+        onClose={close}
+      />
+    ),
+  };
 }
 
-function ActionDialog({ request, onClose }: { request: ActionDialogRequest | null; onClose: (value: string | null) => void }) {
+function ActionDialog({
+  request,
+  onClose,
+}: {
+  request: ActionDialogRequest | null;
+  onClose: (value: string | null) => void;
+}) {
   const [reason, setReason] = useState('');
   const dialogRef = useDialogFocus(Boolean(request), () => onClose(null));
+
   if (!request) return null;
   const requiresReason = Boolean(request.reasonLabel);
-  return <div className="admin-dialog-backdrop" role="presentation" onMouseDown={event => event.target === event.currentTarget && onClose(null)}>
-    <section ref={dialogRef} className="admin-dialog" role="dialog" aria-modal="true" aria-labelledby="action-dialog-title">
-      <div className="admin-dialog-head"><div><span className="eyebrow green">CONFIRM ACTION</span><h2 id="action-dialog-title">{request.title}</h2></div><button className="icon-button" aria-label="Close" onClick={() => onClose(null)}><X size={19} /></button></div>
-      <p>{request.message}</p>
-      {requiresReason && <Field label={request.reasonLabel!}><textarea autoFocus value={reason} onChange={event => setReason(event.target.value)} rows={4} required /></Field>}
-      <div className="form-actions"><button className="button secondary" onClick={() => onClose(null)}>Cancel</button><button className="button" disabled={requiresReason && !reason.trim()} onClick={() => onClose(requiresReason ? reason.trim() : '')}>{request.confirmLabel || 'Confirm'}</button></div>
-    </section>
-  </div>;
+
+  return (
+    <div
+      className="admin-dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => event.target === event.currentTarget && onClose(null)}
+    >
+      <section
+        ref={dialogRef}
+        className="admin-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="action-dialog-title"
+      >
+        <div className="admin-dialog-head">
+          <div>
+            <span className="eyebrow green">CONFIRM ACTION</span>
+            <h2 id="action-dialog-title">{request.title}</h2>
+          </div>
+          <button
+            className="icon-button"
+            aria-label="Close"
+            onClick={() => onClose(null)}
+          >
+            <X size={19} />
+          </button>
+        </div>
+        <p>{request.message}</p>
+        {requiresReason && (
+          <Field label={request.reasonLabel!}>
+            <textarea
+              autoFocus
+              value={reason}
+              onChange={(event) => setReason(event.target.value)}
+              rows={4}
+              required
+            />
+          </Field>
+        )}
+        <div className="form-actions">
+          <button
+            className="button secondary"
+            onClick={() => onClose(null)}
+          >
+            Cancel
+          </button>
+          <button
+            className="button"
+            disabled={requiresReason && !reason.trim()}
+            onClick={() => onClose(requiresReason ? reason.trim() : '')}
+          >
+            {request.confirmLabel || 'Confirm'}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 export function AdminDashboardPage() {
@@ -65,7 +151,7 @@ export function AdminDashboardPage() {
   const [detail, setDetail] = useState<{ title: string; rows: Array<[string, string]> } | null>(null);
   const dashboard = useQuery({
     queryKey: ['admin', 'dashboard', days],
-    queryFn: () => api<AdminDashboardData>(`admin/staff/dashboard?days=${days}`),
+    queryFn: () => api<AdminDashboardData>(`admin/staff/dashboard?days=${days}&time_zone=${encodeURIComponent(browserTimeZone())}`),
     enabled: !!(user?.is_staff || (user?.is_superuser || user?.is_business_admin)),
   });
   const coupons = useQuery({
@@ -115,7 +201,7 @@ export function AdminDashboardPage() {
 
   async function overrideOrder(order: AdminDashboardData['recent_orders'][number], nextStatus: string) {
     if (nextStatus === order.status) return;
-    const reason = await actionDialog.ask({ title: 'Update order status', message: `Change order #${order.orderId} from ${order.status} to ${nextStatus}?`, confirmLabel: 'Update status' });
+    const reason = await actionDialog.ask({ title: 'Update order status', message: `Change order #${order.orderId} from ${order.status} to ${nextStatus}?`, confirmLabel: 'Update status', reasonLabel: 'Reason' });
     if (reason === null) return;
     try {
       await api(`admin/staff/orders/${order.id}/status`, 'POST', { status: nextStatus, reason });
@@ -140,7 +226,7 @@ export function AdminDashboardPage() {
           <h1>Admin & Staff Overview</h1>
           <p>Real-time platform commerce insights, store activity, and order fulfillment.</p>
         </div>
-        <div className="form-actions" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div className="admin-dashboard-shortcuts">
           {user.is_superuser && <a
             className="button secondary"
             href={process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}
@@ -217,10 +303,38 @@ export function AdminDashboardPage() {
               <strong>{data.stores.active}</strong>
               <small>{data.stores.total} stores total · {data.stores.blocked} suspended</small>
             </div>
-            <div className="stat-item stat-0"><div><span>Total Amount in Escrow</span><LockKeyhole size={19} /></div><strong>{money(data.financials.escrow_total)}</strong><small>Merchant funds awaiting release</small></div>
-            <div className="stat-item stat-1"><div><span>Total Commission Earned</span><DollarSign size={19} /></div><strong>{money(data.financials.commission_earned)}</strong><small>Platform fees recorded in the ledger</small></div>
-            <div className="stat-item stat-2"><div><span>Pending Actions</span><RotateCcw size={19} /></div><strong>{data.pending_actions.withdrawals + data.pending_actions.refunds}</strong><small>{data.pending_actions.withdrawals} withdrawals · {data.pending_actions.refunds} refunds/disputes</small></div>
-            <div className="stat-item stat-3"><div><span>Store Growth</span><Store size={19} /></div><strong>{data.stores.active}</strong><small>{data.stores.new_last_30_days} new stores in the last 30 days</small></div>
+            <div className="stat-item stat-0">
+              <div>
+                <span>Total Amount in Escrow</span>
+                <LockKeyhole size={19} />
+              </div>
+              <strong>{money(data.financials.escrow_total)}</strong>
+              <small>Merchant funds awaiting release</small>
+            </div>
+            <div className="stat-item stat-1">
+              <div>
+                <span>Total Commission Earned</span>
+                <DollarSign size={19} />
+              </div>
+              <strong>{money(data.financials.commission_earned)}</strong>
+              <small>Platform fees recorded in the ledger</small>
+            </div>
+            <div className="stat-item stat-2">
+              <div>
+                <span>Pending Actions</span>
+                <RotateCcw size={19} />
+              </div>
+              <strong>{data.pending_actions.withdrawals + data.pending_actions.refunds}</strong>
+              <small>{data.pending_actions.withdrawals} withdrawals · {data.pending_actions.refunds} refunds/disputes</small>
+            </div>
+            <div className="stat-item stat-3">
+              <div>
+                <span>Store Growth</span>
+                <Store size={19} />
+              </div>
+              <strong>{data.stores.active}</strong>
+              <small>{data.stores.new_last_30_days} new stores in the last 30 days</small>
+            </div>
           </div>
 
           <div className="dashboard-columns" style={{ marginTop: '2rem' }}>
@@ -375,13 +489,13 @@ export function AdminDashboardPage() {
                           )}
                         </td>
                         <td><strong>{money(order.total)}</strong></td>
-                        <td>{new Date(order.created).toLocaleDateString()}</td>
+                        <td>{new Date(order.created).toLocaleDateString()}<small style={{ display: 'block' }}>Updated {activityDate(order.updated)}</small></td>
                         <td>
                           <button
                             type="button"
                             className="button secondary"
                             aria-label={`View details for order ${order.orderId}`}
-                            onClick={() => setDetail({title: `Order #${order.orderId}`, rows: [['Buyer', order.buyer_email || 'Guest'], ['Status', order.status], ['Total', money(order.total)], ['Created', new Date(order.created).toLocaleString()], ['Tracking', order.tracking_number || 'Not assigned']]})}
+                            onClick={() => setDetail({title: `Order #${order.orderId}`, rows: [['Buyer', order.buyer_email || 'Guest'], ['Status', order.status], ['Total', money(order.total)], ['Created', new Date(order.created).toLocaleString()], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)], ['Tracking', order.tracking_number || 'Not assigned']]})}
                           >
                             Details
                           </button>
@@ -418,33 +532,141 @@ export function AdminDashboardPage() {
                   <Link href="/admin/coupons" className="button secondary">View all coupons &rarr;</Link>
                 </div>
               </div>
-              {coupons.isLoading ? <Loading /> : coupons.error ? <ErrorState error={coupons.error} retry={() => coupons.refetch()} /> : !coupons.data?.results.length ? <p className="muted">No coupons configured.</p> : coupons.data.results.map(coupon => <div className="stock-row" key={coupon.id}>
-                <div><strong>{coupon.code}</strong><small>{coupon.discount}% off · {coupon.num_used}/{coupon.num_available} used · {coupon.active ? 'Active' : 'Inactive'}</small></div>
-                <div className="form-actions">
-                  <button type="button" className="button secondary" aria-label={`View details for coupon ${coupon.code}`} onClick={() => setDetail({title:`Coupon ${coupon.code}`, rows:[['Status', coupon.active ? 'Active' : 'Inactive'], ['Discount', `${coupon.discount}%`], ['Created by', coupon.created_by || 'Platform / Unattributed'], ['Valid from', new Date(coupon.valid_from).toLocaleString()], ['Valid to', new Date(coupon.valid_to).toLocaleString()], ['Usage', `${coupon.num_used} of ${coupon.num_available}`], ...(coupon.redemptions?.length ? [['Redemptions', `${coupon.redemptions.length} orders redeemed`] as [string, string]] : [])]})}>Details</button>
-                  <button className="button secondary" onClick={() => void setCoupon(coupon, 'toggle')}>{coupon.active ? 'Deactivate' : 'Reactivate'}</button>
-                  <button className="icon-button" aria-label={`Delete coupon ${coupon.code}`} title="Delete unused coupon" onClick={() => void setCoupon(coupon, 'delete')}><Trash2 size={16} /></button>
-                </div>
-              </div>)}
+              {coupons.isLoading ? (
+                <Loading />
+              ) : coupons.error ? (
+                <ErrorState error={coupons.error} retry={() => coupons.refetch()} />
+              ) : !coupons.data?.results.length ? (
+                <p className="muted">No coupons configured.</p>
+              ) : (
+                coupons.data.results.map((coupon) => (
+                  <div className="stock-row" key={coupon.id}>
+                    <div>
+                      <strong>{coupon.code}</strong>
+                      <small>
+                        {coupon.discount}% off · {coupon.num_used}/{coupon.num_available} used ·{' '}
+                        {coupon.active ? 'Active' : 'Inactive'}
+                      </small>
+                    </div>
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        aria-label={`View details for coupon ${coupon.code}`}
+                        onClick={() =>
+                          setDetail({
+                            title: `Coupon ${coupon.code}`,
+                            rows: [
+                              ['Status', coupon.active ? 'Active' : 'Inactive'],
+                              ['Discount', `${coupon.discount}%`],
+                              ['Created by', coupon.created_by || 'Platform / Unattributed'],
+                              ['Valid from', new Date(coupon.valid_from).toLocaleString()],
+                              ['Valid to', new Date(coupon.valid_to).toLocaleString()],
+                              ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
+                              ...(coupon.redemptions?.length
+                                ? ([['Redemptions', `${coupon.redemptions.length} orders redeemed`]] as [string, string][])
+                                : []),
+                            ],
+                          })
+                        }
+                      >
+                        Details
+                      </button>
+                      <button
+                        className="button secondary"
+                        onClick={() => void setCoupon(coupon, 'toggle')}
+                      >
+                        {coupon.active ? 'Deactivate' : 'Reactivate'}
+                      </button>
+                      <button
+                        className="icon-button"
+                        aria-label={`Delete coupon ${coupon.code}`}
+                        title="Delete unused coupon"
+                        onClick={() => void setCoupon(coupon, 'delete')}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </section>
             <section className="analytics-panel">
               <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div><h2>Refund operations</h2><p>Review requests and apply the selected refund method.</p></div>
+                <div>
+                  <h2>Refund operations</h2>
+                  <p>Review requests and apply the selected refund method.</p>
+                </div>
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
                   {refunds.data?.count !== undefined && <small className="muted">{refunds.data.count} total</small>}
-                  <Link href="/admin/refunds" className="button secondary">View all refunds &rarr;</Link>
+                  <Link href="/admin/refunds" className="button secondary">
+                    View all refunds &rarr;
+                  </Link>
                 </div>
               </div>
-              {refunds.isLoading ? <Loading /> : refunds.error ? <ErrorState error={refunds.error} retry={() => refunds.refetch()} /> : !refunds.data?.results.length ? <p className="muted">No refund requests.</p> : refunds.data.results.map(refund => <div className="stock-row" key={refund.id}>
-                <div><strong>Refund #{refund.id} · Order #{refund.order}</strong><small>{refund.email} · {refund.refund_type.replaceAll('_', ' ')} · {refund.status}</small><small title={refund.reason}>{refund.reason}</small></div>
-                <div className="form-actions">
-                  <button type="button" className="button secondary" aria-label={`View details for refund ${refund.id}`} onClick={() => setDetail({title:`Refund #${refund.id}`, rows:[['Order', `#${refund.order}`], ['Customer', refund.email], ['Method', refund.refund_type.replaceAll('_',' ')], ['Status', refund.status], ['Reason', refund.reason], ...(refund.provider_reference ? [['Provider Reference', refund.provider_reference] as [string, string]] : []), ...(refund.failure_reason ? [['Failure Details', refund.failure_reason] as [string, string]] : []), ['Created', new Date(refund.created).toLocaleString()]]})}>Details</button>
-                  {(refund.status === 'pending' || refund.status === 'failed') && <>
-                    <button className="button" onClick={() => void processRefund(refund, 'approve')}>{refund.status === 'failed' ? 'Retry Approve' : 'Approve'}</button>
-                    <button className="button secondary" onClick={() => void processRefund(refund, 'decline')}>Decline</button>
-                  </>}
-                </div>
-              </div>)}
+              {refunds.isLoading ? (
+                <Loading />
+              ) : refunds.error ? (
+                <ErrorState error={refunds.error} retry={() => refunds.refetch()} />
+              ) : !refunds.data?.results.length ? (
+                <p className="muted">No refund requests.</p>
+              ) : (
+                refunds.data.results.map((refund) => (
+                  <div className="stock-row" key={refund.id}>
+                    <div>
+                      <strong>Refund #{refund.id} · Order #{refund.order}</strong>
+                      <small>
+                        {refund.email} · {refund.refund_type.replaceAll('_', ' ')} · {refund.status}
+                      </small>
+                      <small title={refund.reason}>{refund.reason}</small>
+                    </div>
+                    <div className="form-actions">
+                      <button
+                        type="button"
+                        className="button secondary"
+                        aria-label={`View details for refund ${refund.id}`}
+                        onClick={() =>
+                          setDetail({
+                            title: `Refund #${refund.id}`,
+                            rows: [
+                              ['Order', `#${refund.order}`],
+                              ['Customer', refund.email],
+                              ['Method', refund.refund_type.replaceAll('_', ' ')],
+                              ['Status', refund.status],
+                              ['Reason', refund.reason],
+                              ...(refund.provider_reference
+                                ? ([['Provider Reference', refund.provider_reference]] as [string, string][])
+                                : []),
+                              ...(refund.failure_reason
+                                ? ([['Failure Details', refund.failure_reason]] as [string, string][])
+                                : []),
+                              ['Created', new Date(refund.created).toLocaleString()],
+                            ],
+                          })
+                        }
+                      >
+                        Details
+                      </button>
+                      {(refund.status === 'pending' || refund.status === 'failed') && (
+                        <>
+                          <button
+                            className="button"
+                            onClick={() => void processRefund(refund, 'approve')}
+                          >
+                            {refund.status === 'failed' ? 'Retry Approve' : 'Approve'}
+                          </button>
+                          <button
+                            className="button secondary"
+                            onClick={() => void processRefund(refund, 'decline')}
+                          >
+                            Decline
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
             </section>
           </div>
 
@@ -609,7 +831,7 @@ export function AdminUsersPage() {
                 <th>User</th>
                 <th>Phone</th>
                 <th>Role</th>
-                <th>Joined</th>
+                <th>Joined</th><th>Last active</th><th>Last login</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -623,7 +845,7 @@ export function AdminUsersPage() {
                   </td>
                   <td>{member.phone1 || '—'}</td>
                   <td><span className="status">{member.role.replace('_', ' ')}</span></td>
-                  <td>{new Date(member.date_joined).toLocaleDateString()}</td>
+                  <td>{new Date(member.date_joined).toLocaleDateString()}</td><td>{activityDate(member.last_active_at)}</td><td>{activityDate(member.last_login)}</td>
                   <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
                   <td>
                     <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
@@ -720,6 +942,7 @@ export function AdminUserDetailPage({ id }: { id: string }) {
           <span className="eyebrow green">USER PROFILE</span>
           <h1>{`${data.user.first_name} ${data.user.last_name}`.trim() || data.user.email}</h1>
           <p>{data.user.email} · {data.user.role.replace('_', ' ')} · Joined {new Date(data.user.date_joined).toLocaleDateString()}</p>
+          <ActivityDetails {...data.user} />
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <Status value={data.user.is_active ? 'active' : 'blocked'} />
@@ -758,7 +981,7 @@ export function AdminUserDetailPage({ id }: { id: string }) {
         </div>
       </div>
 
-      <div className="stats-grid" style={{ marginTop: '2rem' }}>
+      <div className="user-profile-columns" style={{ marginTop: '2rem' }}>
         <div className="analytics-panel">
           <div className="section-heading">
             <h2>Wallet ledger</h2>
@@ -869,7 +1092,7 @@ export function AdminUserDetailPage({ id }: { id: string }) {
                 data.orders.map(order => (
                   <tr key={order.id}>
                     <td><strong>{order.reference}</strong></td>
-                    <td>{new Date(order.created).toLocaleDateString()}</td>
+                    <td>{new Date(order.created).toLocaleDateString()}<small style={{ display: 'block' }}>Updated {activityDate(order.updated)}</small></td>
                     <td><Status value={order.status} /></td>
                     <td><strong>{money(order.total)}</strong></td>
                   </tr>
@@ -1086,7 +1309,7 @@ export function AdminStaffPage() {
           <h1>Staff management</h1>
           <p>Add trusted team members and control their access.</p>
         </div>
-        <div className="form-actions" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <div className="admin-dashboard-shortcuts">
           {user.is_superuser && <a
             className="button secondary"
             href={process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}
@@ -1125,7 +1348,7 @@ export function AdminStaffPage() {
             <thead>
               <tr>
                 <th>Staff member</th>
-                <th>Joined</th>
+                <th>Joined</th><th>Last active</th><th>Last login</th>
                 <th>Status</th>
                 <th>Access</th>
               </tr>
@@ -1142,7 +1365,7 @@ export function AdminStaffPage() {
                       </div>
                     </div>
                   </td>
-                  <td>{new Date(member.date_joined).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                  <td>{new Date(member.date_joined).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' })}</td><td>{activityDate(member.last_active_at)}</td><td>{activityDate(member.last_login)}</td>
                   <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
                   <td>
                     <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -1193,73 +1416,56 @@ export function AdminStaffPage() {
   );
 }
 
-function DashboardDetailDialog({ detail, onClose }: { detail: { title: string; rows: [string, string][] } | null; onClose: () => void }) {
+type DashboardDetail = { title: string; category?: string; rows: [string, string][] };
+
+function DashboardDetailDialog({ detail, onClose }: { detail: DashboardDetail | null; onClose: () => void }): React.JSX.Element | null {
   const dialogRef = useDialogFocus(Boolean(detail), onClose);
   if (!detail) return null;
+  const category: string = detail.category || (detail.title.startsWith('Coupon ') ? 'Coupon' : detail.title.startsWith('Refund #') ? 'Refund' : detail.title.startsWith('Order #') ? 'Order' : 'Store');
+  const status: string | undefined = detail.rows.find(([label]) => label === 'Status')?.[1];
+  const fields: [string, string][] = detail.rows.filter(([label]) => label !== 'Status');
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        ref={dialogRef as React.RefObject<HTMLElement>}
-        className="dialog-card"
-        role="dialog"
-        aria-modal="true"
-        aria-label={detail.title}
-        onMouseDown={event => event.stopPropagation()}
-      >
-        <div className="section-heading">
-          <h2>{detail.title}</h2>
-          <div className="form-actions no-print"><button type="button" className="button secondary" onClick={() => window.print()}><Printer size={15} />Print</button>
-          <button className="icon-button" aria-label="Close details" onClick={onClose}>
-            <X size={18} />
-          </button>
+    <div className="dialog-backdrop admin-detail-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <section ref={dialogRef} className="admin-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="admin-detail-title">
+        <header className="admin-detail-header">
+          <div className="admin-detail-heading">
+            <span className="admin-detail-icon" aria-hidden="true"><FileText size={22} /></span>
+            <div><span className="eyebrow green">{category} details</span><h2 id="admin-detail-title">{detail.title}</h2></div>
           </div>
+          <button type="button" className="icon-button no-print" aria-label="Close details" onClick={onClose}><X size={20} /></button>
+        </header>
+        <div className="admin-detail-body">
+          {status && <div className="admin-detail-status"><span>Current status</span><Status value={status.toLowerCase()} /></div>}
+          <dl className="admin-detail-grid">
+            {fields.map(([label, value]) => (
+              <div className={`admin-detail-field${['Reason', 'Failure Details', 'Provider Reference'].includes(label) ? ' admin-detail-field-wide' : ''}`} key={label}>
+                <dt>{label}</dt><dd>{value || 'Not provided'}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        {detail.rows.map(([label, value]) => (
-          <div className="stock-row" key={label}>
-            <strong>{label}</strong>
-            <span>{value}</span>
-          </div>
-        ))}
+        <footer className="admin-detail-footer no-print">
+          <button type="button" className="button secondary" onClick={() => window.print()}><Printer size={16} />Print details</button>
+          <button type="button" className="button" onClick={onClose}>Done</button>
+        </footer>
       </section>
     </div>
   );
 }
 
-function StaffDetailDialog({ staff, onClose }: { staff: StaffUser | null; onClose: () => void }) {
-  const dialogRef = useDialogFocus(Boolean(staff), onClose);
-  if (!staff) return null;
-  return (
-    <div className="admin-dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        ref={dialogRef as React.RefObject<HTMLElement>}
-        className="admin-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Staff details"
-        onMouseDown={event => event.stopPropagation()}
-      >
-        <div className="admin-dialog-head">
-          <div>
-            <span className="eyebrow green">STAFF ACCOUNT</span>
-            <h2>{`${staff.first_name} ${staff.last_name}`.trim()}</h2>
-          </div>
-          <button className="icon-button" aria-label="Close" onClick={onClose}>
-            <X size={19} />
-          </button>
-        </div>
-        <div className="form-stack">
-          <p><strong>Email</strong><br />{staff.email}</p>
-          <p><strong>First Name</strong><br />{staff.first_name}</p>
-          <p><strong>Last Name</strong><br />{staff.last_name}</p>
-          <p><strong>Gender</strong><br />{staff.gender}</p>
-          <p><strong>Role</strong><br />{staff.role}</p>
-          <p><strong>Status</strong><br />{staff.is_active ? 'Active' : 'Blocked'}</p>
-          {!staff.is_active && staff.staff_blocked_at && <p><strong>Blocked On</strong><br />{new Date(staff.staff_blocked_at).toLocaleString()}</p>}
-          <p><strong>Joined</strong><br />{new Date(staff.date_joined).toLocaleString()}</p>
-        </div>
-      </section>
-    </div>
-  );
+function StaffDetailDialog({ staff, onClose }: { staff: StaffUser | null; onClose: () => void }): React.JSX.Element {
+  const detail: DashboardDetail | null = staff ? {
+    title: `${staff.first_name} ${staff.last_name}`.trim() || staff.email,
+    category: 'Staff account',
+    rows: [
+      ['Email', staff.email], ['First name', staff.first_name], ['Last name', staff.last_name],
+      ['Gender', staff.gender], ['Role', staff.role], ['Status', staff.is_active ? 'Active' : 'Blocked'],
+      ...(!staff.is_active && staff.staff_blocked_at ? [['Blocked on', new Date(staff.staff_blocked_at).toLocaleString()] as [string, string]] : []),
+      ['Joined', new Date(staff.date_joined).toLocaleString()],
+      ['Last active', activityDate(staff.last_active_at)], ['Last login', activityDate(staff.last_login)], ['Profile updated', activityDate(staff.updated)],
+    ],
+  } : null;
+  return <DashboardDetailDialog detail={detail} onClose={onClose} />;
 }
 
 function StaffDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => Promise<void> }) {
@@ -1369,9 +1575,45 @@ export function AdminStoresPage() {
       </div>
 
       <div className="merchant-toolbar">
-        <div className="search-box"><Search size={17} /><input aria-label="Search stores" placeholder="Search store, username, or owner…" value={search} onChange={event => { setSearch(event.target.value); setOffset(0); }} /></div>
-        <select aria-label="Filter stores by status" value={statusFilter} onChange={event => { setStatusFilter(event.target.value); setOffset(0); }}><option value="">All statuses</option><option value="active">Active</option><option value="pending">Pending</option><option value="blocked">Blocked</option></select>
-        <select aria-label="Order stores" value={ordering} onChange={event => { setOrdering(event.target.value); setOffset(0); }}><option value="-created">Newest first</option><option value="created">Oldest first</option><option value="name">Name A–Z</option><option value="-name">Name Z–A</option><option value="status">Status</option></select>
+        <div className="search-box">
+          <Search size={17} />
+          <input
+            aria-label="Search stores"
+            placeholder="Search store, username, or owner…"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setOffset(0);
+            }}
+          />
+        </div>
+        <select
+          aria-label="Filter stores by status"
+          value={statusFilter}
+          onChange={(event) => {
+            setStatusFilter(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="pending">Pending</option>
+          <option value="blocked">Blocked</option>
+        </select>
+        <select
+          aria-label="Order stores"
+          value={ordering}
+          onChange={(event) => {
+            setOrdering(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="-created">Newest first</option>
+          <option value="created">Oldest first</option>
+          <option value="name">Name A–Z</option>
+          <option value="-name">Name Z–A</option>
+          <option value="status">Status</option>
+        </select>
       </div>
 
       {error && <p role="alert" className="form-error">{error}</p>}
@@ -1395,7 +1637,7 @@ export function AdminStoresPage() {
                   <th>Store</th>
                   <th>Type</th>
                   <th>Status</th>
-                  <th>Staff access</th>
+<th>Created / Updated / Active</th>                  <th>Staff access</th>
                   <th><span className="sr-only">Actions</span>Actions</th>
                 </tr>
               </thead>
@@ -1441,6 +1683,7 @@ export function AdminStoresPage() {
                           <span className="account-badge customer">Independent Seller</span>
                         )}
                       </td>
+                      <td>{activityDate(store.created)}<br />{activityDate(store.updated)}<br />{activityDate(store.last_active_at)}</td>
                       <td>
                         <Status value={store.status} />
                         {store.blocked_reason && (
@@ -1542,7 +1785,11 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
   params.set('limit', '20');
   if (search) params.set('search', search);
   if (typeFilter === 'digital') params.set('is_digital', 'true');
-  if (typeFilter === 'physical') params.set('is_digital', 'false');
+  if (typeFilter === 'physical') {
+    params.set('is_digital', 'false');
+    params.set('product_type', 'standard');
+  }
+  if (typeFilter === 'affiliate') params.set('product_type', 'affiliate_clickbank');
   if (statusFilter === 'published') params.set('visibility', 'true');
   if (statusFilter === 'draft') params.set('visibility', 'false');
   if (assetFilter === 'has_asset') params.set('has_asset', 'true');
@@ -1618,6 +1865,7 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
             <option value="all">All product types</option>
             <option value="digital">Digital only</option>
             <option value="physical">Physical only</option>
+            <option value="affiliate">ClickBank affiliate offer</option>
           </select>
           <select
             aria-label="Filter by visibility"
@@ -1675,12 +1923,42 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
                   {productList.map(product => (
                     <tr key={product.id}>
                       <td><strong>{product.title}</strong></td>
-                      <td>{product.is_digital ? 'Digital' : 'Physical'}</td>
+                      <td>
+                        {product.product_type === 'affiliate_clickbank' ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(234, 88, 12, 0.1)', color: '#ea580c', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
+                            Partner Offer
+                          </span>
+                        ) : product.is_digital ? (
+                          'Digital'
+                        ) : (
+                          'Physical'
+                        )}
+                      </td>
                       <td>{product.category}</td>
-                      <td>{product.is_digital ? 'Unlimited' : (product.available ?? '—')}</td>
+                      <td>
+                        {product.product_type === 'affiliate_clickbank'
+                          ? 'Partner fulfilled'
+                          : product.is_digital
+                            ? 'Unlimited'
+                            : (product.available ?? '—')}
+                      </td>
                       <td>{product.visibility ? 'Published' : 'Draft'}</td>
                       <td>
-                        {product.is_digital && product.has_digital_asset ? (
+                        {product.product_type === 'affiliate_clickbank' ? (
+                          product.affiliate_hoplink ? (
+                            <a
+                              className="button secondary"
+                              href={product.affiliate_hoplink}
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              style={{ fontSize: '11px', padding: '4px 8px' }}
+                            >
+                              HopLink <ArrowUpRight size={12} />
+                            </a>
+                          ) : (
+                            <span className="muted">No link</span>
+                          )
+                        ) : product.is_digital && product.has_digital_asset ? (
                           <a
                             className="button secondary"
                             href={`/api/admin/staff/products/${product.id}/digital-asset`}
@@ -1739,7 +2017,7 @@ export function AdminOrdersPage() {
 
   async function overrideOrder(order: AdminOrder, nextStatus: string) {
     if (nextStatus === order.status) return;
-    const reason = await actionDialog.ask({ title: 'Update order status', message: `Change order #${order.orderId} from ${order.status} to ${nextStatus}?`, confirmLabel: 'Update status' });
+    const reason = await actionDialog.ask({ title: 'Update order status', message: `Change order #${order.orderId} from ${order.status} to ${nextStatus}?`, confirmLabel: 'Update status', reasonLabel: 'Reason' });
     if (reason === null) return;
     try {
       await api(`admin/staff/orders/${order.id}/status`, 'POST', { status: nextStatus, reason });
@@ -1880,7 +2158,7 @@ export function AdminOrdersPage() {
                       )}
                     </td>
                     <td><strong>{money(order.total)}</strong></td>
-                    <td>{new Date(order.created).toLocaleDateString()}</td>
+                    <td>{new Date(order.created).toLocaleDateString()}<small style={{ display: 'block' }}>Updated {activityDate(order.updated)}</small></td>
                     <td>
                       <button
                         type="button"
@@ -1894,7 +2172,7 @@ export function AdminOrdersPage() {
                             ['Payment Method', order.payment_type?.replaceAll('_', ' ') || 'card'],
                             ['Subtotal', money(order.subtotal || order.total)],
                             ['Total', money(order.total)],
-                            ['Created', new Date(order.created).toLocaleString()],
+                            ['Created', new Date(order.created).toLocaleString()], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)],
                             ['Carrier', order.carrier || 'USPS'],
                             ['Tracking Number', order.tracking_number || 'Not assigned'],
                             ...(order.shipped_at ? [['Shipped At', new Date(order.shipped_at).toLocaleString()] as [string, string]] : []),
@@ -2469,21 +2747,582 @@ export function AdminRefundsPage() {
 export function AdminCommissionPage() {
   const { user, notify } = useShop();
   const client = useQueryClient();
-  const wallet = useQuery({ queryKey: ['admin', 'commission-wallet'], queryFn: () => api<{ earned: string; withdrawn_or_pending: string; available: string; withdrawals: Array<{ id: number; amount: string; payout_method: string; status: string; reference: string; created: string }> }>('admin/staff/commission-wallet'), enabled: Boolean(user?.is_superuser || user?.is_business_admin) });
+  const wallet = useQuery({
+    queryKey: ['admin', 'commission-wallet'],
+    queryFn: () =>
+      api<{
+        earned: string;
+        marketplace_commission?: string;
+        official_stores_revenue?: string;
+        withdrawn_or_pending: string;
+        available: string;
+        withdrawals: Array<{
+          id: number;
+          amount: string;
+          payout_method: string;
+          status: string;
+          reference: string;
+          created: string;
+        }>;
+      }>('admin/staff/commission-wallet'),
+    enabled: Boolean(user?.is_superuser || user?.is_business_admin),
+  });
   const [busy, setBusy] = useState(false);
   async function withdraw(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true);
+    event.preventDefault();
+    setBusy(true);
     const form = new FormData(event.currentTarget);
     try {
-      await api('admin/staff/commission-wallet/withdraw', 'POST', { amount: form.get('amount'), payout_method: form.get('payout_method'), account_details: { destination: form.get('destination') } });
-      event.currentTarget.reset(); await client.invalidateQueries({ queryKey: ['admin', 'commission-wallet'] }); notify('Commission withdrawal request created');
-    } catch (error) { notify((error as Error).message, true); } finally { setBusy(false); }
+      await api('admin/staff/commission-wallet/withdraw', 'POST', {
+        amount: form.get('amount'),
+        payout_method: form.get('payout_method'),
+        account_details: { destination: form.get('destination') },
+      });
+      event.currentTarget.reset();
+      await client.invalidateQueries({ queryKey: ['admin', 'commission-wallet'] });
+      notify('Platform treasury withdrawal request created');
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
   }
   if (!user) return <Empty title="Admin sign-in required" text="Sign in to manage platform commissions." href="/login?next=/admin/commission" label="Sign in" />;
   if (!(user.is_superuser || user.is_business_admin)) return <Empty title="Administrator access only" text="Staff accounts cannot view or withdraw platform commissions." href="/admin" label="Back to dashboard" />;
-  return <div className="container section"><div className="merchant-heading"><div><span className="eyebrow green">PLATFORM FINANCE</span><h1>Commission withdrawals</h1><p>Withdraw accumulated platform fees through a separately audited workflow.</p></div><Link className="button secondary" href="/admin">Dashboard</Link></div>
-    {wallet.isLoading ? <Loading /> : wallet.error ? <ErrorState error={wallet.error} /> : wallet.data && <><div className="stats-grid"><div className="stat-item stat-0"><span>Total commission earned</span><strong>{money(wallet.data.earned)}</strong></div><div className="stat-item stat-1"><span>Available</span><strong>{money(wallet.data.available)}</strong></div><div className="stat-item stat-2"><span>Withdrawn or pending</span><strong>{money(wallet.data.withdrawn_or_pending)}</strong></div></div>
-      <section className="analytics-panel" style={{ marginTop: '2rem' }}><h2>Request withdrawal</h2><form className="form-stack" onSubmit={withdraw}><Field label="Amount"><input name="amount" type="number" min="0.01" step="0.01" max={wallet.data.available} required /></Field><Field label="Payout method"><select name="payout_method"><option value="bank">Bank transfer</option><option value="stripe">Stripe payout</option></select></Field><Field label="Destination account"><input name="destination" required /></Field><button className="button" disabled={busy}>{busy ? 'Submitting…' : 'Request withdrawal'}</button></form></section>
-      <section className="merchant-section" style={{ marginTop: '2rem' }}><h2>Withdrawal history</h2><div className="table-scroll"><table><thead><tr><th>Reference</th><th>Amount</th><th>Method</th><th>Status</th><th>Date</th></tr></thead><tbody>{wallet.data.withdrawals.map(row => <tr key={row.id}><td>{row.reference}</td><td>{money(row.amount)}</td><td>{row.payout_method}</td><td><Status value={row.status} /></td><td>{new Date(row.created).toLocaleString()}</td></tr>)}</tbody></table></div></section></>}
-  </div>;
+  return (
+    <div className="container section">
+      <div className="merchant-heading">
+        <div>
+          <span className="eyebrow green">PLATFORM FINANCE</span>
+          <h1>Platform Treasury & Commission</h1>
+          <p>Withdraw accumulated 3P marketplace commission and official company store revenues through a centralized, audited workflow.</p>
+        </div>
+        <Link className="button secondary" href="/admin">Dashboard</Link>
+      </div>
+      {wallet.isLoading ? (
+        <Loading />
+      ) : wallet.error ? (
+        <ErrorState error={wallet.error} />
+      ) : wallet.data && (
+        <>
+          <div className="stats-grid">
+            <div className="stat-item stat-0">
+              <span>Total Treasury Earned</span>
+              <strong>{money(wallet.data.earned)}</strong>
+              <small>Combined cleared platform funds</small>
+            </div>
+            <div className="stat-item stat-1">
+              <span>Marketplace Fees (3P)</span>
+              <strong>{money(wallet.data.marketplace_commission || '0.00')}</strong>
+              <small>4% commission from merchant sales</small>
+            </div>
+            <div className="stat-item stat-2">
+              <span>Official Stores Net Sales</span>
+              <strong>{money(wallet.data.official_stores_revenue || '0.00')}</strong>
+              <small>100% net sales from company stores</small>
+            </div>
+            <div className="stat-item stat-3">
+              <span>Available to Withdraw</span>
+              <strong>{money(wallet.data.available)}</strong>
+              <small>Cleared net after previous withdrawals</small>
+            </div>
+            <div className="stat-item stat-4">
+              <span>Withdrawn or Pending</span>
+              <strong>{money(wallet.data.withdrawn_or_pending)}</strong>
+              <small>Audited platform withdrawals</small>
+            </div>
+          </div>
+          <section className="analytics-panel" style={{ marginTop: '2rem' }}>
+            <h2>Request treasury withdrawal</h2>
+            <form className="form-stack" onSubmit={withdraw}>
+              <Field label="Amount">
+                <input name="amount" type="number" min="0.01" step="0.01" max={wallet.data.available} required />
+              </Field>
+              <Field label="Payout method">
+                <select name="payout_method" defaultValue="stripe">
+                  <option value="stripe">Stripe Payout (Official Corporate Vault)</option>
+                  <option value="bank">Bank Wire Transfer</option>
+                </select>
+              </Field>
+              <Field label="Destination account">
+                <input
+                  name="destination"
+                  required
+                  defaultValue="Stripe Corporate Balance"
+                  placeholder="e.g. Stripe Account ID (acct_...) or Connected Stripe Bank"
+                />
+              </Field>
+              <button className="button" disabled={busy || Number(wallet.data.available) <= 0}>
+                {busy ? 'Submitting…' : 'Request withdrawal'}
+              </button>
+            </form>
+          </section>
+          <section className="merchant-section" style={{ marginTop: '2rem' }}>
+            <h2>Withdrawal history</h2>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Reference</th>
+                    <th>Amount</th>
+                    <th>Method</th>
+                    <th>Status</th>
+                    <th>Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {wallet.data.withdrawals.map(row => (
+                    <tr key={row.id}>
+                      <td>{row.reference}</td>
+                      <td>{money(row.amount)}</td>
+                      <td>{row.payout_method}</td>
+                      <td><Status value={row.status} /></td>
+                      <td>{new Date(row.created).toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </>
+      )}
+    </div>
+  );
 }
+
+export function AdminTaxesPage() {
+  const { user, notify } = useShop();
+  const queryClient = useQueryClient();
+  const actionDialog = useActionDialog();
+
+  const [search, setSearch] = useState('');
+  const [stateFilter, setStateFilter] = useState('');
+  const [activeFilter, setActiveFilter] = useState('');
+
+  const [editTarget, setEditTarget] = useState<AdminTaxJurisdiction | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [formCountry, setFormCountry] = useState('US');
+  const [formState, setFormState] = useState('');
+  const [formPostalCode, setFormPostalCode] = useState('');
+  const [formName, setFormName] = useState('');
+  const [formRate, setFormRate] = useState('');
+  const [formTaxShipping, setFormTaxShipping] = useState(false);
+  const [formTaxDigital, setFormTaxDigital] = useState(true);
+  const [formIsActive, setFormIsActive] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  const editDialogRef = useDialogFocus(Boolean(editTarget || isCreating), () => {
+    setEditTarget(null);
+    setIsCreating(false);
+  });
+
+  const queryParams = new URLSearchParams();
+  if (search.trim()) queryParams.set('search', search.trim());
+  if (stateFilter.trim()) queryParams.set('state', stateFilter.trim());
+  if (activeFilter) queryParams.set('is_active', activeFilter);
+
+  const taxes = useQuery({
+    queryKey: ['admin', 'taxes', search, stateFilter, activeFilter],
+    queryFn: () => api<AdminTaxesResponse>(`admin/taxes?${queryParams.toString()}`),
+    enabled: !!(user?.is_staff || user?.is_superuser || user?.is_business_admin),
+  });
+
+  function openCreate() {
+    setEditTarget(null);
+    setFormCountry('US');
+    setFormState('');
+    setFormPostalCode('');
+    setFormName('');
+    setFormRate('');
+    setFormTaxShipping(false);
+    setFormTaxDigital(true);
+    setFormIsActive(true);
+    setIsCreating(true);
+  }
+
+  function openEdit(jurisdiction: AdminTaxJurisdiction) {
+    setIsCreating(false);
+    setEditTarget(jurisdiction);
+    setFormCountry(jurisdiction.country);
+    setFormState(jurisdiction.state);
+    setFormPostalCode(jurisdiction.postal_code || '');
+    setFormName(jurisdiction.name);
+    const num = parseFloat(jurisdiction.rate) * 100;
+    setFormRate(isNaN(num) ? jurisdiction.rate : num.toFixed(3).replace(/\.?0+$/, ''));
+    setFormTaxShipping(jurisdiction.tax_shipping);
+    setFormTaxDigital(jurisdiction.tax_digital);
+    setFormIsActive(jurisdiction.is_active);
+  }
+
+  async function handleFormSubmit(e: FormEvent) {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const parsedRate = formRate.trim().replace('%', '');
+      const numVal = parseFloat(parsedRate);
+      if (isNaN(numVal) || numVal < 0) throw new Error('Please enter a valid non-negative tax rate.');
+      const decimalRate = numVal > 1 ? (numVal / 100).toFixed(5) : numVal.toFixed(5);
+
+      if (isCreating) {
+        await api<AdminTaxJurisdiction>('admin/taxes', 'POST', {
+          country: formCountry.trim().toUpperCase() || 'US',
+          state: formState.trim(),
+          postal_code: formPostalCode.trim(),
+          name: formName.trim(),
+          rate: decimalRate,
+          tax_shipping: formTaxShipping,
+          tax_digital: formTaxDigital,
+          is_active: formIsActive,
+        });
+        notify('Tax jurisdiction created successfully.');
+      } else if (editTarget) {
+        await api<AdminTaxJurisdiction>(`admin/taxes/${editTarget.id}`, 'PATCH', {
+          country: formCountry.trim().toUpperCase() || 'US',
+          state: formState.trim(),
+          postal_code: formPostalCode.trim(),
+          name: formName.trim(),
+          rate: decimalRate,
+          tax_shipping: formTaxShipping,
+          tax_digital: formTaxDigital,
+          is_active: formIsActive,
+        });
+        notify(`Updated ${formName || editTarget.name} successfully.`);
+      }
+
+      setIsCreating(false);
+      setEditTarget(null);
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'taxes'] });
+    } catch (err) {
+      notify((err as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleDelete(jurisdiction: AdminTaxJurisdiction) {
+    const ok = await actionDialog.ask({
+      title: 'Delete tax jurisdiction',
+      message: `Delete tax rule for ${jurisdiction.name} (${jurisdiction.state} ${jurisdiction.postal_code || 'statewide'})? Historical order receipts will remain intact.`,
+      confirmLabel: 'Delete',
+    });
+    if (ok === null) return;
+
+    try {
+      await api(`admin/taxes/${jurisdiction.id}`, 'DELETE');
+      notify(`Removed ${jurisdiction.name}.`);
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'taxes'] });
+    } catch (err) {
+      notify((err as Error).message);
+    }
+  }
+
+  async function handleToggleActive(jurisdiction: AdminTaxJurisdiction) {
+    try {
+      await api(`admin/taxes/${jurisdiction.id}`, 'PATCH', { is_active: !jurisdiction.is_active });
+      notify(`${jurisdiction.name} is now ${!jurisdiction.is_active ? 'active' : 'inactive'}.`);
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'taxes'] });
+    } catch (err) {
+      notify((err as Error).message);
+    }
+  }
+
+  async function handleRestoreDefaults() {
+    const ok = await actionDialog.ask({
+      title: 'Restore 50 US State Baselines',
+      message: 'This will seed or update the standard statutory rates for all 50 US states and DC. Any custom ZIP code overrides you created will be preserved.',
+      confirmLabel: 'Restore Baselines',
+    });
+    if (ok === null) return;
+
+    try {
+      const res = await api<{ detail: string }>('admin/taxes/seed-defaults', 'POST', {});
+      notify(res.detail || 'Baseline rates restored.');
+      await queryClient.invalidateQueries({ queryKey: ['admin', 'taxes'] });
+    } catch (err) {
+      notify((err as Error).message);
+    }
+  }
+
+  return (
+    <div className="container section admin-page">
+      <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <span className="eyebrow green">COMPLIANCE & JURISDICTIONS</span>
+          <h1>Destination Sales Tax Engine</h1>
+          <p className="muted">Configure multi-jurisdiction destination sales taxes, state rates, municipal ZIP overrides, and taxability rules.</p>
+        </div>
+        <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+          <button type="button" className="button secondary" onClick={handleRestoreDefaults}>
+            <RotateCcw size={16} /> Restore 50 US Baselines
+          </button>
+          <button type="button" className="button" onClick={openCreate}>
+            <Plus size={16} /> Add Jurisdiction / Override
+          </button>
+        </div>
+      </div>
+
+      {taxes.data && (
+        <div className="stats-grid" style={{ marginTop: '1.5rem', marginBottom: '2rem' }}>
+          <div className="stat-item stat-0">
+            <div>
+              <span>Tax Calculation Mode</span>
+              <Landmark size={19} />
+            </div>
+            <strong style={{ fontSize: '1.25rem', textTransform: 'capitalize' }}>
+              {taxes.data.provider === 'stripe' ? 'Stripe Tax (Automated)' : 'Local Database Engine'}
+            </strong>
+            <small>
+              {taxes.data.stripe_tax_enabled ? 'External Stripe Tax active with local fallback' : 'Destination statutory rates resolved from local database'}
+            </small>
+          </div>
+          <div className="stat-item stat-1">
+            <div>
+              <span>Total Jurisdictions</span>
+              <FileText size={19} />
+            </div>
+            <strong>{taxes.data.summary.total_jurisdictions}</strong>
+            <small>{taxes.data.summary.active_jurisdictions} active compliance rules</small>
+          </div>
+          <div className="stat-item stat-2">
+            <div>
+              <span>ZIP Code Overrides</span>
+              <Package size={19} />
+            </div>
+            <strong>{taxes.data.summary.zip_overrides}</strong>
+            <small>Special municipal & county district overrides</small>
+          </div>
+          <div className="stat-item stat-3">
+            <div>
+              <span>Default Fallback Rate</span>
+              <Check size={19} />
+            </div>
+            <strong>{(parseFloat(taxes.data.default_tax_rate) * 100).toFixed(2)}%</strong>
+            <small>Used when destination has no rule configured</small>
+          </div>
+        </div>
+      )}
+
+      <div className="filter-bar" style={{ marginBottom: '1.5rem' }}>
+        <div className="search-box">
+          <Search size={18} />
+          <input
+            placeholder="Search by state, city, or ZIP code…"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+        </div>
+        <input
+          style={{ width: '130px' }}
+          placeholder="State (e.g. CA)"
+          value={stateFilter}
+          onChange={e => setStateFilter(e.target.value.toUpperCase())}
+        />
+        <select
+          aria-label="Filter status"
+          value={activeFilter}
+          onChange={e => setActiveFilter(e.target.value)}
+        >
+          <option value="">All statuses</option>
+          <option value="true">Active only</option>
+          <option value="false">Inactive only</option>
+        </select>
+        {(search || stateFilter || activeFilter) && (
+          <button
+            type="button"
+            className="button secondary"
+            onClick={() => { setSearch(''); setStateFilter(''); setActiveFilter(''); }}
+          >
+            Reset
+          </button>
+        )}
+      </div>
+
+      {taxes.isLoading ? (
+        <Loading />
+      ) : taxes.error ? (
+        <ErrorState error={taxes.error} retry={() => taxes.refetch()} />
+      ) : !taxes.data?.results.length ? (
+        <Empty
+          title="No tax jurisdictions found"
+          text={search || stateFilter || activeFilter ? "No tax rules matched your search or filters." : "No tax jurisdictions have been configured yet. Click 'Restore 50 US Baselines' in the header to initialize all standard US rates."}
+          href="/admin/taxes"
+          label={search || stateFilter || activeFilter ? "Reset filters" : "Refresh tax rules"}
+        />
+      ) : (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>Region / Scope</th>
+                <th>Jurisdiction Name</th>
+                <th>Tax Rate</th>
+                <th>Shipping Tax</th>
+                <th>Digital Tax</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {taxes.data.results.map(jur => {
+                const pct = (parseFloat(jur.rate) * 100).toFixed(3).replace(/\.?0+$/, '');
+                return (
+                  <tr key={jur.id}>
+                    <td>
+                      <strong>{jur.country} · {jur.state}</strong>
+                      <small style={{ display: 'block', color: 'var(--muted)' }}>
+                        {jur.postal_code ? `ZIP ${jur.postal_code} (District Override)` : 'Statewide Baseline'}
+                      </small>
+                    </td>
+                    <td>{jur.name}</td>
+                    <td>
+                      <strong style={{ fontSize: '1.05rem', color: 'var(--green)' }}>{pct}%</strong>
+                      <small style={{ display: 'block', color: 'var(--muted)' }}>({jur.rate})</small>
+                    </td>
+                    <td>
+                      {jur.tax_shipping ? (
+                        <span style={{ color: 'var(--amber)', fontSize: '0.85rem', fontWeight: 600 }}>Taxable</span>
+                      ) : (
+                        <span style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Exempt</span>
+                      )}
+                    </td>
+                    <td>
+                      {jur.tax_digital ? (
+                        <span style={{ color: 'var(--green)', fontSize: '0.85rem', fontWeight: 600 }}>Taxable</span>
+                      ) : (
+                        <span style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Exempt</span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleActive(jur)}
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                        title="Click to toggle status"
+                      >
+                        <Status value={jur.is_active ? 'active' : 'inactive'} />
+                      </button>
+                    </td>
+                    <td>
+                      <div className="form-actions" style={{ justifyContent: 'flex-start', gap: '0.5rem' }}>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+                          onClick={() => openEdit(jur)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          title={`Delete ${jur.name}`}
+                          onClick={() => handleDelete(jur)}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Create / Edit Modal */}
+      {(isCreating || editTarget) && (
+        <div className="admin-dialog-backdrop" role="presentation" onMouseDown={e => e.target === e.currentTarget && (setIsCreating(false), setEditTarget(null))}>
+          <section ref={editDialogRef} className="admin-dialog" role="dialog" aria-modal="true" aria-labelledby="tax-dialog-title" style={{ maxWidth: 560 }}>
+            <div className="admin-dialog-head">
+              <div>
+                <span className="eyebrow green">{isCreating ? 'NEW JURISDICTION' : 'EDIT JURISDICTION'}</span>
+                <h2 id="tax-dialog-title">{isCreating ? 'Add Tax Rule or ZIP Override' : `Edit ${editTarget?.name}`}</h2>
+              </div>
+              <button className="icon-button" aria-label="Close dialog" onClick={() => { setIsCreating(false); setEditTarget(null); }}>
+                <X size={19} />
+              </button>
+            </div>
+
+            <form onSubmit={handleFormSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginTop: '1rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <Field label="State / Territory Code (2 Letters)">
+                  <input
+                    required
+                    placeholder="e.g. CA or NY"
+                    value={formState}
+                    onChange={e => setFormState(e.target.value.toUpperCase())}
+                  />
+                </Field>
+                <Field label="Postal Code (Optional ZIP Prefix)">
+                  <input
+                    placeholder="e.g. 90210 or leave blank"
+                    value={formPostalCode}
+                    onChange={e => setFormPostalCode(e.target.value.trim())}
+                  />
+                </Field>
+              </div>
+
+              <Field label="Jurisdiction Label / Name">
+                <input
+                  required
+                  placeholder="e.g. California State + Avg Local or NYC Special Rate"
+                  value={formName}
+                  onChange={e => setFormName(e.target.value)}
+                />
+              </Field>
+
+              <Field label="Tax Rate (Percentage e.g. 8.85 or decimal e.g. 0.08850)">
+                <input
+                  required
+                  placeholder="e.g. 8.85"
+                  value={formRate}
+                  onChange={e => setFormRate(e.target.value)}
+                />
+              </Field>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginTop: '0.5rem', padding: '0.75rem', background: 'var(--surface-sunken)', borderRadius: 'var(--radius)' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={formTaxShipping}
+                    onChange={e => setFormTaxShipping(e.target.checked)}
+                  />
+                  <span><strong>Tax Shipping Fees:</strong> Carrier shipping charges are subject to sales tax</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={formTaxDigital}
+                    onChange={e => setFormTaxDigital(e.target.checked)}
+                  />
+                  <span><strong>Tax Digital Downloads:</strong> Software, ebooks, and digital goods are taxable</span>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.9rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={formIsActive}
+                    onChange={e => setFormIsActive(e.target.checked)}
+                  />
+                  <span><strong>Active:</strong> Rule applies to incoming checkout and shipping quote calculations</span>
+                </label>
+              </div>
+
+              <div className="form-actions" style={{ marginTop: '1rem', justifyContent: 'flex-end' }}>
+                <button type="button" className="button secondary" onClick={() => { setIsCreating(false); setEditTarget(null); }}>
+                  Cancel
+                </button>
+                <button type="submit" className="button" disabled={submitting}>
+                  {submitting ? 'Saving…' : (isCreating ? 'Create Jurisdiction' : 'Save Changes')}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {actionDialog.dialog}
+    </div>
+  );
+}
+

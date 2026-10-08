@@ -86,13 +86,18 @@ def _deliver_push(delivery):
     failed_tokens = []
     for start in range(0, len(pending_tokens), 500):
         batch = pending_tokens[start:start + 500]
+        try:
+            multicast_message = messaging.MulticastMessage(data=data, fids=batch)
+        except TypeError:
+            multicast_message = messaging.MulticastMessage(data=data, tokens=batch)
         response = messaging.send_each_for_multicast(
-            messaging.MulticastMessage(data=data, tokens=batch),
+            multicast_message,
             app=app,
         )
         sent += response.success_count
         for token, result in zip(batch, response.responses):
             if result.success:
+                PushDevice.objects.filter(user_id=notification.recipient_id, token=token).update(last_sent_at=timezone.now())
                 continue
             error = result.exception
             error_code = getattr(error, "code", None)

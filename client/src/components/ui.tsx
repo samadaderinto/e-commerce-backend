@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ArrowRight,
+  ArrowUpRight,
   Heart,
   ImageOff,
   Minus,
@@ -187,31 +188,69 @@ export function ProductGallery({ images, title, discount, activeImage, onImageCh
           }
           touchStart.current = null;
         }}
-        onTouchCancel={() => { touchStart.current = null; }}>
-        <ProductImage key={photos[current] || 'placeholder'} src={photos[current]} alt={`${title} — photo ${current + 1}`} />
+        onTouchCancel={() => {
+          touchStart.current = null;
+        }}
+      >
+        <ProductImage
+          key={photos[current] || 'placeholder'}
+          src={photos[current]}
+          alt={`${title} — photo ${current + 1}`}
+        />
         {discount > 0 && <span className="discount">Save {discount}%</span>}
-        {photos.length > 1 && <>
-          <button type="button" className="gallery-arrow gallery-arrow-prev" aria-label="Previous product photo" onClick={() => move(-1)}><ChevronLeft size={22} /></button>
-          <button type="button" className="gallery-arrow gallery-arrow-next" aria-label="Next product photo" onClick={() => move(1)}><ChevronRight size={22} /></button>
-          <span className="gallery-counter" aria-live="polite" aria-atomic="true">{current + 1} / {photos.length}</span>
-        </>}
+        {photos.length > 1 && (
+          <>
+            <button
+              type="button"
+              className="gallery-arrow gallery-arrow-prev"
+              aria-label="Previous product photo"
+              onClick={() => move(-1)}
+            >
+              <ChevronLeft size={22} />
+            </button>
+            <button
+              type="button"
+              className="gallery-arrow gallery-arrow-next"
+              aria-label="Next product photo"
+              onClick={() => move(1)}
+            >
+              <ChevronRight size={22} />
+            </button>
+            <span className="gallery-counter" aria-live="polite" aria-atomic="true">
+              {current + 1} / {photos.length}
+            </span>
+          </>
+        )}
       </div>
-      {photos.length > 1 && <div className="gallery-thumbs">
-        {photos.map((src, index) => <button type="button" key={src} aria-label={`View photo ${index + 1}`} aria-pressed={current === index} className={current === index ? 'active' : ''} onClick={() => selectPhoto(index)}><ProductImage src={src} alt={`${title} view ${index + 1}`} /></button>)}
-      </div>}
+      {photos.length > 1 && (
+        <div className="gallery-thumbs">
+          {photos.map((src, index) => (
+            <button
+              type="button"
+              key={src}
+              aria-label={`View photo ${index + 1}`}
+              aria-pressed={current === index}
+              className={current === index ? 'active' : ''}
+              onClick={() => selectPhoto(index)}
+            >
+              <ProductImage src={src} alt={`${title} view ${index + 1}`} />
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 export function FlashCountdown({ end }: { end?: string | null }) {
-  const [timeLeft, setTimeLeft] = useState<{ months: number; days: number; hours: number; seconds: number; expired: boolean } | null>(null);
+  const [timeLeft, setTimeLeft] = useState<{ months: number; days: number; hours: number; minutes: number; seconds: number; expired: boolean } | null>(null);
 
   useEffect(() => {
     if (!end) return;
     function calculate() {
       const diff = new Date(end!).getTime() - new Date().getTime();
       if (!Number.isFinite(diff) || diff <= 0) {
-        setTimeLeft({ months: 0, days: 0, hours: 0, seconds: 0, expired: true });
+        setTimeLeft({ months: 0, days: 0, hours: 0, minutes: 0, seconds: 0, expired: true });
         return;
       }
       const totalHours = Math.floor(diff / (1000 * 60 * 60));
@@ -220,8 +259,9 @@ export function FlashCountdown({ end }: { end?: string | null }) {
       const months = Math.floor(totalDays / 30);
       const days = totalDays % 30;
       const hours = totalHours % 24;
+      const minutes = Math.floor(diff / 60000) % 60;
       const seconds = Math.floor((diff % (1000 * 60)) / 1000);
-      setTimeLeft({ months, days, hours, seconds, expired: false });
+      setTimeLeft({ months, days, hours, minutes, seconds, expired: false });
     }
     calculate();
     const interval = setInterval(calculate, 1000);
@@ -235,12 +275,12 @@ export function FlashCountdown({ end }: { end?: string | null }) {
   return (
     <span
       className="flash-deal-badge"
-      title="Flash deal ends in months:days:hours:seconds (30-day months)"
-      aria-label={`Flash deal ends in ${timeLeft.months} months, ${timeLeft.days} days, ${timeLeft.hours} hours and ${timeLeft.seconds} seconds`}
+      title="Flash deal ends in months:days:hours:minutes:seconds (30-day months)"
+      aria-label={`Flash deal ends in ${timeLeft.months} months, ${timeLeft.days} days, ${timeLeft.hours} hours, ${timeLeft.minutes} minutes and ${timeLeft.seconds} seconds`}
     >
       <span aria-hidden="true">⚡</span>
       <span style={{ fontVariantNumeric: "tabular-nums" }}>
-        {pad(timeLeft.months)}:{pad(timeLeft.days)}:{pad(timeLeft.hours)}:{pad(timeLeft.seconds)}
+        {pad(timeLeft.months)}:{pad(timeLeft.days)}:{pad(timeLeft.hours)}:{pad(timeLeft.minutes)}:{pad(timeLeft.seconds)}
       </span>
     </span>
   );
@@ -250,6 +290,7 @@ export function ProductCard({ product }: { product: Product }) {
   const { saved, toggleSave, notify, user } = useShop();
   const params = useSearchParams();
   const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
+  const isAffiliate = product.product_type === 'affiliate_clickbank';
   const productHref = `/products/${product.id}${preview ? '?preview=1' : ''}`;
   const liked = saved.some((item) => item.id === product.id);
   return (
@@ -261,8 +302,13 @@ export function ProductCard({ product }: { product: Product }) {
         >
           <ProductImage src={product.image} alt={product.title} />
         </Link>
-        {(product.flash_sale_end || product.discount > 0) && (
+        {(product.flash_sale_end || product.discount > 0 || isAffiliate) && (
           <div className="product-badges">
+            {isAffiliate && (
+              <span className="discount partner-badge">
+                Partner Offer
+              </span>
+            )}
             {product.flash_sale_end && (
               <FlashCountdown end={product.flash_sale_end} />
             )}
@@ -286,12 +332,21 @@ export function ProductCard({ product }: { product: Product }) {
       </div>
       <div className="product-meta">
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          {product.brand || product.store_name}
-          <VerifiedBadge
-            tier={product.is_official_store ? "official" : "starter"}
-            tierData={product.seller_tier}
-            size={13}
-          />
+          {isAffiliate ? (
+            <>
+              <span>{product.brand || 'Partner Offer'}</span>
+              <span className="seller-tier-pill partner-pill">ClickBank</span>
+            </>
+          ) : (
+            <>
+              {product.brand || product.store_name}
+              <VerifiedBadge
+                tier={product.is_official_store ? "official" : "starter"}
+                tierData={product.seller_tier}
+                size={13}
+              />
+            </>
+          )}
         </span>
         <span>
           <Star size={12} fill="currentColor" />
@@ -310,6 +365,7 @@ export function ProductCard({ product }: { product: Product }) {
     </article>
   );
 }
+
 export function ProductGrid({ products }: { products: Product[] }) {
   return (
     <div className="product-grid">
@@ -319,6 +375,7 @@ export function ProductGrid({ products }: { products: Product[] }) {
     </div>
   );
 }
+
 export function Loading({ cards = false }: { cards?: boolean }) {
   return cards ? (
     <div className="product-grid" aria-label="Loading products">
@@ -437,68 +494,235 @@ export function Field({
   );
 }
 
-export function Pagination({ page, totalPages, onChange }: { page: number; totalPages: number; onChange: (page: number) => void }) {
+export function Pagination({
+  page,
+  totalPages,
+  onChange,
+}: {
+  page: number;
+  totalPages: number;
+  onChange: (page: number) => void;
+}) {
   if (totalPages <= 1) return null;
   const current = Math.max(1, Math.min(page, totalPages));
-  const pages = [...new Set([1, totalPages, current - 1, current, current + 1].filter(value => value >= 1 && value <= totalPages))].sort((a, b) => a - b);
-  return <nav className="pagination" aria-label="Pagination">
-    <button aria-label="Previous page" disabled={current === 1} onClick={() => onChange(current - 1)}>‹</button>
-    <span className="pagination-compact" aria-live="polite">Page {current} of {totalPages}</span>
-    <span className="pagination-pages">{pages.map((value, index) => <span key={value}>{index > 0 && value - pages[index - 1] > 1 && <span className="pagination-ellipsis" aria-hidden="true">…</span>}<button aria-label={`Page ${value}`} aria-current={value === current ? 'page' : undefined} className={value === current ? 'active' : ''} onClick={() => onChange(value)}>{value}</button></span>)}</span>
-    <button aria-label="Next page" disabled={current === totalPages} onClick={() => onChange(current + 1)}>›</button>
-  </nav>;
+  const pages = [
+    ...new Set(
+      [1, totalPages, current - 1, current, current + 1].filter(
+        (value) => value >= 1 && value <= totalPages
+      )
+    ),
+  ].sort((a, b) => a - b);
+
+  return (
+    <nav className="pagination" aria-label="Pagination">
+      <button
+        aria-label="Previous page"
+        disabled={current === 1}
+        onClick={() => onChange(current - 1)}
+      >
+        ‹
+      </button>
+      <span className="pagination-compact" aria-live="polite">
+        Page {current} of {totalPages}
+      </span>
+      <span className="pagination-pages">
+        {pages.map((value, index) => (
+          <span key={value}>
+            {index > 0 && value - pages[index - 1] > 1 && (
+              <span className="pagination-ellipsis" aria-hidden="true">
+                …
+              </span>
+            )}
+            <button
+              aria-label={`Page ${value}`}
+              aria-current={value === current ? "page" : undefined}
+              className={value === current ? "active" : ""}
+              onClick={() => onChange(value)}
+            >
+              {value}
+            </button>
+          </span>
+        ))}
+      </span>
+      <button
+        aria-label="Next page"
+        disabled={current === totalPages}
+        onClick={() => onChange(current + 1)}
+      >
+        ›
+      </button>
+    </nav>
+  );
 }
 
-export function AddToBagButton({ product, quantity = 1, className = 'button' }: { product: Product; quantity?: number; className?: string }) {
+export function AddToBagButton({
+  product,
+  quantity = 1,
+  className = "button",
+}: {
+  product: Product;
+  quantity?: number;
+  className?: string;
+}) {
   const { cart, add, notify, cartLoading, cartError, user } = useShop();
   const params = useSearchParams();
-  const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
+  const preview =
+    params.get("preview") === "1" &&
+    Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const [busy, setBusy] = useState(false);
   const [added, setAdded] = useState(false);
   const locked = useRef(false);
-  const current = cart.items.find(row => row.product.id === product.id)?.quantity || 0;
+
+  // If this is an external affiliate product, render direct outbound link to ClickBank tracking endpoint
+  if (product.product_type === "affiliate_clickbank") {
+    const outboundUrl = `/api/affiliates/clickbank/outbound/${product.id}`;
+    const label = product.affiliate_button_text || "Buy on Official Site";
+    return (
+      <a
+        href={outboundUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={className}
+        title="View offer directly on partner site"
+        style={{
+          textDecoration: "none",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: "6px",
+        }}
+      >
+        <span>{label}</span>
+        <ArrowUpRight size={15} />
+      </a>
+    );
+  }
+
+  const current =
+    cart.items.find(
+      (row) =>
+        row.product.id === product.id &&
+        (row.product.selected_variant || "") ===
+          (product.selected_variant || product.variants?.[0]?.name || "")
+    )?.quantity || 0;
   const committed = current >= quantity;
   const capped = !product.is_digital && current >= product.available;
+
   useEffect(() => {
     if (!added) return;
     const timer = window.setTimeout(() => setAdded(false), 1800);
     return () => window.clearTimeout(timer);
   }, [added]);
+
   async function submit() {
     if (locked.current || committed) return;
     locked.current = true;
     setBusy(true);
-    try { await add(product, quantity - current); setAdded(true); }
-    catch (error) { notify((error as Error).message, true); }
-    finally { locked.current = false; setBusy(false); }
+    try {
+      await add(product, quantity - current);
+      setAdded(true);
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      locked.current = false;
+      setBusy(false);
+    }
   }
-  const label = preview ? 'Preview only' : product.is_own_store ? 'Your listing' : product.store_verified === false ? 'Preview only' : !product.is_digital && !product.available ? 'Out of stock' : busy ? 'Adding…' : capped ? 'Max quantity in bag' : added ? 'Added!' : committed ? `${current} in bag` : 'Add to bag';
-  return <button type="button" className={className} disabled={preview || busy || cartLoading || !!cartError || committed || (!product.is_digital && (!product.available || quantity > product.available)) || product.is_own_store || product.store_verified === false} onClick={submit} aria-busy={busy}>
-    {busy ? <LoaderCircle className="bag-spinner" size={16} /> : added || committed ? <Check size={16} /> : <Plus size={16} />}{label}
-  </button>;
+
+  const label = preview
+    ? "Preview only"
+    : product.is_own_store
+      ? "Your listing"
+      : product.store_verified === false
+        ? "Preview only"
+        : !product.is_digital && !product.available
+          ? "Out of stock"
+          : busy
+            ? "Adding…"
+            : capped
+              ? "Max quantity in bag"
+              : added
+                ? "Added!"
+                : committed
+                  ? `${current} in bag`
+                  : "Add to bag";
+
+  const isDisabled =
+    preview ||
+    busy ||
+    cartLoading ||
+    !!cartError ||
+    committed ||
+    (!product.is_digital && (!product.available || quantity > product.available)) ||
+    product.is_own_store ||
+    product.store_verified === false;
+
+  return (
+    <button
+      type="button"
+      className={className}
+      disabled={isDisabled}
+      onClick={submit}
+      aria-busy={busy}
+    >
+      {busy ? (
+        <LoaderCircle className="bag-spinner" size={16} />
+      ) : added || committed ? (
+        <Check size={16} />
+      ) : (
+        <Plus size={16} />
+      )}
+      {label}
+    </button>
+  );
 }
 
 export function useDialogFocus(open: boolean, close: () => void) {
   const ref = useRef<HTMLElement>(null);
   const closeRef = useRef(close);
   closeRef.current = close;
+
   useEffect(() => {
     if (!open) return;
     const previous = document.activeElement as HTMLElement | null;
     const overflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const controls = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select, textarea, a[href]') || []);
+    document.body.style.overflow = "hidden";
+
+    const controls = () =>
+      Array.from(
+        ref.current?.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), input:not(:disabled), select, textarea, a[href]"
+        ) || []
+      );
+
     controls()[0]?.focus();
+
     const keyboard = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeRef.current();
-      if (event.key !== 'Tab') return;
+      if (event.key === "Escape") {
+        closeRef.current();
+      }
+      if (event.key !== "Tab") return;
+
       const items = controls();
-      const first = items[0], last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      const first = items[0];
+      const last = items[items.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
     };
-    document.addEventListener('keydown', keyboard);
-    return () => { document.body.style.overflow = overflow; document.removeEventListener('keydown', keyboard); previous?.focus(); };
+
+    document.addEventListener("keydown", keyboard);
+    return () => {
+      document.body.style.overflow = overflow;
+      document.removeEventListener("keydown", keyboard);
+      previous?.focus();
+    };
   }, [open]);
+
   return ref;
 }

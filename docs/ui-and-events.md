@@ -1,5 +1,9 @@
 ## Design system and styling conventions
 
+Shared frontend styling in `client/src/app/design-system.css` standardizes form controls, buttons, cards, dialogs, catalog typography, and ClickBank partner badges across light and dark themes. Mobile controls use readable input sizes, touch devices expose quick product actions, and reduced-motion preferences are respected.
+
+Admin and staff record details share a responsive dialog with a labeled header, status badge, two-column definition list (one column on mobile), and print/close actions. Printing isolates the selected record.
+
 - **Typography & Brand Identity**: Clean Swiss-inspired typography utilizing system fonts and high-contrast ink (`--ink: #0a140d`, `--paper: #ffffff`, `--soft: #f4f7f5`). Distinctive forest green accents (`--green: #15803d`, `--green-light: rgba(21, 128, 61, 0.08)`).
 - **Responsive Conventions**: Fluid `.container` layouts with mobile breakpoint at 650px and tablet/split stacking at 1024px. Interactive elements enforce `min-width: 0` with explicit overflow clamping.
 - **Accessible Dialogs & Modals**: Modals utilize backdrop blur, trapped focus, background scroll-lock (`body:has(.dialog-backdrop)`), `Escape` key listeners, and explicit accessible ARIA headings (`role="dialog"`, `aria-modal="true"`).
@@ -21,6 +25,12 @@
    - Orders within the 7-day post-delivery window provide item-by-item return selection, reason capture, and refund destination routing (instant wallet store credit vs. original payment method).
 5. **Robust RFC 4180 CSV Parsing (`MerchantProducts`)**:
    - Implements a state-machine CSV parser (`parseCsvRows`) supporting multiline records, embedded commas, and escaped quotes (`""`), preventing broken product rows during bulk catalog uploads.
+6. **Destination Sales Tax Management (`AdminTaxesPage`)**:
+   - Accessible at `/admin/taxes` via the backoffice navigation bar for staff and administrators.
+   - Summarizes active calculation mode (`Local Database Engine` vs. `Stripe Tax (Automated)`), total rules, and active municipal ZIP overrides.
+   - Instant search by state code, jurisdiction name, or postal code prefix, with active status filters.
+   - Interactive modal dialog with focus trapping for adding ZIP overrides, editing statutory rates, and toggling shipping or digital goods taxability.
+   - One-click "Restore 50 US Baselines" action with confirmation to initialize statutory state rates.
 
 ## Shared pagination
 

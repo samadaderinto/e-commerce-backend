@@ -42,6 +42,7 @@ class Url(DatesMixin):
         return self.abs_url
     
 class Redirect(DatesMixin):   
+    last_clicked_at = models.DateTimeField(null=True, blank=True)
     urlId = models.ForeignKey('Url', on_delete=models.CASCADE)
     product_url = models.URLField()
     refferal_url = models.CharField(max_length=15, unique=True, blank=True)
@@ -118,10 +119,58 @@ class Referral(DatesMixin):
             )
         ]
 
-            
-            
-            
+
+class ClickBankOutboundClick(DatesMixin):
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.CASCADE,
+        related_name="clickbank_clicks",
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clickbank_clicks",
+    )
+    tracking_id = models.CharField(max_length=120, unique=True, db_index=True)
+    hoplink_used = models.URLField(max_length=1000)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    user_agent = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["-created"]
+
+    def __str__(self):
+        return f"ClickBank Click {self.tracking_id} for Product #{self.product_id}"
 
 
-    
-    
+class ClickBankConversion(DatesMixin):
+    click = models.ForeignKey(
+        ClickBankOutboundClick,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversions",
+    )
+    product = models.ForeignKey(
+        Product,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="clickbank_conversions",
+    )
+    receipt = models.CharField(max_length=100, unique=True, db_index=True)
+    tracking_id = models.CharField(max_length=120, blank=True, default='', db_index=True)
+    transaction_type = models.CharField(max_length=50, default='SALE')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    affiliate_commission = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'))
+    currency = models.CharField(max_length=10, default='USD')
+    raw_payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-created"]
+
+    def __str__(self):
+        return f"ClickBank Receipt {self.receipt} ({self.transaction_type}) - ${self.affiliate_commission}"
+

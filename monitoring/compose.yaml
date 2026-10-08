@@ -49,6 +49,9 @@ services:
     image: grafana/grafana:12.1.1
     restart: unless-stopped
     ports: ['127.0.0.1:3002:3000']
+    env_file:
+      - path: ../server/.env
+        required: false
     environment:
       GF_SECURITY_ADMIN_USER: ${TECHNICAL_ADMIN_EMAIL:-${DEFAULT_ADMIN_EMAIL:-admin@proace.local}}
       GF_SECURITY_ADMIN_EMAIL: ${TECHNICAL_ADMIN_EMAIL:-${DEFAULT_ADMIN_EMAIL:-admin@proace.local}}

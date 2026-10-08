@@ -48,7 +48,9 @@ from payment.models import (
     CouponRedemption,
     DeliveryInfo,
     Order,
+    TaxJurisdiction,
 )
+from payment.tax import calculate_tax, DEFAULT_US_JURISDICTIONS
 from product.models import Product, Specification
 from staff.models import Comment as BlogComment, Content as BlogContent, Post as BlogPost
 from store.models import (
@@ -470,8 +472,8 @@ class Command(BaseCommand):
         parser.add_argument("--reviews", type=int, help="Override total review count.")
         parser.add_argument(
             "--password",
-            default="Password123!",
-            help="Default password for all seeded user accounts (default: Password123!).",
+            default=None,
+            help="Default password for all seeded user accounts (defaults to DEFAULT_ADMIN_PASSWORD from env, or Password123!).",
         )
         parser.add_argument(
             "--clear",
@@ -506,7 +508,8 @@ class Command(BaseCommand):
                 )
 
         random.seed(options.get("seed", 42))
-        password = options.get("password") or "Password123!"
+        env_admin_password = os.environ.get("DEFAULT_ADMIN_PASSWORD") or os.environ.get("TECHNICAL_ADMIN_PASSWORD")
+        password = options.get("password") or env_admin_password or "ProaceDemo2026!"
         if len(password) < 8:
             raise CommandError("Password must be at least 8 characters long.")
 
@@ -561,6 +564,9 @@ class Command(BaseCommand):
         # Step 5: Coupons & Promo Codes
         self.stdout.write(self.style.HTTP_INFO("[5/11] Generating promotional coupons..."))
         coupons = self.seed_coupons(products)
+
+        # Step 5b: Sales Tax Jurisdictions
+        self.seed_tax_jurisdictions()
 
         # Step 6: Orders & Shipments
         self.stdout.write(self.style.HTTP_INFO(f"[6/11] Simulating {num_orders} historical orders & tracking journeys..."))
@@ -625,6 +631,7 @@ class Command(BaseCommand):
             StoreEarningsLedger.objects.all().delete()
             MerchantWallet.objects.all().delete()
             Order.objects.all().delete()
+            TaxJurisdiction.objects.all().delete()
             DeliveryInfo.objects.all().delete()
             CartItem.objects.all().delete()
             Cart.objects.all().delete()
@@ -645,16 +652,17 @@ class Command(BaseCommand):
 
     def seed_users(self, count: int, hashed_password: str) -> List[User]:
         key_accounts = [
-            ("admin@proace.local", "Alex", "Admin", "male", True, True),
-            ("staff@proace.local", "Jordan", "Staff", "male", True, False),
-            ("merchant@proace.local", "Elena", "Merchant", "female", False, False),
-            ("seller@proace.local", "Marcus", "Seller", "male", False, False),
-            ("shopper@proace.local", "Taylor", "Shopper", "female", False, False),
-            ("buyer@proace.local", "Sam", "Buyer", "male", False, False),
-            ("blocked-staff@proace.local", "Blocked", "Staff", "male", True, False),
-            ("unverified@proace.local", "Unverified", "Buyer", "female", False, False),
-            ("pending-seller@proace.local", "Pending", "Seller", "female", False, False),
-            ("blocked-seller@proace.local", "Blocked", "Seller", "male", False, False),
+            ("admin@proace.local", "Alex", "Admin", "male", True, True, False),
+            ("business-admin@proace.local", "Morgan", "BusinessAdmin", "female", True, False, True),
+            ("staff@proace.local", "Jordan", "Staff", "male", True, False, False),
+            ("merchant@proace.local", "Elena", "Merchant", "female", False, False, False),
+            ("seller@proace.local", "Marcus", "Seller", "male", False, False, False),
+            ("shopper@proace.local", "Taylor", "Shopper", "female", False, False, False),
+            ("buyer@proace.local", "Sam", "Buyer", "male", False, False, False),
+            ("blocked-staff@proace.local", "Blocked", "Staff", "male", True, False, False),
+            ("unverified@proace.local", "Unverified", "Buyer", "female", False, False, False),
+            ("pending-seller@proace.local", "Pending", "Seller", "female", False, False, False),
+            ("blocked-seller@proace.local", "Blocked", "Seller", "male", False, False, False),
         ]
 
         users_to_create = []
@@ -662,11 +670,12 @@ class Command(BaseCommand):
         existing_users = {u.email: u for u in User.objects.all()}
 
         # 1. Ensure well-known test accounts
-        for idx, (email, first, last, gender, is_staff, is_superuser) in enumerate(key_accounts):
+        for idx, (email, first, last, gender, is_staff, is_superuser, is_business_admin) in enumerate(key_accounts):
             if email in existing_users:
                 user = existing_users[email]
                 user.is_staff = is_staff
                 user.is_superuser = is_superuser
+                user.is_business_admin = is_business_admin
                 user.password = hashed_password
                 user.is_active = email not in {"blocked-staff@proace.local", "unverified@proace.local"}
                 user.save()
@@ -681,6 +690,7 @@ class Command(BaseCommand):
                     password=hashed_password,
                     is_staff=is_staff,
                     is_superuser=is_superuser,
+                    is_business_admin=is_business_admin,
                     is_active=email not in {"blocked-staff@proace.local", "unverified@proace.local"},
                 )
                 users_to_create.append(user)
@@ -948,6 +958,24 @@ class Command(BaseCommand):
                         "available": available // 3,
                     })
 
+            # Designate realistic ClickBank partner offers
+            is_affiliate = (i % 11 == 0 and is_digital) or (i == 7) or (i == 19)
+            product_type = "affiliate_clickbank" if is_affiliate else "standard"
+            affiliate_hoplink = ""
+            affiliate_vendor_nickname = ""
+            affiliate_button_text = "Buy on Official Site"
+            if is_affiliate:
+                # Affiliate products represent platform-curated recommendations mapped under the official catalog store
+                official_store = next((s for s in stores if s.is_official), stores[0])
+                aff_nick = getattr(settings, "CLICKBANK_AFFILIATE_NICKNAME", "proace") or "proace"
+                affiliate_hoplink = f"https://hop.clickbank.net/?affiliate={aff_nick}&vendor={vendor_nick}"
+                affiliate_vendor_nickname = vendor_nick
+                affiliate_button_text = random.choice([
+                    "Buy on Official Site",
+                    "Claim Special Offer",
+                    "Access Official Portal",
+                ])
+
             product = Product(
                 store=store,
                 title=title[:225],
@@ -968,6 +996,10 @@ class Command(BaseCommand):
                 digital_file_url="https://downloads.proace.local/files/spec-sheet.pdf" if is_digital else "",
                 flash_sale_end=flash_sale,
                 variants=variants,
+                product_type=product_type,
+                affiliate_hoplink=affiliate_hoplink,
+                affiliate_vendor_nickname=affiliate_vendor_nickname,
+                affiliate_button_text=affiliate_button_text,
             )
             products_to_create.append((product, tags))
 
@@ -1019,6 +1051,24 @@ class Command(BaseCommand):
             )
             coupons.append(coupon)
         return coupons
+
+    def seed_tax_jurisdictions(self) -> None:
+        self.stdout.write(self.style.HTTP_INFO("  -> Initializing US sales tax jurisdictions..."))
+        jurisdictions = [
+            TaxJurisdiction(
+                country="US",
+                state=entry["state"],
+                postal_code="",
+                name=entry["name"],
+                rate=entry["rate"],
+                tax_shipping=entry["tax_shipping"],
+                tax_digital=entry["tax_digital"],
+                is_active=True,
+            )
+            for entry in DEFAULT_US_JURISDICTIONS
+        ]
+        TaxJurisdiction.objects.bulk_create(jurisdictions, ignore_conflicts=True)
+        self.stdout.write(self.style.SUCCESS(f"  -> {len(jurisdictions)} tax jurisdictions active."))
 
     def seed_orders(
         self,
@@ -1120,8 +1170,14 @@ class Command(BaseCommand):
                     "is_digital": prod.is_digital,
                 })
 
-            tax = (subtotal * Decimal("0.08")).quantize(Decimal(".01"))
             shipping_decimal = (Decimal(shipping_fee) / Decimal("100")).quantize(Decimal(".01"))
+            tax_breakdown = calculate_tax(
+                items=items_snapshot,
+                subtotal=subtotal,
+                shipping_fee=shipping_decimal,
+                address=address,
+            )
+            tax = tax_breakdown.amount
             total = subtotal + tax + shipping_decimal
 
             # Tracking metadata
@@ -1167,9 +1223,14 @@ class Command(BaseCommand):
                 orderId=order_id,
                 coupon_code=coupon_code,
                 tax=tax,
+                tax_snapshot=tax_breakdown.to_dict(),
                 status=status,
                 ordered=True,
-                payment_type=random.choice(["card", "wallet", "cash_on_delivery"]),
+                payment_type='user_wallet',
+                paid_total=total,
+                wallet_paid=total,
+                refunded_total=total if status in {'cancelled', 'refunded'} else Decimal('0'),
+                wallet_refunded_total=total if status in {'cancelled', 'refunded'} else Decimal('0'),
                 subtotal=subtotal,
                 total=total,
                 items_snapshot=items_snapshot,
@@ -1602,11 +1663,12 @@ class Command(BaseCommand):
         self.stdout.write(f"Total Payouts:             {StorePayout.objects.count()}")
         self.stdout.write("-" * 65)
         self.stdout.write(self.style.MIGRATE_LABEL("Ready-to-Use Development Accounts (Password: ") + self.style.SUCCESS(password) + self.style.MIGRATE_LABEL("):"))
-        self.stdout.write("  - Super Admin:     admin@proace.local     (Full Staff & Superuser rights)")
-        self.stdout.write("  - Staff Member:    staff@proace.local     (Staff moderation & blog portal)")
-        self.stdout.write("  - Flagship Vendor: merchant@proace.local  (Owns ProAce Select & Aura Audio)")
-        self.stdout.write("  - Active Seller:   seller@proace.local    (Owns Apex Athletics (single store))")
-        self.stdout.write("  - Active Shopper:  shopper@proace.local   (Has cart items, orders, addresses)")
-        self.stdout.write("  - Regular Buyer:   buyer@proace.local     (Customer account)")
+        self.stdout.write("  - Super Admin:     admin@proace.local           (Full Staff & Superuser rights)")
+        self.stdout.write("  - Business Admin:  business-admin@proace.local  (Staff & Business Administrator rights)")
+        self.stdout.write("  - Staff Member:    staff@proace.local           (Staff moderation & store audit rights)")
+        self.stdout.write("  - Flagship Vendor: merchant@proace.local        (Owns ProAce Select & Aura Audio)")
+        self.stdout.write("  - Active Seller:   seller@proace.local          (Owns Apex Athletics (single store))")
+        self.stdout.write("  - Active Shopper:  shopper@proace.local         (Has cart items, orders, addresses)")
+        self.stdout.write("  - Regular Buyer:   buyer@proace.local           (Customer account)")
         self.stdout.write("-" * 65)
         self.stdout.write(self.style.SUCCESS("You can now start local/dev servers and log into the client or API!\n"))

@@ -7,9 +7,35 @@ import { themeScript } from '@/lib/theme-init';
 import './globals.css';
 import './admin.css';
 import './themes.css';
+import './design-system.css';
 
-export const metadata: Metadata = { title: { default: 'ProAce — US marketplace and worldwide digital goods', template: '%s | ProAce' }, description: 'Shop physical products delivered within the United States and digital downloads available worldwide.' };
+export const metadata: Metadata = {
+  title: {
+    default: 'ProAce — US marketplace and worldwide digital goods',
+    template: '%s | ProAce',
+  },
+  description:
+    'Shop physical products delivered within the United States and digital downloads available worldwide.',
+};
 
-export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeScript }} /></head><body><Providers><ErrorMonitor /><Suspense fallback={<main id="main" aria-busy="true" />}><Shell>{children}</Shell></Suspense></Providers></body></html>;
+export default function RootLayout({
+  children,
+}: Readonly<{
+  children: React.ReactNode;
+}>) {
+  return (
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body>
+        <Providers>
+          <ErrorMonitor />
+          <Suspense fallback={<main id="main" aria-busy="true" />}>
+            <Shell>{children}</Shell>
+          </Suspense>
+        </Providers>
+      </body>
+    </html>
+  );
 }

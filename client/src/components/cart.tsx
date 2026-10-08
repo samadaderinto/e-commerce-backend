@@ -1,4 +1,5 @@
 "use client";
+import { isMilitaryAddress } from "@/lib/geo";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -85,7 +86,7 @@ export function CartPage() {
               <span>Total</span>
             </div>
             {cart.items.map((row) => (
-              <article className="cart-row" key={row.product.id}>
+              <article className="cart-row" key={`${row.product.id}:${row.product.selected_variant || ''}`}>
                 <Link
                   className="cart-image"
                   href={`/products/${row.product.id}`}
@@ -420,16 +421,38 @@ export function CheckoutPage() {
     defaultAddress;
   const addressId = currentAddress?.id;
   const hasPhysical = cart.items.some((item) => !item.product.is_digital);
+  const militaryDelivery = hasPhysical && isMilitaryAddress(currentAddress);
+  useEffect(() => {
+    if (militaryDelivery) {
+      setCarrier('USPS');
+      setShippingService('usps_ground_advantage');
+    }
+  }, [militaryDelivery]);
 
   const shippingRates = useQuery({
-    queryKey: ["shipping-rates", hasPhysical ? addressId : 'digital', carrier, cart.items.map(row => `${row.product.id}:${row.quantity}`).join(",")],
-    queryFn: () =>
-      api<import("@/lib/types").ShippingRate[]>(
-        hasPhysical
-          ? `checkout/shipping-rates?address=${addressId}&carrier=${carrier}`
-          : `checkout/shipping-rates`,
-      ),
-    enabled: hasPhysical ? !!addressId : cart.items.length > 0,
+    queryKey: [
+      'shipping-rates',
+      appliedCoupon?.code || '',
+      hasPhysical ? addressId : 'digital',
+      carrier,
+      cart.items
+        .map((row) => `${row.product.id}:${row.product.selected_variant || ''}:${row.quantity}`)
+        .join(','),
+    ],
+    queryFn: (): Promise<import('@/lib/types').ShippingRate[]> => {
+      const query: URLSearchParams = new URLSearchParams();
+      if (hasPhysical && addressId) {
+        query.set('address', String(addressId));
+        query.set('carrier', carrier);
+      }
+      if (appliedCoupon?.code) {
+        query.set('coupon', appliedCoupon.code);
+      }
+      return api<import('@/lib/types').ShippingRate[]>(
+        `checkout/shipping-rates?${query.toString()}`,
+      );
+    },
+    enabled: hasPhysical ? !!addressId && (!militaryDelivery || carrier === 'USPS') : cart.items.length > 0,
   });
 
   const carrierRates = useMemo(() => {
@@ -712,18 +735,21 @@ export function CheckoutPage() {
                     <span>2</span>
                     <h2>Choose shipping method</h2>
                   </div>
+                  {militaryDelivery && <p role="status" className="muted">APO/FPO/DPO military addresses use USPS. Other carriers are unavailable for this destination.</p>}
                   <fieldset className="carrier-options">
                     <legend>Choose a courier</legend>
                     {CARRIER_OPTIONS.map((c) => (
                       <label
                         key={c.id}
                         className={`carrier-option ${carrier === c.id ? "selected" : ""}`}
+                        title={militaryDelivery && c.id !== "USPS" ? "USPS is required for military postal addresses" : undefined}
                       >
                         <input
                           type="radio"
                           name="shipping-carrier"
                           value={c.id}
                           checked={carrier === c.id}
+                          disabled={militaryDelivery && c.id !== "USPS"}
                           onChange={() => handleCarrierChange(c.id)}
                         />
                         <div className="carrier-badge-icon">{c.logo}</div>
@@ -839,7 +865,7 @@ export function CheckoutPage() {
             <aside className="order-summary">
               <h2>Your order</h2>
               {cart.items.map((row) => (
-                <div className="mini-item" key={row.product.id}>
+                <div className="mini-item" key={`${row.product.id}:${row.product.selected_variant || ''}`}>
                   <ProductImage
                     src={row.product.image}
                     alt={row.product.title}
@@ -880,7 +906,21 @@ export function CheckoutPage() {
                   {shippingFee === 0 ? "Free" : money(shippingFee)}
                 </strong>
               </div>
-              <div className="summary-line"><span>Tax</span><strong>{money(taxAmount)}</strong></div>
+              <div className="summary-line">
+                <span>
+                  Tax
+                  {activeShipping?.tax_jurisdiction ? (
+                    <small style={{ color: "var(--muted)", fontWeight: "normal", marginLeft: "4px" }}>
+                      ({activeShipping.tax_jurisdiction})
+                    </small>
+                  ) : hasPhysical && !addressId ? (
+                    <small style={{ color: "var(--muted)", fontWeight: "normal", marginLeft: "4px" }}>
+                      (Calculated at checkout)
+                    </small>
+                  ) : null}
+                </span>
+                <strong>{money(taxAmount)}</strong>
+              </div>
               <div className="coupon-box" style={{ margin: "0.75rem 0" }}>
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <input

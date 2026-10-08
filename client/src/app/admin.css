@@ -1,4 +1,10 @@
 .admin-staff-page { min-height: 580px; }
+.user-profile-columns { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); gap: 30px; align-items: start; }
+.user-profile-columns > .analytics-panel { min-width: 0; }
+.user-profile-columns .section-heading { align-items: flex-start; flex-wrap: wrap; }
+.user-profile-columns .section-heading .form-actions { flex-wrap: wrap; min-width: 0; }
+.user-profile-columns .section-heading input,
+.user-profile-columns .section-heading select { max-width: 100%; }
 .admin-staff-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 30px; margin-bottom: 35px; }
 .admin-staff-heading h1 { margin-bottom: 6px; }
 .admin-staff-heading p { margin: 0; }
@@ -25,6 +31,7 @@
 .admin-dialog .form-actions { justify-content: flex-end; margin-top: 5px; }
 
 @media (max-width: 640px) {
+.user-profile-columns { grid-template-columns: 1fr; gap: 24px; }
   .admin-staff-heading { align-items: flex-start; flex-direction: column; margin-bottom: 25px; }
   .admin-staff-heading .button { width: 100%; }
   .admin-staff-toolbar { align-items: stretch; flex-direction: column; }
@@ -34,4 +41,42 @@
   .admin-dialog .form-row { flex-direction: column; }
   .admin-dialog .form-actions { flex-direction: column-reverse; }
   .admin-dialog .form-actions .button { width: 100%; }
+}
+
+/* Backoffice navigation and required password setup. */
+.backoffice-header .header-inner { gap: 20px; }
+.backoffice-label { color: var(--muted); font-size: 12px; border-left: 1px solid var(--line); padding-left: 20px; }
+.backoffice-tools { display: flex; align-items: center; gap: 14px; margin-left: auto; }
+.backoffice-nav { display: flex; gap: 8px; padding: 10px max(24px, calc((100vw - 1320px) / 2)); border-top: 1px solid var(--line); overflow-x: auto; }
+.backoffice-nav a { display: inline-flex; align-items: center; gap: 8px; padding: 11px 15px; border-radius: 8px; color: var(--muted); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.backoffice-nav a:hover, .backoffice-nav a[aria-current="page"] { background: var(--green-light); color: var(--green); }
+.backoffice-nav a:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.admin-dashboard-page > .admin-staff-heading { align-items: flex-start; flex-direction: column; gap: 24px; }
+.admin-dashboard-shortcuts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; width: 100%; }
+.admin-dashboard-shortcuts .button { justify-content: flex-start; padding: 16px 20px; border-radius: 10px; white-space: normal; }
+.workspace-password-page { min-height: 100vh; background: var(--paper); padding: 28px 24px 64px; }
+.workspace-password-brand { display: flex; justify-content: space-between; align-items: center; max-width: 1120px; margin: 0 auto 48px; }
+.workspace-password-card { max-width: 480px; margin: 0 auto; padding: 36px; border: 1px solid var(--line); border-radius: 18px; background: var(--white, var(--paper)); box-shadow: 0 16px 48px #00000008; }
+.workspace-password-icon { display: grid; place-items: center; width: 56px; height: 56px; border-radius: 16px; background: var(--green-light); color: var(--green); margin-bottom: 24px; }
+.workspace-password-card h1 { font-size: 30px; line-height: 1.2; margin: 12px 0; }
+.workspace-password-card > p { color: var(--muted); line-height: 1.6; }
+.workspace-password-card form { margin-top: 28px; }
+.workspace-password-card input:not([type="checkbox"]) { width: 100%; margin-top: 8px; }
+.workspace-password-card small { color: var(--muted); line-height: 1.5; }
+.workspace-password-card .workspace-password-show { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.workspace-password-show input { width: 16px; height: 16px; accent-color: var(--green); }
+.workspace-password-card .button { width: 100%; justify-content: center; }
+.workspace-password-note { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 24px 0 0; }
+@media (max-width: 760px) {
+  .admin-dashboard-shortcuts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .backoffice-nav { padding-inline: 16px; }
+  .backoffice-label { display: none; }
+  .backoffice-header .header-inner { gap: 10px; }
+  .backoffice-tools { gap: 8px; }
+}
+@media (max-width: 440px) {
+  .admin-dashboard-shortcuts { grid-template-columns: 1fr; }
+  .workspace-password-card { padding: 24px; }
+  .workspace-password-page { padding-inline: 16px; }
+  .workspace-password-brand { margin-bottom: 28px; }
 }

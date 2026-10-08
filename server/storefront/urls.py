@@ -8,7 +8,7 @@ from .views import (
     PasswordChangeView, AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView, DigitalDownloadView,
     OrderRefundView, OrderCancelView, OrderTrackingView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, PublicStoreView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
-    CouponValidateView,
+    CouponValidateView, TaxJurisdictionAdminView, TaxJurisdictionDetailAdminView, TaxJurisdictionSeedDefaultsAdminView,
 )
 from store.views import StoreReviewViewSet
 from staff.views import StaffViewSet
@@ -40,6 +40,9 @@ urlpatterns = [
     path('api/v1/checkout/wallet-confirm/', WalletCheckoutConfirmView.as_view()),
     path('api/v1/affiliates/', include('affiliates.urls')),
     path('api/v1/admin/coupons/', CouponAdminView.as_view()),
+    path('api/v1/admin/taxes/', TaxJurisdictionAdminView.as_view()),
+    path('api/v1/admin/taxes/seed-defaults/', TaxJurisdictionSeedDefaultsAdminView.as_view()),
+    path('api/v1/admin/taxes/<int:pk>/', TaxJurisdictionDetailAdminView.as_view()),
     path('api/v1/admin/stores/', StoreReviewViewSet.as_view({'get': 'list'})),
     path('api/v1/admin/stores/<int:pk>/approve/', StoreReviewViewSet.as_view({'post': 'approve'})),
     path('api/v1/admin/stores/<int:pk>/block/', StoreReviewViewSet.as_view({'post': 'block'})),

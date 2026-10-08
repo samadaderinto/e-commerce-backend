@@ -92,6 +92,37 @@ class Product(DatesMixin):
         blank=True,
         help_text='Optional expiration timestamp for limited-time flash deals.',
     )
+    PRODUCT_TYPE_STANDARD = 'standard'
+    PRODUCT_TYPE_AFFILIATE_CLICKBANK = 'affiliate_clickbank'
+    PRODUCT_TYPE_CHOICE = (
+        (PRODUCT_TYPE_STANDARD, 'Standard ProAce Product'),
+        (PRODUCT_TYPE_AFFILIATE_CLICKBANK, 'ClickBank Affiliate Offer'),
+    )
+
+    product_type = models.CharField(
+        max_length=30,
+        choices=PRODUCT_TYPE_CHOICE,
+        default='standard',
+        help_text='Indicates whether this item is sold via ProAce cart or an external ClickBank partner.',
+    )
+    affiliate_hoplink = models.URLField(
+        blank=True,
+        default='',
+        max_length=1000,
+        help_text='Vendor HopLink URL for external ClickBank affiliate offers.',
+    )
+    affiliate_vendor_nickname = models.CharField(
+        max_length=100,
+        blank=True,
+        default='',
+        help_text='ClickBank vendor account nickname.',
+    )
+    affiliate_button_text = models.CharField(
+        max_length=60,
+        blank=True,
+        default='Buy on Official Site',
+        help_text='Custom call-to-action button label for external affiliate landing.',
+    )
     variants = models.JSONField(
         default=list,
         blank=True,

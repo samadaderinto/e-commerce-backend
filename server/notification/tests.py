@@ -363,6 +363,7 @@ class NotificationApiTests(TestCase):
         self.assertIsNone(message.notification)
         self.assertEqual(message.data["recipient_id"], str(self.user.pk))
         self.assertEqual(message.data["url"], "/account/orders")
+        self.assertEqual(set(message.fids or message.tokens), {"expired-token", "valid-token"})
 
     def test_full_text_search_filters_notifications(self):
         create_notification(

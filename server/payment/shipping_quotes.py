@@ -9,7 +9,7 @@ from payment.models import ShippingQuote
 
 def fingerprint(cart, address):
     from storefront.serializers import AddressSerializer, unit_price
-    rows = [(item.product_id, item.quantity, str(unit_price(item.product)),
+    rows = [(item.product_id, item.variant, item.quantity, str(unit_price(item.product, item.variant)),
              str(item.product.weight), item.product.is_digital, item.product.store_id)
             for item in cart.cart_items.select_related('product').order_by('product_id')]
     payload = {'cart': cart.pk, 'rows': rows, 'address': AddressSerializer(address).data if address else None}
@@ -39,15 +39,22 @@ def verify_quote(token, user, cart, address, service, *, paid=False):
 
 def cart_rates(carrier, cart, address):
     from store.models import StoreAddress
+    from store.services import has_store_address
     from storefront.serializers import unit_price
     from payment.carriers import calculate_carrier_rates
+    from payment.geo import validate_military_address, validate_military_carrier
+    if address:
+        validate_military_address(address.city, address.state, address.zip, address.country)
+        validate_military_carrier(address, carrier)
     groups = {}
     subtotal = Decimal('0')
     for item in cart.cart_items.select_related('product__store'):
-        subtotal += unit_price(item.product) * item.quantity
+        subtotal += unit_price(item.product, item.variant) * item.quantity
         if not item.product.is_digital:
             origin = StoreAddress.objects.filter(store=item.product.store, is_default=True).first()
-            zipcode = origin.zip if origin and origin.zip else '33602'
+            if not has_store_address(item.product.store):
+                raise ValidationError({'store_address': f'Store {item.product.store.name} must configure its default address before shipping can be quoted.'})
+            zipcode = origin.zip
             group = groups.setdefault(zipcode, {'weight': Decimal('0'), 'package': {}})
             group['weight'] += Decimal(str(item.product.weight or '1')) * item.quantity
             for field in ('length', 'width', 'height'):

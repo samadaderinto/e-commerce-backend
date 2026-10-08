@@ -1,5 +1,6 @@
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
+from django.utils import timezone
 from django.db import models, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import mixins, status, viewsets
@@ -13,8 +14,8 @@ from drf_spectacular.utils import extend_schema
 from core.models import User
 from notification.models import Notification
 from notification.models import PushDevice
-from notification.seralizers import NotificationCountSerializer, NotificationSerializer
-from notification.seralizers import PushDeviceTokenSerializer
+from notification.serializers import NotificationCountSerializer, NotificationSerializer
+from notification.serializers import PushDeviceTokenSerializer
 
 
 class NotificationPagination(LimitOffsetPagination):
@@ -360,7 +361,7 @@ class NotificationViewSet(
         if request.method == "POST":
             PushDevice.objects.update_or_create(
                 token=token,
-                defaults={"user": request.user},
+                defaults={"user": request.user, "last_active_at": timezone.now()},
             )
             return Response({"registered": True}, status=status.HTTP_200_OK)
 
@@ -539,7 +540,8 @@ class NotificationViewSet(
         store_param = request.query_params.get("store") or request.query_params.get("store_id")
         if store_param:
             queryset = _filter_notifications_by_store(queryset, store_param)
-        updated = queryset.update(unread=False)
+        now = timezone.now()
+        updated = queryset.update(unread=False, read_at=now, updated_at=now)
         from notification.realtime import publish
         publish(request.user.pk, {'event': 'notification.changed'})
         return Response({"updated": updated})

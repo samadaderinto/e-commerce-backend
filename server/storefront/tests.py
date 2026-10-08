@@ -18,7 +18,7 @@ from notification.models import NotificationDelivery
 from notification.tasks import deliver_notification_task
 from payment.models import Coupon, CouponRedemption, Order
 from product.models import Product
-from store.models import Schedule, Store
+from store.models import StoreAddress, Schedule, Store
 from store.services import publish_due_products
 from storefront.serializers import unit_price
 from storefront.views import order_data
@@ -90,16 +90,118 @@ class StorefrontTests(TestCase):
         self.buyer = User.objects.create_user(email='buyer@test.com', password='Strong-test-password-123', first_name='Alex')
         self.seller = User.objects.create_user(email='seller@test.com', password='Strong-test-password-123')
         self.store = Store.objects.create(user=self.seller, name='Test store', status=Store.STATUS_ACTIVE, verified_at=timezone.now())
+        StoreAddress.objects.create(store=self.store, is_default=True, **{'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'})
         self.product = Product.objects.create(store=self.store, title='A speaker', description='Portable', category='electronics', price='10000.00', discount=15, available=5)
         self.address = Address.objects.create(user=self.buyer, address='12 Test Road', city='Tampa', state='Florida', country='United States', zip='33601')
         self.client = APIClient()
         self.client.force_authenticate(self.buyer)
 
+    def test_variant_selection_prices_stock_and_cancellation(self) -> None:
+        self.product.price = Decimal('20')
+        self.product.discount = 0
+        self.product.variants = [{'name': 'Small', 'available': 0, 'price_delta': '0'}, {'name': 'Large', 'available': 3, 'price_delta': '5'}]
+        self.product.save()
+        response = self.client.post('/api/v1/cart/', {'product': self.product.pk, 'variant': 'Small', 'quantity': 1}, format='json')
+        self.assertEqual(response.status_code, 400)
+        response = self.client.post('/api/v1/cart/', {'product': self.product.pk, 'variant': 'Large', 'quantity': 2}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['subtotal'], '50.00')
+        response = self.checkout()
+        self.assertEqual(response.status_code, 201, response.data)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.variants[1]['available'], 1)
+        order = Order.objects.get(pk=response.data['id'])
+        # Restore using the canonical inventory operation used by cancellation.
+        from payment.services import restore_order_inventory
+        restore_order_inventory(order)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.variants[1]['available'], 3)
+
+    def test_cancelled_digital_orders_cannot_download(self) -> None:
+        self.product.is_digital = True
+        self.product.digital_file_url = 'digital_products/book.pdf'
+        self.product.save()
+        self.add(1)
+        response = self.checkout()
+        self.assertEqual(response.status_code, 201, response.data)
+        Order.objects.filter(pk=response.data['id']).update(status='cancelled')
+        response = self.client.get(f"/api/v1/orders/{response.data['id']}/downloads/{self.product.pk}/")
+        self.assertEqual(response.status_code, 404)
+
+    @override_settings(STRIPE_SECRET='sk_test', STRIPE_WALLET_PAYMENT_METHODS='card')
+    @patch('storefront.views.stripe.Refund.create')
+    @patch('storefront.views.stripe.checkout.Session.retrieve')
+    @patch('storefront.views.stripe.checkout.Session.create')
+    def test_split_checkout_reserves_wallet_and_refunds_changed_cart(self, create, retrieve, refund) -> None:
+        from core.services import credit_user_wallet, debit_user_wallet
+        from rest_framework.exceptions import ValidationError
+        from payment.models import CheckoutAttempt
+        credit_user_wallet(self.buyer, Decimal('50'), 'Initial credit')
+        self.add(1)
+        create.return_value = SimpleNamespace(id='cs_split', url='https://checkout.test')
+        key = str(uuid4())
+        response = self.client.post('/api/v1/checkout/wallet-session/', {'address': self.address.pk, 'checkout_key': key, 'wallet_amount': '50'}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        with self.assertRaises(ValidationError):
+            debit_user_wallet(self.buyer, Decimal('1'), 'Concurrent purchase')
+        metadata = create.call_args.kwargs['metadata']
+        amount = create.call_args.kwargs['line_items'][0]['price_data']['unit_amount']
+        retrieve.return_value = {'payment_status': 'paid', 'payment_intent': 'pi_split', 'client_reference_id': str(self.buyer.pk), 'metadata': metadata, 'amount_total': amount, 'currency': 'usd'}
+        self.product.price = Decimal(str(self.product.price)) + Decimal('1')
+        self.product.save()
+        response = self.client.post('/api/v1/checkout/wallet-confirm/', {'session_id': 'cs_split'}, format='json')
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(CheckoutAttempt.objects.get(checkout_key=key).status, 'refunded')
+        self.assertEqual(refund.call_count, 1)
+        self.assertFalse(Order.objects.filter(checkout_key=key).exists())
+
+    @override_settings(STRIPE_SECRET='sk_test', STRIPE_WALLET_PAYMENT_METHODS='card')
+    @patch('storefront.views.stripe.Refund.create')
+    @patch('storefront.views.stripe.checkout.Session.retrieve')
+    @patch('storefront.views.stripe.checkout.Session.create')
+    def test_coupon_depletion_after_stripe_payment_is_compensated(self, create, retrieve, refund) -> None:
+        from payment.models import CheckoutAttempt
+        coupon = Coupon.objects.create(code='LASTONE', discount=10, num_available=1, valid_to=timezone.now() + timedelta(days=1))
+        self.add(1)
+        create.return_value = SimpleNamespace(id='cs_coupon', url='https://checkout.test')
+        key = str(uuid4())
+        response = self.client.post('/api/v1/checkout/wallet-session/', {'address': self.address.pk, 'checkout_key': key, 'coupon': coupon.code}, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        kwargs = create.call_args.kwargs
+        retrieve.return_value = {'payment_status': 'paid', 'payment_intent': 'pi_coupon', 'client_reference_id': str(self.buyer.pk), 'metadata': kwargs['metadata'], 'amount_total': kwargs['line_items'][0]['price_data']['unit_amount'], 'currency': 'usd'}
+        coupon.num_used = 1
+        coupon.active = False
+        coupon.save()
+        response = self.client.post('/api/v1/checkout/wallet-confirm/', {'session_id': 'cs_coupon'}, format='json')
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(CheckoutAttempt.objects.get(checkout_key=key).status, 'refunded')
+        self.assertEqual(refund.call_count, 1)
+        self.assertFalse(Order.objects.filter(checkout_key=key).exists())
+
+    def test_digital_download_streams_bytes_without_storage_redirect(self) -> None:
+        from tempfile import TemporaryDirectory
+        from django.core.files.storage import default_storage
+        from django.core.files.base import ContentFile
+        with TemporaryDirectory() as directory, override_settings(MEDIA_ROOT=directory):
+            path = default_storage.save('digital_products/private-book.txt', ContentFile(b'Purchased content'))
+            self.product.is_digital = True
+            self.product.digital_file_url = path
+            self.product.save()
+            self.add(1)
+            order = self.checkout()
+            self.assertEqual(order.status_code, 201, order.data)
+            response = self.client.get(f"/api/v1/orders/{order.data['id']}/downloads/{self.product.pk}/")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn('Location', response.headers)
+            self.assertEqual(b''.join(response.streaming_content), b'Purchased content')
+
     def add(self, quantity=2):
         return self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': quantity}, format='json')
 
     def checkout(self, **kwargs):
-        data = {'address': self.address.pk, 'checkout_key': str(uuid4())}
+        if 'payment_type' not in kwargs:
+            credit_user_wallet(self.buyer, Decimal('100000'), 'Checkout test funds')
+        data = {'address': self.address.pk, 'checkout_key': str(uuid4()), 'payment_type': 'user_wallet'}
         data.update(kwargs)
         return self.client.post('/api/v1/checkout/', data, format='json')
 
@@ -206,7 +308,9 @@ class StorefrontTests(TestCase):
         self.assertEqual(rate_res.data[0]['carrier'], 'DIGITAL')
         self.assertEqual(rate_res.data[0]['amount'], '0.00')
 
+        credit_user_wallet(self.buyer, Decimal('10000'), 'Digital purchase test funds')
         response = self.client.post('/api/v1/checkout/', {
+            'payment_type': 'user_wallet',
             'checkout_key': str(uuid4()),
             'shipping_quote': rate_res.data[0]['quote_token'],
             'shipping_service': 'digital_delivery',
@@ -640,6 +744,8 @@ class StorefrontTests(TestCase):
 
         # Backdate the order past the 7-day refund window
         Order.objects.filter(user=self.buyer).update(created=timezone.now() - timedelta(days=8))
+        from store.models import StoreEarningsLedger
+        StoreEarningsLedger.objects.filter(order__user=self.buyer).update(available_at=timezone.now() - timedelta(days=1))
 
         # Payout request now succeeds
         payout_resp = self.client.post(f'/api/v1/stores/{self.store.pk}/payouts/', {
@@ -815,6 +921,7 @@ class UnverifiedStorePreviewTests(TestCase):
             status=Store.STATUS_PENDING,
             verified_at=None,
         )
+        StoreAddress.objects.create(store=self.unverified_store, is_default=True, **{'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'})
         self.unverified_product = Product.objects.create(
             store=self.unverified_store,
             title='Prototype Widget',
@@ -919,6 +1026,7 @@ class ExtendedStorefrontFeatureTests(TestCase):
         self.store = Store.objects.create(
             user=self.seller, name='Prime Store', username='prime_store', status=Store.STATUS_ACTIVE, verified_at=timezone.now()
         )
+        StoreAddress.objects.create(store=self.store, is_default=True, address='1 Main St', city='Tampa', state='FL', country='US', zip='33602')
         self.product = Product.objects.create(
             store=self.store, title='Smart Watch', description='Fitness tracker',
             category='electronics', price='100.00', discount=0, available=10, visibility=True
@@ -970,6 +1078,7 @@ class ExtendedStorefrontFeatureTests(TestCase):
         order = Order.objects.create(
             user=self.user, status='confirmed', ordered=True,
             total=Decimal('100.00'), subtotal=Decimal('100.00'),
+            paid_total=Decimal('100.00'), wallet_paid=Decimal('100.00'), payment_type='user_wallet',
             items_snapshot=[{'product': self.product.pk, 'title': 'Smart Watch', 'quantity': 2, 'unit_price': '50.00', 'is_digital': False}],
             address_snapshot={'address': '123 Main St'},
         )

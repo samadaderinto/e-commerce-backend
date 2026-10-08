@@ -34,6 +34,7 @@ class UserWalletSerializer(serializers.ModelSerializer):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    created = serializers.DateTimeField(source='date_joined', read_only=True)
     class Meta:
         model = User
         fields = [
@@ -46,7 +47,10 @@ class UserSerializer(serializers.ModelSerializer):
             "gender",
             "created",
             "updated",
+            "last_login",
+            "last_active_at",
         ]
+        read_only_fields = ['created', 'updated', 'last_login', 'last_active_at']
 
 class StaffSerializer(serializers.ModelSerializer):
 

@@ -1,5 +1,19 @@
 # Backend documentation
 
+## Lifecycle tracking
+
+`User.updated` records profile/credential changes, while JWT sign-in updates `last_login`. Authenticated requests update `last_active_at` for the user and owned/assigned stores at most once every five minutes; activity writes do not change profile/catalog revision times. Existing device records matching the authenticated user and direct request IP receive the sign-in timestamp. Guest browsing is not assigned to a user.
+
+Product detail visits refresh `Recent.updated` under a user row lock. Cart additions, quantity changes, and removals touch `Cart.updated`. Product, image, specification, and store-profile/address revisions touch `Store.updated`. Product serializers expose both creation and revision timestamps as read-only metadata.
+
+Authorized store/product management requests also refresh the selected store's activity, including official-store operations by staff without an explicit assignment. Public customer store visits never mark a merchant active.
+
+`Order.ordered_date` is immutable after creation. Model saves persist `status_updated_at` only on transitions, and record `cancelled_at` / `refunded_at` for those states. Successful partial refunds also record `refunded_at` without changing order status. Tracking events continue to carry the per-event audit trail. Use `save()` for lifecycle transitions; queryset updates bypass model tracking.
+
+Notifications record `read_at` and `updated_at` on individual/bulk reads; marking unread clears `read_at`. Push registration refreshes `last_active_at`, and successful push delivery records `last_sent_at`. Review content changes persist `is_edited`, including edits performed within one second of creation. Reserved coupon redemptions record `last_used_at`. Affiliate redirects increment click counts atomically and record `last_clicked_at`.
+
+Run migrations before serving the updated code. Historical activity/read/transition times remain null when no reliable timestamp exists. Existing `ordered_date` values are retained: previously overwritten values cannot be reconstructed with certainty. New user/notification revision fields establish a baseline at migration time.
+
 The backend lives in `server/`. It is a Django project whose Python settings
 package is still named `codematics`. The integrated marketplace runtime uses
 `codematics.storefront_settings`.
@@ -78,9 +92,9 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 ## ProAce User Wallet, Order Cancellation, and 7-day refunds
 
 - **Customer Wallet (`/api/v1/wallet/`)**: Every registered customer has an integrated store balance for instant 1-click checkout purchases and instant store credit refund resolution.
-- **Wallet Top-Up (`/api/v1/wallet/topup-session/`, `/wallet/topup-confirm/`)**: Customers can top up their wallet balance with preset ($25, $50, $100, $250, $500) or custom ($5–$5,000) amounts.
+- **Wallet Top-Up (`/api/v1/wallet/topup-session/`, `/wallet/topup-confirm/`)**: Customers can top up their wallet balance with preset ($25, $50, $100, $250, $500) or custom ($5–$25,000) amounts, subject to $50,000 daily and $100,000 monthly limits including outstanding reservations.
 - **Split-Tender Payments**: Customers can combine available wallet balances with Stripe payments during checkout, deducting the wallet credit from the card charge.
-- **Order Cancellation (`/api/v1/orders/<id>/cancel/`)**: Customers can cancel orders in `pending` or `confirmed` status. Cancellation automatically restocks physical product inventory, logs an audit entry, and refunds the entire amount directly to the customer's ProAce Wallet as instant store credit (`SOURCE_REFUND`).
+- **Order Cancellation (`/api/v1/orders/<id>/cancel/`)**: Customers can cancel orders in `pending` or `confirmed` status. Cancellation locks the order, restocks remaining physical product/variant quantities once, closes pending refund claims, reverses merchant earnings, and refunds only the remaining settled funds. Wallet tender returns as `SOURCE_REFUND`; Stripe tender returns to its original payment method. Unpaid COD orders receive no credit. Cancellation is blocked after any store starts fulfillment.
 - **7-Day Refund Policy (`/api/v1/orders/<id>/refund/`)**: Customers can request refunds for physical items within 7 days of order placement. Refund destinations can be selected as ProAce Store Credit (instant wallet credit upon admin approval) or original payment method. Digital goods are non-refundable once delivered.
 
 ## Technical Super Admin Credential Synchronization
@@ -96,57 +110,49 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 
 ## Management commands & data seeding
 
-The repository includes three specialized Django management commands for seeding data, generating realistic stress load, and indexing products into Elasticsearch:
+The repository includes specialized Django management commands for seeding data, generating realistic stress load, and indexing products into Elasticsearch:
 
 | Command | Primary Purpose | Deterministic / Predictable? | Sample Data Size | Rebuilds Elasticsearch? |
 | :--- | :--- | :--- | :--- | :--- |
-| `seed_demo` | **Test / Demo suite setup** | **Yes** (Fixed emails, predictable accounts) | Small & focused | Automatically calls indexer |
-| `populate_fake_data` | **Stress & volume testing** | **No** (Randomized realistic data) | Large (150–500+ products, orders, reviews) | Automatically calls indexer |
+| `populate_fake_data` | **Comprehensive Seeding & Stress Testing** | **Yes** (Guarantees all key role accounts + realistic catalog/orders) | Configurable (`small`, `medium`, `large`, `huge`) | Automatically calls indexer |
 | `rebuild_product_index` | **Elasticsearch sync** | N/A (Syncs existing DB records) | Indexes whatever is in the DB | **Core function** |
 
-### 1. `seed_demo`
-- **File**: `server/storefront/management/commands/seed_demo.py`
-- **Purpose**: Creates deterministic, fixture-like test accounts and baseline catalog records for local onboarding and automated test suites (`client/tests/*.spec.ts`).
-- **Guaranteed Accounts Created** (using the password passed via `--password`):
-  - **Superuser**: `admin@proace.local` (Full technical super admin, syncs with Grafana/MinIO)
-  - **Staff Backoffice**: `staff@proace.local` (Order auditing & moderation)
+### 1. `populate_fake_data`
+- **File**: `server/core/management/commands/populate_fake_data.py`
+- **Purpose**: The authoritative single source for local catalog, transaction history, and account seeding. It always provisions all primary role profiles and realistic catalog datasets.
+- **Guaranteed Accounts Created** (using the password passed via `--password`, or `DEFAULT_ADMIN_PASSWORD` from `.env`, defaulting to `ProaceDemo2026!`):
+  - **Superuser / Technical Admin**: `admin@proace.local` (Full technical super admin, `is_superuser=True, is_staff=True`, syncs with Grafana/MinIO)
+  - **Business Admin**: `business-admin@proace.local` (`is_business_admin=True, is_staff=True, is_superuser=False`, platform operator)
+  - **Staff Backoffice**: `staff@proace.local` (`is_staff=True, is_superuser=False, is_business_admin=False`, order review & moderation)
   - **Single-store seller**: `seller@proace.local` (Owns store *Apex Athletics*)
-  - **Multi-store merchant**: `merchant@proace.local` (Owns stores across all 6 tier badges: Starter, Booster, Accelerator, Power, Mega, Legendary)
+  - **Multi-store merchant**: `merchant@proace.local` (Owns stores across seller tier badges)
   - **Shopper / Buyer**: `shopper@proace.local` and `buyer@proace.local`
-  - **Moderation accounts**: `pending-seller@proace.local` (unapproved store), `blocked-seller@proace.local` (suspended store)
-- **Automatic Indexing**: Triggers Elasticsearch index rebuild automatically if Elasticsearch is enabled and available.
-- **Usage**:
-  ```sh
-  # Local Python virtual environment
-  .venv/bin/python server/manage.py seed_demo --password 'ProaceDemo2026!'
-
-  # Inside Docker Compose
-  docker compose -f server/compose.yaml exec api python manage.py seed_demo --password 'ProaceDemo2026!'
-  ```
-
-### 2. `populate_fake_data` (Alias: `seed_fake_data`)
-- **File**: `server/storefront/management/commands/populate_fake_data.py`
-- **Purpose**: Generates high-volume, realistic marketplace catalog and transactional history for UI benchmarking, load testing, and visual development.
-- **What it generates**:
-  - Products with complete specifications schemas (dimensions, colors, serial numbers), variant matrices (sizes, colors, price adjustments), and Unsplash image galleries.
-  - Historical orders across lifecycles (`PENDING`, `PROCESSING`, `SHIPPED`, `DELIVERED`, `CANCELLED`) with realistic carrier tracking (USPS, FedEx, DHL, UPS).
-  - Customer reviews with star ratings and attached photos.
+  - **Moderation accounts**: `pending-seller@proace.local` (unapproved store), `blocked-seller@proace.local` (suspended store), `blocked-staff@proace.local`, `unverified@proace.local`
+- **Catalog & Financial Data**:
+  - Products with complete specifications schemas, variant matrices, and images.
+  - Historical orders across lifecycles (`pending`, `confirmed`, `shipped`, `delivered`, `cancelled`, `refunded`) with carrier tracking.
+  - Customer reviews with star ratings and photos.
   - Financial records: customer wallets, 7-day refund hold escrow balances (`in_review`), and cleared payout funds (`cleared_net`).
 - **CLI Options**:
-  - `--scale standard`: Generates ~150 products, ~350 orders, ~65 users, 12 stores (default password `Password123!`).
+  - `--scale medium` (default): Generates ~150 products, ~350 orders, ~65 users, 12 stores.
+  - `--scale small`: Generates ~45 products, ~90 orders, ~25 users, 6 stores.
   - `--scale large`: Generates ~500 products, ~1500 orders, ~200 users, 25 stores.
+  - `--password <pass>`: Override the dev password for all seeded accounts (defaults to `DEFAULT_ADMIN_PASSWORD` or `ProaceDemo2026!`).
   - `--clear`: Wipes existing fake catalog and orders before populating.
   - `--products <N>`, `--orders <N>`, `--users <N>`: Custom granular counts.
 - **Usage**:
   ```sh
-  # Standard scale
-  .venv/bin/python server/manage.py populate_fake_data --scale standard
+  # Standard seeding (provisions all role profiles + catalog)
+  .venv/bin/python server/manage.py populate_fake_data
+
+  # Inside Docker Compose
+  docker compose -f server/compose.yaml exec api python manage.py populate_fake_data
 
   # Clean wipe with custom product/order counts
   .venv/bin/python server/manage.py populate_fake_data --clear --products 200 --orders 500
   ```
 
-### 3. `rebuild_product_index`
+### 2. `rebuild_product_index`
 - **File**: `server/product/management/commands/rebuild_product_index.py`
 - **Purpose**: Recreates and populates the Elasticsearch product index (`commerce-products`) directly from the PostgreSQL / SQLite database.
 - **When to run**:
@@ -162,6 +168,20 @@ The repository includes three specialized Django management commands for seeding
   # Inside Docker Compose
   docker compose -f server/compose.yaml exec api python manage.py rebuild_product_index
   ```
+
+### 4. Background & Operational Commands
+
+Beyond the catalog seeding tools, the backend includes essential operational commands:
+
+| Command | File | Description & Usage |
+| :--- | :--- | :--- |
+| `settle_merchant_earnings` | `server/store/management/commands/settle_merchant_earnings.py` | **Financial Escrow Settlement**: Scans merchant ledger sales currently in `in_review` (held during the 7-day customer refund window) and moves funds whose 7-day period has elapsed to `cleared_net` for withdrawal.<br>`python server/manage.py settle_merchant_earnings` |
+| `publish_scheduled_products` | `server/store/management/commands/publish_scheduled_products.py` | **Catalog Release Scheduler**: Publishes draft merchant products whose scheduled visibility release date/time has arrived.<br>`python server/manage.py publish_scheduled_products` |
+| `recover_privileged_user` | `server/core/management/commands/recover_privileged_user.py` | **Emergency Admin Recovery**: Resets a superuser, staff, or business admin password locally without needing working email delivery. Automatically synchronizes new credentials to MinIO and Grafana.<br>`python server/manage.py recover_privileged_user admin@proace.local --password 'NewPassword123!'` |
+| `create_business_admin` | `server/core/management/commands/create_business_admin.py` | **Business Admin Provisioning**: Creates an operational business admin (`is_business_admin=True`, `is_staff=True`, `is_superuser=False`) isolated from technical infrastructure credentials.<br>`BUSINESS_ADMIN_PASSWORD='...' python server/manage.py create_business_admin --email biz@proace.local` |
+| `ensure_default_admin` | `server/core/management/commands/ensure_default_admin.py` | **Idempotent Bootstrapper**: Checks environment variables (`DEFAULT_ADMIN_*`, `DEFAULT_STAFF_*`) and creates default admin/staff accounts idempotently if they do not exist.<br>`python server/manage.py ensure_default_admin` |
+| `rebuild_notification_index` | `server/notification/management/commands/rebuild_notification_index.py` | **Notification Search Sync**: Rebuilds the Elasticsearch notifications index (`commerce-notifications`) from PostgreSQL records.<br>`python server/manage.py rebuild_notification_index --clean` |
+| `consume_logs` | `server/observability/management/commands/consume_logs.py` | **Kafka Log Consumer**: Consumes structured application logs from Kafka topics into the local searchable `LogEntry` audit database.<br>`python server/manage.py consume_logs --group commerce-log-indexer` |
 
 ## Search
 
@@ -212,10 +232,16 @@ Runtime configuration:
 | `FCM_ENABLED` | Enables optional Firebase Cloud Messaging delivery for inbox notifications |
 | `FIREBASE_PROJECT_ID` | Firebase project ID used by the Firebase Admin SDK |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to a service-account credential file, supplied outside the repository |
+| `CLICKBANK_AFFILIATE_NICKNAME` | ProAce platform affiliate tracking nickname injected into outbound HopLinks (default: `proace`) |
+| `CLICKBANK_SECRET_KEY` | Secret passphrase used to verify and decrypt ClickBank Instant Notification Service (INS) webhooks |
+| `CLICKBANK_DEV_KEY` | ClickBank Developer API key for marketplace and reporting APIs |
 
 Backend tools added or wired:
 
 - `gunicorn`: production-style WSGI server used by the container.
+  `server/gunicorn.conf.py` disables the optional `gunicornc` control socket;
+  Docker manages shutdown and restart through signals. HTTP serving is unaffected,
+  and no management socket is created on the `/app` host bind mount.
 - `psycopg[binary]`: PostgreSQL driver for Django.
 - `django-redis`: Redis-backed Django cache.
 - `django-storages`: storage abstraction; S3 dependencies live in
@@ -248,7 +274,7 @@ From the repository root:
 python3 -m venv .venv
 .venv/bin/python -m pip install -r server/requirements.txt
 .venv/bin/python server/manage.py migrate --settings=codematics.storefront_settings
-.venv/bin/python server/manage.py seed_demo --settings=codematics.storefront_settings --password 'ProaceDemo2026!'
+.venv/bin/python server/manage.py populate_fake_data --settings=codematics.storefront_settings --password 'ProaceDemo2026!'
 .venv/bin/python server/manage.py runserver 127.0.0.1:8000 --settings=codematics.storefront_settings
 ```
 
@@ -282,3 +308,80 @@ management commands or backend tests.
 
 See [role matrix, staff activation, and operator setup](access-control.md) and
 [multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).
+
+## Product weight and user activity
+
+Merchant product validation accepts zero weight for digital listings and normalizes digital stock and weight to zero. Physical listings require weight of at least 0.01 lb on create and update. The staff user-detail endpoint orders notification activity by `timestamp`, exposes it as `created`, and serializes user, wallet, orders and activity through an explicit response schema.
+
+Product updates accept the existing server-generated cover URL, including local media hostnames; new pasted cover URLs still undergo URL validation.
+
+Purchase validation also rejects existing stores without a complete default business address, including digital-only stores. Missing physical shipment origins return a validation error rather than silently using Tampa.
+
+Time handling: Django stores timezone-aware UTC instants (`TIME_ZONE=UTC`, `USE_TZ=True`). Browser date/time inputs display local time and submit ISO UTC timestamps. Dashboard requests accept a validated IANA `time_zone` (UTC by default); the browser supplies its timezone for local calendar-day reporting. Date-only chart labels are preserved without timezone shifts. Cron and carrier request clocks use aware UTC; flash countdowns include minutes.
+
+Military postal delivery: APO/FPO/DPO destinations use USPS only with the currently supported integrations. Checkout disables other carrier options and the server rejects unsupported carriers in both demo and live rating and payment flows. Address city/state/ZIP must agree: AA uses 340xx, AE uses 090xx–098xx, AP uses 962xx–966xx, with country United States. This is a supported-service policy, not a claim that all commercial postal handoff services are prohibited: UPS Ground Saver and Mail Innovations have military-address support but are not integrated here. See [USPS military addressing standards](https://pe.usps.com/text/dmm300/703.htm) and [UPS supported services](https://www.ups.com/us/en/support/shipping-support/print-shipping-labels/how-to-write-address). ZIP blocks alone do not guarantee an active destination or eligibility for every USPS service; live carrier availability and military mail content/customs requirements still apply.
+
+Checkout safety: `payment.CheckoutAttempt` durably tracks wallet reservations, paid-checkout compensation and expiry; `payment.recover_checkout_attempts` runs every minute through Celery Beat. `CartItem.variant` stores the selected option name and checkout locks variant/master stock while using server-calculated prices. Merchant financial summaries use immutable ledger records and preserve negative debt. Buyer downloads stream bytes only for eligible paid-order statuses. See [audit remediation](security-audit-remediation.md), including required migrations and recovery deployment requirements.
+
+## Hybrid Multi-Jurisdiction Tax Calculation Engine
+
+The platform provides a dual-layer destination sales tax engine adhering to the Enterprise Hybrid model (Option C):
+
+1. **Database-Driven Destination Rules (`payment.TaxJurisdiction`)**:
+   - Stores granular tax rates with 5 decimal places of precision (`rate = DecimalField(max_digits=7, decimal_places=5)`) to support exact municipal and special district tax rates (e.g. NYC `0.08875`).
+   - Supports 5-digit ZIP prefix overrides that take precedence over state-level statutory baselines.
+   - Distinct taxability switches: `tax_shipping` (determines whether carrier shipping fees are taxed) and `tax_digital` (determines whether digital goods are taxable or exempt).
+   - Inherent state tax exemptions: Explicit active ZIP/state rules take precedence over zero-rate defaults for Alaska, Delaware, Montana, New Hampshire, and Oregon. International deliveries are zero-rated.
+2. **Pluggable Stripe Tax Adapter (`server/payment/tax.py`)**:
+   - Configured via `TAX_PROVIDER=stripe` and `STRIPE_TAX_ENABLED=true`.
+   - Directly integrates with `stripe.tax.Calculation.create` using shipping destination, product lines, and postal details.
+   - **Fault-Tolerant Degraded Fallback**: If Stripe Tax experiences an outage, network timeout, rate limit, or invalid credentials, the provider catches the exception, logs a warning, and automatically falls back to `LocalTaxProvider` with zero disruption to checkout.
+3. **Comprehensive Audit Snapshots (`Order.tax_snapshot`)**:
+   - Every order persists a detailed JSON audit snapshot (`tax_snapshot`) containing `amount`, `rate`, `jurisdiction`, `taxable_merchandise`, `taxable_shipping`, `shipping_tax`, `provider`, `is_exempt`, and `details`.
+4. **Seed Automation**:
+   - `populate_fake_data` automatically seeds statutory tax rules across all 50 US states + DC via `seed_tax_jurisdictions()`.
+5. **Backoffice Administration & API Endpoints**:
+   - `/api/v1/admin/taxes/` (`GET`, `POST`): Lists tax jurisdictions with search, state filtering, and status filtering. Allows creating new state rules or 5-digit ZIP overrides.
+   - `/api/v1/admin/taxes/<int:pk>/` (`GET`, `PATCH`, `DELETE`): Partial update of rates, taxability flags, active status, or removal of overrides.
+   - `/api/v1/admin/taxes/seed-defaults/` (`POST`): Restores or resets default baseline statutory rates for all 50 US states and DC.
+   - Django Admin: Registered at `/admin/payment/taxjurisdiction/` with inline rate editing, status filters, and search.
+
+## ClickBank Affiliate Partner Integration
+
+The platform supports hybrid commerce where third-party ClickBank affiliate products coexist cleanly with native merchant listings:
+
+1. **Schema & Models (`server/product/models.py` & `server/affiliates/models.py`)**:
+   - `Product.product_type`: Categorized as `'standard'` or `'affiliate_clickbank'`.
+   - `Product.affiliate_hoplink`: Validated HTTP/HTTPS vendor HopLink URL.
+   - `Product.affiliate_vendor_nickname`: ClickBank vendor nickname identifier.
+   - `Product.affiliate_button_text`: Call-to-action button label (e.g. `'Buy on Partner Site'`).
+   - `ClickBankOutboundClick`: Records each outbound redirection with foreign keys to `Product` and `User` (or `guest`), tracking token (`tracking_id`), HopLink used, client IP address, and User-Agent.
+   - `ClickBankConversion`: Prepares data structures for future webhook or postback attribution matching.
+2. **Outbound Redirector Endpoint (`/api/v1/affiliates/clickbank/outbound/<product_id>/`)**:
+   - Verifies product existence, published status, and active store status.
+   - Open redirect protection: enforces standard HTTP/HTTPS schemes with non-empty netlocs.
+   - Generates unique attribution tracking tokens (`cb_user_<nanoid>` or `cb_guest_<nanoid>`).
+   - Appends `&tid=<token>` to the target HopLink and records the click event.
+   - Issues an HTTP 302 redirect to the external partner destination.
+3. **Validation & Checkout Guardrails**:
+   - `MerchantProductSerializer`: Enforces non-empty, valid URL HopLinks when `product_type == 'affiliate_clickbank'`. Clears shipping weight/dimensions and defaults `available = 999` while bypassing variant requirements.
+   - Cart addition protection: `CartViewSet.add_to_cart` immediately rejects affiliate items with HTTP 400 and provides the partner HopLink.
+   - Cron protection: `server/product/cron.py` skips auto-marking affiliate products as "sold out".
+4. **Staff Catalog Audit**:
+   - `StoreAuditProductSerializer` exposes affiliate metadata and `StaffViewSet.store_products` supports filtering by `product_type=affiliate_clickbank` for compliance oversight.
+
+## Settled-payment accounting and audit remediation
+
+`Order.paid_total` and `wallet_paid` record actual settlement; `refunded_total`, `wallet_refunded_total`, and `card_refunded_total` cap cumulative reversals. Database constraints enforce nonnegative totals and tender consistency. Order placement is distinct from payment: physical COD has no paid balance, earns no payout credit, and cannot unlock digital downloads or receive monetary refunds.
+
+Checkout snapshots persist `line_subtotal`, `discount_amount`, `net_total`, `tax_amount`, and `line_total`. Coupon allocations conserve cents across eligible lines; refunds use final line amounts and earnings use discounted merchandise amounts. Shipping quotes accept the applied coupon so preview and checkout share the tax basis. Local tax snapshots retain exact line taxes; Stripe Tax receives discounted lines and its returned line/shipping taxes are retained when available.
+
+Cancellation, refund creation and approval acquire the same order lock. Claims reserve quantities; approved claims reduce remaining inventory and refundable funds. Original-payment split refunds distribute only the remaining wallet/card tender, and card operations use provider idempotency. Provider failures leave the transaction retriable instead of recording fictional refunds. Cancellation also reverses merchant ledgers. The existing seven-day escrow applies only to verified settled sales.
+
+`OrderFulfillment` records status, carrier and tracking per store. Merchant updates permit forward fulfillment transitions only; global completion requires all physical store shipments to finish. Financial statuses use the support/payment workflows.
+
+`WalletFundingAttempt` reserves deposit allowance at session creation. Confirmations lock the user, verify ownership, currency and amount, and credit a unique session receipt once. Paid invalid/over-limit sessions are refunded; failed refunds retain a durable `refund_pending` state. Celery Beat runs `recover_wallet_funding` every 60 seconds to recover paid sessions and expire unpaid sessions at Stripe before releasing allowance.
+
+Apply core migration 0019 and payment migrations 0018–0020 with `python server/manage.py migrate`, then restart the API, Celery workers and Celery Beat to load the new models/tasks. The historical backfill recognizes wallet debit receipts and legacy confirmed Stripe session references. Unverifiable older orders remain unpaid for refund, download and payout eligibility until reconciled. It does not change wallet balances, rewrite immutable tax snapshots, or claw back historical overcredits. Operators must reconcile any previous duplicate refunds or coupon-inflated earnings separately. The canonical seeder explicitly marks its simulated historical payments as wallet settlements.
+
+Generated affiliate links use configured `FRONTEND_URL` and `/api/affiliates/r/<product>/<identifier>/`, matching the same-origin redirect route.

@@ -1,5 +1,5 @@
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.core.management import call_command
@@ -127,3 +127,35 @@ def test_provisioned_superuser_can_log_into_admin(client):
         email=admin_values["DEFAULT_ADMIN_EMAIL"],
         password=admin_values["DEFAULT_ADMIN_PASSWORD"],
     )
+
+
+def test_sync_technical_admin_credentials_isolates_business_admin_and_staff():
+    from core.auth_sync import is_technical_super_admin, sync_technical_admin_credentials
+    staff_user = User(email="staff@proace.local", is_staff=True, is_superuser=False, is_business_admin=False)
+    biz_user = User(email="business@proace.local", is_staff=True, is_superuser=False, is_business_admin=True)
+    tech_user = User(email="admin@proace.local", is_staff=True, is_superuser=True, is_business_admin=False)
+
+    assert not is_technical_super_admin(staff_user)
+    assert not is_technical_super_admin(biz_user)
+    assert is_technical_super_admin(tech_user)
+
+    staff_result = sync_technical_admin_credentials(staff_user, "NewPass123!")
+    assert not staff_result["synced"]
+
+
+def test_sync_minio_admin_password_gracefully_handles_missing_mc_cli():
+    from core.auth_sync import sync_minio_admin_password
+    with patch("shutil.which", return_value=None), patch("os.path.isfile", return_value=False):
+        result = sync_minio_admin_password("NewPass123!")
+        assert result["success"] is False
+        assert "mc" in result["message"]
+
+
+def test_sync_minio_admin_password_executes_mc_commands_when_installed():
+    from core.auth_sync import sync_minio_admin_password
+    with patch("shutil.which", return_value="/usr/local/bin/mc"):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="")
+            result = sync_minio_admin_password("NewPass123!")
+            assert result["success"] is True
+            assert mock_run.call_count == 3  # alias set, user add, policy attach

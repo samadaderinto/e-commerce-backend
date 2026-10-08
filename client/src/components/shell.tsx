@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, FormEvent, ReactNode } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, CheckCheck, ChevronDown, Heart, Inbox, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
+import { Archive, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, CheckCheck, ChevronDown, Heart, Inbox, Landmark, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
 import { api, categories } from '@/lib/api';
 import type { NotificationCounts, NotificationItem, Page, Store, User } from '@/lib/types';
 import { getFirebaseMessaging, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
@@ -31,22 +31,283 @@ export function Shell({ children }: { children: ReactNode }) {
   }, [user?.must_change_password, backoffice, consumerRoute, path, router]);
   if (sessionLoading) return <div className="container section" role="status">Loading your workspace…</div>;
   if (user?.must_change_password) return <MandatoryPasswordChange />;
-  if (backoffice) return <><header className="header"><div className="header-inner"><Link className="wordmark" href="/admin">proace<span>®</span></Link><nav aria-label="Back-office navigation"><Link href="/admin">Dashboard</Link> · <Link href="/admin/orders">Orders</Link> · <Link href="/admin/coupons">Coupons</Link> · <Link href="/admin/refunds">Refunds</Link> · <Link href="/admin/stores">Store directory</Link> · <Link href="/merchant">Stores & products</Link>{(user?.is_superuser || user?.is_business_admin) && <> · <Link href="/admin/staff">Staff</Link></>}</nav><ThemeToggle /><AccountMenu /><NotificationCenter /></div></header><main id="main">{consumerRoute ? <div className="container section">Opening dashboard…</div> : children}</main></>;
-  return <>
-    <a className="skip-link" href="#main">Skip to content</a>
-    <div className="announcement"><span>Good finds. Great days.</span><span>Physical delivery: US only · Digital: worldwide <ArrowUpRight size={13} /></span><Link href="/merchant">Sell on ProAce <ArrowUpRight size={13} /></Link></div>
-    <header className="header"><div className="header-inner">
-      <button className="icon-button mobile-menu" aria-label="Open navigation" onClick={() => setMenu(!menu)}>{menu ? <X /> : <Menu />}</button>
-      <Link href="/" className="wordmark" aria-label="ProAce home">proace<span>®</span></Link>
-      <form className="search-box" onSubmit={submit}><Search size={19} /><input aria-label="Search products" value={search} onChange={event => setSearch(event.target.value)} placeholder="What are you looking for?" /><button type="submit" aria-label="Search"><ArrowUpRight size={19} /></button></form>
-      <div className="header-actions"><ThemeToggle />{(user?.is_staff || user?.is_superuser) && <Link href="/admin" className="icon-button" aria-label="Platform dashboard" title="Platform dashboard"><ChartNoAxesCombined size={21} /></Link>}{(user?.is_superuser || user?.is_business_admin) && <Link href="/admin/staff" className="icon-button" aria-label="Manage staff" title="Manage staff"><UsersRound size={21} /></Link>}<AccountMenu />{user && <NotificationCenter />}{!user?.is_staff && !user?.is_superuser && !user?.is_business_admin && <><Link href="/saved" className="icon-button" aria-label="Saved items" title="Saved items"><Heart size={21} /></Link><Link href="/cart" className="bag-link" aria-label={`Shopping bag, ${cart.items.reduce((n, row) => n + row.quantity, 0)} items`}><ShoppingBag size={21} /><span className="bag-text">Bag</span><b>{cart.items.reduce((n, row) => n + row.quantity, 0)}</b></Link></>}</div>
-    </div></header>
-    {!merchant && <nav className="category-nav" aria-label="Main navigation"><div className="container"><Link className="all-categories" href="/shop"><Menu size={16} />All categories<ChevronDown size={14} /></Link>{categories.slice(0, 5).map(category => <Link key={category.key} href={`/shop?category=${category.key}`}>{category.name}</Link>)}<Link className="deals-link" href="/shop?deals=true">Everyday deals <span /></Link></div></nav>}
-    {menu && <div className="mobile-drawer"><form className="search-box" onSubmit={submit}><Search size={18} /><input aria-label="Mobile search products" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search the shop" /><button aria-label="Submit search"><ArrowUpRight size={18} /></button></form><Link onClick={() => setMenu(false)} href="/shop">Shop everything</Link>{categories.map(category => <Link onClick={() => setMenu(false)} key={category.key} href={`/shop?category=${category.key}`}>{category.name}</Link>)}<Link onClick={() => setMenu(false)} href="/settings">App settings</Link><Link onClick={() => setMenu(false)} href="/merchant">Seller workspace</Link>{(user?.is_staff || user?.is_superuser) && <Link onClick={() => setMenu(false)} href="/admin">Platform dashboard</Link>}{(user?.is_superuser || user?.is_business_admin) && <Link onClick={() => setMenu(false)} href="/admin/staff">Manage staff</Link>}</div>}
-    <main id="main">{children}</main>
-    {!merchant && <><div className="benefits container"><div><Truck /><span><strong>US physical delivery</strong><small>Physical goods currently ship only within the US</small></span></div><div><ShieldCheck /><span><strong>Digital goods worldwide</strong><small>Eligible downloads are available globally</small></span></div><div><RotateCcw /><span><strong>Here to help</strong><small>{business.supportSchedule}</small></span></div></div>
-      <footer><div className="container footer-grid"><div><Link href="/" className="wordmark">proace<span>®</span></Link><p>{business.publicName}<br />A US marketplace based in {business.location}, with digital products available worldwide.</p><a href={contactLinks.supportEmail}>{business.supportEmail}</a><span>Phone: {business.mainPhone}</span><a href={contactLinks.whatsapp} target="_blank" rel="noreferrer">WhatsApp: {business.whatsapp}</a></div><div><h3>Discover</h3><Link href="/shop">Shop all</Link><Link href="/shop?deals=true">Everyday deals</Link><Link href="/saved">Saved items</Link></div><div><h3>Your ProAce</h3><Link href="/account">Your account</Link><Link href="/settings">App settings</Link><Link href="/account/orders">Your orders</Link><Link href="/merchant">Become a seller</Link></div><div><h3>Good to know</h3><Link href="/help">Help & delivery</Link><Link href="/privacy">Privacy policy</Link><Link href="/terms">Terms & returns</Link></div></div><div className="container footer-bottom"><span>© {new Date().getFullYear()} {business.legalName}. All rights reserved.</span><span>US physical delivery · Worldwide digital · USD $</span></div></footer></>}
-  </>;
+  if (backoffice) {
+    const links = [
+      { href: '/admin', label: 'Overview', icon: ChartNoAxesCombined },
+      { href: '/admin/orders', label: 'Orders', icon: Truck },
+      { href: '/admin/coupons', label: 'Coupons', icon: Archive },
+      { href: '/admin/taxes', label: 'Taxes', icon: Landmark },
+      { href: '/admin/refunds', label: 'Refunds', icon: RotateCcw },
+      { href: '/admin/stores', label: 'Store directory', icon: StoreIcon },
+      { href: '/merchant', label: 'Stores & products', icon: ShoppingBag },
+      ...((user?.is_superuser || user?.is_business_admin) ? [{ href: '/admin/staff', label: 'Staff team', icon: UsersRound }] : []),
+    ];
+    return (
+      <>
+        <a className="skip-link" href="#main">
+          Skip to content
+        </a>
+        <header className="header backoffice-header">
+          <div className="header-inner">
+            <Link className="wordmark" href="/admin">
+              proace<span>®</span>
+            </Link>
+            <span className="backoffice-label">Backoffice</span>
+            <div className="backoffice-tools">
+              <ThemeToggle />
+              <AccountMenu />
+              <NotificationCenter />
+            </div>
+          </div>
+          <nav className="backoffice-nav" aria-label="Back-office navigation">
+            {links.map(({ href, label, icon: Icon }) => {
+              const active =
+                href === '/admin' ? path === href : path === href || path.startsWith(`${href}/`);
+              return (
+                <Link key={href} href={href} aria-current={active ? 'page' : undefined}>
+                  <Icon size={17} />
+                  <span>{label}</span>
+                </Link>
+              );
+            })}
+          </nav>
+        </header>
+        <main id="main">
+          {consumerRoute ? <div className="container section">Opening dashboard…</div> : children}
+        </main>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <a className="skip-link" href="#main">
+        Skip to content
+      </a>
+      <div className="announcement">
+        <span>Good finds. Great days.</span>
+        <span>
+          Physical delivery: US only · Digital: worldwide <ArrowUpRight size={13} />
+        </span>
+        <Link href="/merchant">
+          Sell on ProAce <ArrowUpRight size={13} />
+        </Link>
+      </div>
+
+      <header className="header">
+        <div className="header-inner">
+          <button
+            className="icon-button mobile-menu"
+            aria-label="Open navigation"
+            onClick={() => setMenu(!menu)}
+          >
+            {menu ? <X /> : <Menu />}
+          </button>
+          <Link href="/" className="wordmark" aria-label="ProAce home">
+            proace<span>®</span>
+          </Link>
+          <form className="search-box" onSubmit={submit}>
+            <Search size={19} />
+            <input
+              aria-label="Search products"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="What are you looking for?"
+            />
+            <button type="submit" aria-label="Search">
+              <ArrowUpRight size={19} />
+            </button>
+          </form>
+          <div className="header-actions">
+            <ThemeToggle />
+            {(user?.is_staff || user?.is_superuser) && (
+              <Link
+                href="/admin"
+                className="icon-button"
+                aria-label="Platform dashboard"
+                title="Platform dashboard"
+              >
+                <ChartNoAxesCombined size={21} />
+              </Link>
+            )}
+            {(user?.is_superuser || user?.is_business_admin) && (
+              <Link
+                href="/admin/staff"
+                className="icon-button"
+                aria-label="Manage staff"
+                title="Manage staff"
+              >
+                <UsersRound size={21} />
+              </Link>
+            )}
+            <AccountMenu />
+            {user && <NotificationCenter />}
+            {!user?.is_staff && !user?.is_superuser && !user?.is_business_admin && (
+              <>
+                <Link
+                  href="/saved"
+                  className="icon-button"
+                  aria-label="Saved items"
+                  title="Saved items"
+                >
+                  <Heart size={21} />
+                </Link>
+                <Link
+                  href="/cart"
+                  className="bag-link"
+                  aria-label={`Shopping bag, ${cart.items.reduce((n, row) => n + row.quantity, 0)} items`}
+                >
+                  <ShoppingBag size={21} />
+                  <span className="bag-text">Bag</span>
+                  <b>{cart.items.reduce((n, row) => n + row.quantity, 0)}</b>
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </header>
+
+      {!merchant && (
+        <nav className="category-nav" aria-label="Main navigation">
+          <div className="container">
+            <Link className="all-categories" href="/shop">
+              <Menu size={16} />
+              All categories
+              <ChevronDown size={14} />
+            </Link>
+            {categories.slice(0, 5).map((category) => (
+              <Link key={category.key} href={`/shop?category=${category.key}`}>
+                {category.name}
+              </Link>
+            ))}
+            <Link className="deals-link" href="/shop?deals=true">
+              Everyday deals <span />
+            </Link>
+          </div>
+        </nav>
+      )}
+
+      {menu && (
+        <div className="mobile-drawer">
+          <form className="search-box" onSubmit={submit}>
+            <Search size={18} />
+            <input
+              aria-label="Mobile search products"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search the shop"
+            />
+            <button aria-label="Submit search">
+              <ArrowUpRight size={18} />
+            </button>
+          </form>
+          <Link onClick={() => setMenu(false)} href="/shop">
+            Shop everything
+          </Link>
+          {categories.map((category) => (
+            <Link
+              onClick={() => setMenu(false)}
+              key={category.key}
+              href={`/shop?category=${category.key}`}
+            >
+              {category.name}
+            </Link>
+          ))}
+          <Link onClick={() => setMenu(false)} href="/settings">
+            App settings
+          </Link>
+          <Link onClick={() => setMenu(false)} href="/merchant">
+            Seller workspace
+          </Link>
+          {(user?.is_staff || user?.is_superuser) && (
+            <Link onClick={() => setMenu(false)} href="/admin">
+              Platform dashboard
+            </Link>
+          )}
+          {(user?.is_superuser || user?.is_business_admin) && (
+            <Link onClick={() => setMenu(false)} href="/admin/staff">
+              Manage staff
+            </Link>
+          )}
+        </div>
+      )}
+
+      <main id="main">{children}</main>
+
+      {!merchant && (
+        <>
+          <div className="benefits container">
+            <div>
+              <Truck />
+              <span>
+                <strong>US physical delivery</strong>
+                <small>Physical goods currently ship only within the US</small>
+              </span>
+            </div>
+            <div>
+              <ShieldCheck />
+              <span>
+                <strong>Digital goods worldwide</strong>
+                <small>Eligible downloads are available globally</small>
+              </span>
+            </div>
+            <div>
+              <RotateCcw />
+              <span>
+                <strong>Here to help</strong>
+                <small>{business.supportSchedule}</small>
+              </span>
+            </div>
+          </div>
+
+          <footer>
+            <div className="container footer-grid">
+              <div>
+                <Link href="/" className="wordmark">
+                  proace<span>®</span>
+                </Link>
+                <p>
+                  {business.publicName}
+                  <br />A US marketplace based in {business.location}, with digital products
+                  available worldwide.
+                </p>
+                <a href={contactLinks.supportEmail}>{business.supportEmail}</a>
+                <span>Phone: {business.mainPhone}</span>
+                <a href={contactLinks.whatsapp} target="_blank" rel="noreferrer">
+                  WhatsApp: {business.whatsapp}
+                </a>
+              </div>
+              <div>
+                <h3>Discover</h3>
+                <Link href="/shop">Shop all</Link>
+                <Link href="/shop?deals=true">Everyday deals</Link>
+                <Link href="/saved">Saved items</Link>
+              </div>
+              <div>
+                <h3>Your ProAce</h3>
+                <Link href="/account">Your account</Link>
+                <Link href="/settings">App settings</Link>
+                <Link href="/account/orders">Your orders</Link>
+                <Link href="/merchant">Become a seller</Link>
+              </div>
+              <div>
+                <h3>Good to know</h3>
+                <Link href="/help">Help & delivery</Link>
+                <Link href="/privacy">Privacy policy</Link>
+                <Link href="/terms">Terms & returns</Link>
+              </div>
+            </div>
+            <div className="container footer-bottom">
+              <span>
+                © {new Date().getFullYear()} {business.legalName}. All rights reserved.
+              </span>
+              <span>US physical delivery · Worldwide digital · USD $</span>
+            </div>
+          </footer>
+        </>
+      )}
+    </>
+  );
 }
 
 function NotificationCenter() {
@@ -57,15 +318,36 @@ function NotificationCenter() {
   const panel = useRef<HTMLDivElement>(null);
   const notifyRef = useRef(notify);
   const client = useQueryClient();
-  const counts = useQuery({ queryKey: ['notifications', 'counts'], queryFn: () => api<NotificationCounts>('notifications/counts'), refetchInterval: open ? false : 45000 });
+  const counts = useQuery({
+    queryKey: ['notifications', 'counts'],
+    queryFn: () => api<NotificationCounts>('notifications/counts'),
+    refetchInterval: open ? false : 45000,
+  });
+
   const list = useQuery({
     queryKey: ['notifications', 'popup-global'],
     queryFn: () => api<Page<NotificationItem>>('notifications?limit=8&ordering=-timestamp'),
     enabled: open,
   });
-  const refresh = async () => { await Promise.all([client.invalidateQueries({ queryKey: ['notifications'] }), client.invalidateQueries({ queryKey: ['notifications', 'counts'] }), client.invalidateQueries({ queryKey: ['notifications', 'filters'] })]); };
-  const action = useMutation({ mutationFn: ({ id, path }: { id?: number; path: string }) => api(id ? `notifications/${id}/${path}` : `notifications/${path}`, 'POST', {}), onSuccess: refresh, onError: error => notify((error as Error).message, true) });
-  useEffect(() => { notifyRef.current = notify; }, [notify]);
+
+  const refresh = async () => {
+    await Promise.all([
+      client.invalidateQueries({ queryKey: ['notifications'] }),
+      client.invalidateQueries({ queryKey: ['notifications', 'counts'] }),
+      client.invalidateQueries({ queryKey: ['notifications', 'filters'] }),
+    ]);
+  };
+
+  const action = useMutation({
+    mutationFn: ({ id, path }: { id?: number; path: string }) =>
+      api(id ? `notifications/${id}/${path}` : `notifications/${path}`, 'POST', {}),
+    onSuccess: refresh,
+    onError: (error) => notify((error as Error).message, true),
+  });
+
+  useEffect(() => {
+    notifyRef.current = notify;
+  }, [notify]);
   useEffect(() => {
     let active = true;
     let unsubscribe: (() => void) | undefined;
@@ -128,39 +410,143 @@ function NotificationCenter() {
       setPushBusy(false);
     }
   }
-  useEffect(() => { function close(event: MouseEvent) { if (panel.current && !panel.current.contains(event.target as Node)) setOpen(false); } if (open) document.addEventListener('mousedown', close); return () => document.removeEventListener('mousedown', close); }, [open]);
+  useEffect(() => {
+    function close(event: MouseEvent) {
+      if (panel.current && !panel.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    if (open) {
+      document.addEventListener('mousedown', close);
+    }
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
   const unread = counts.data?.unread || 0;
   const items = list.data?.results || [];
-  return <div className="notification-center" ref={panel}>
-    <button className={`icon-button notification-trigger ${open ? 'active' : ''}`} aria-label={`${unread} unread notifications`} aria-expanded={open} onClick={() => setOpen(value => !value)} title="Notifications"><Bell size={20} />{unread > 0 && <b>{unread > 9 ? '9+' : unread}</b>}</button>
-    {open && <section className="notification-panel" aria-label="Notifications">
-      <div className="notification-head"><div><h2>Notifications</h2><span>{unread ? `${unread} unread` : 'All caught up'}</span></div><button className="icon-button" aria-label="Close notifications" onClick={() => setOpen(false)}><X size={17} /></button></div>
-      {(pushStatus === 'ready' || pushStatus === 'enabled') && <button className="notification-push" disabled={pushBusy} aria-pressed={pushStatus === 'enabled'} onClick={() => void togglePush()}>{pushBusy ? 'Updating browser alerts…' : pushStatus === 'enabled' ? 'Turn off browser alerts' : 'Enable browser alerts'}</button>}
-      {pushStatus === 'blocked' && <p className="notification-push-status">Browser alerts are blocked in your browser settings.</p>}
-      <button className="notification-read-all" disabled={!unread || action.isPending} onClick={() => action.mutate({ path: 'mark-all-read' })}><CheckCheck size={15} />Mark all read</button>
-      <div className="notification-list">{list.isLoading ? <div className="notification-empty">Loading notifications…</div> : list.error ? <div className="notification-empty error">Couldn’t load notifications.</div> : items.length ? items.map(item => <article className={`notification-item ${item.unread ? 'unread' : ''}`} key={item.id}>
-        <span className={`notification-dot ${item.level}`} />
-        <div className="notification-content">
-          <h3>{item.verb}</h3>
-          {item.description && <p>{item.description}</p>}
-          <div className="notification-meta-tags">
-            {item.category && item.category !== 'general' && <span className="notification-tag">{item.category}</span>}
-            {item.store && <span className="notification-tag store">{item.store.name}</span>}
-            <small>{timeAgo(item.timestamp)}</small>
+
+  return (
+    <div className="notification-center" ref={panel}>
+      <button
+        className={`icon-button notification-trigger ${open ? 'active' : ''}`}
+        aria-label={`${unread} unread notifications`}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        title="Notifications"
+      >
+        <Bell size={20} />
+        {unread > 0 && <b>{unread > 9 ? '9+' : unread}</b>}
+      </button>
+
+      {open && (
+        <section className="notification-panel" aria-label="Notifications">
+          <div className="notification-head">
+            <div>
+              <h2>Notifications</h2>
+              <span>{unread ? `${unread} unread` : 'All caught up'}</span>
+            </div>
+            <button
+              className="icon-button"
+              aria-label="Close notifications"
+              onClick={() => setOpen(false)}
+            >
+              <X size={17} />
+            </button>
           </div>
-        </div>
-        <div className="notification-actions"><button title={item.unread ? 'Mark read' : 'Mark unread'} aria-label={item.unread ? 'Mark read' : 'Mark unread'} disabled={action.isPending} onClick={() => action.mutate({ id: item.id, path: item.unread ? 'mark-read' : 'mark-unread' })}><CheckCheck size={15} /></button></div>
-      </article>) : <div className="notification-empty"><Inbox size={23} /><span>No notifications yet.</span></div>}</div>
-      <div className="notification-footer">
-        <Link href="/notifications" onClick={() => setOpen(false)}>
-          See all notifications <ArrowRight size={13} />
-        </Link>
-      </div>
-    </section>}
-  </div>;
+
+          {(pushStatus === 'ready' || pushStatus === 'enabled') && (
+            <button
+              className="notification-push"
+              disabled={pushBusy}
+              aria-pressed={pushStatus === 'enabled'}
+              onClick={() => void togglePush()}
+            >
+              {pushBusy
+                ? 'Updating browser alerts…'
+                : pushStatus === 'enabled'
+                  ? 'Turn off browser alerts'
+                  : 'Enable browser alerts'}
+            </button>
+          )}
+
+          {pushStatus === 'blocked' && (
+            <p className="notification-push-status">
+              Browser alerts are blocked in your browser settings.
+            </p>
+          )}
+
+          <button
+            className="notification-read-all"
+            disabled={!unread || action.isPending}
+            onClick={() => action.mutate({ path: 'mark-all-read' })}
+          >
+            <CheckCheck size={15} />
+            Mark all read
+          </button>
+
+          <div className="notification-list">
+            {list.isLoading ? (
+              <div className="notification-empty">Loading notifications…</div>
+            ) : list.error ? (
+              <div className="notification-empty error">Couldn’t load notifications.</div>
+            ) : items.length ? (
+              items.map((item) => (
+                <article
+                  className={`notification-item ${item.unread ? 'unread' : ''}`}
+                  key={item.id}
+                >
+                  <span className={`notification-dot ${item.level}`} />
+                  <div className="notification-content">
+                    <h3>{item.verb}</h3>
+                    {item.description && <p>{item.description}</p>}
+                    <div className="notification-meta-tags">
+                      {item.category && item.category !== 'general' && (
+                        <span className="notification-tag">{item.category}</span>
+                      )}
+                      {item.store && (
+                        <span className="notification-tag store">{item.store.name}</span>
+                      )}
+                      <small>{timeAgo(item.timestamp)}</small>
+                    </div>
+                  </div>
+                  <div className="notification-actions">
+                    <button
+                      title={item.unread ? 'Mark read' : 'Mark unread'}
+                      aria-label={item.unread ? 'Mark read' : 'Mark unread'}
+                      disabled={action.isPending}
+                      onClick={() =>
+                        action.mutate({
+                          id: item.id,
+                          path: item.unread ? 'mark-read' : 'mark-unread',
+                        })
+                      }
+                    >
+                      <CheckCheck size={15} />
+                    </button>
+                  </div>
+                </article>
+              ))
+            ) : (
+              <div className="notification-empty">
+                <Inbox size={23} />
+                <span>No notifications yet.</span>
+              </div>
+            )}
+          </div>
+
+          <div className="notification-footer">
+            <Link href="/notifications" onClick={() => setOpen(false)}>
+              See all notifications <ArrowRight size={13} />
+            </Link>
+          </div>
+        </section>
+      )}
+    </div>
+  );
 }
 
-function timeAgo(value: string) {
+function timeAgo(value: string): string {
+  if (!value || !Number.isFinite(new Date(value).getTime())) return 'Not recorded';
   const seconds = Math.max(1, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
   if (seconds < 60) return 'Just now';
   const minutes = Math.floor(seconds / 60);
@@ -512,14 +898,34 @@ export function MandatoryPasswordChange() {
   const router = useRouter();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError('');
     try {
       const data = Object.fromEntries(new FormData(event.currentTarget));
-      const result = await api<{user: User}>('password/change', 'POST', data);
+      if (data.password !== data.confirm_password) { setError('New passwords do not match.'); return; }
+      const result = await api<{user: User}>('password/change', 'POST', { current_password: data.current_password, password: data.password });
       client.setQueryData(['me'], result.user);
       router.replace('/admin');
     } catch (error) { setError((error as Error).message); } finally { setBusy(false); }
   }
-  return <div className="container section"><h1>Set your permanent password</h1><p>Choose a new password before accessing your workspace.</p><form className="form-stack" onSubmit={submit}><label>Temporary password<input name="current_password" type="password" required autoComplete="current-password" /></label><label>New password<input name="password" type="password" required minLength={8} maxLength={128} autoComplete="new-password" /></label>{error && <p role="alert">{error}</p>}<button className="button" disabled={busy}>Save password</button></form></div>;
+  return <main id="main" className="workspace-password-page">
+    <div className="workspace-password-brand"><span className="wordmark">proace<span>®</span></span><ThemeToggle /></div>
+    <section className="workspace-password-card" aria-labelledby="workspace-password-title">
+      <div className="workspace-password-icon"><ShieldCheck size={28} /></div>
+      <span className="eyebrow green">SECURE YOUR WORKSPACE</span>
+      <h1 id="workspace-password-title">Make this account yours</h1>
+      <p>Replace your temporary password to continue to your admin or staff workspace.</p>
+      <form className="form-stack" onSubmit={submit}>
+        <label>Current or temporary password<input name="current_password" type={showPasswords ? 'text' : 'password'} required autoComplete="current-password" /></label>
+        <label>New password<input name="password" type={showPasswords ? 'text' : 'password'} required minLength={8} maxLength={128} autoComplete="new-password" aria-describedby="workspace-password-hint" /></label>
+        <small id="workspace-password-hint">Use at least 8 characters. Choose a password you don’t use elsewhere.</small>
+        <label>Confirm new password<input name="confirm_password" type={showPasswords ? 'text' : 'password'} required minLength={8} maxLength={128} autoComplete="new-password" /></label>
+        <label className="workspace-password-show"><input type="checkbox" checked={showPasswords} onChange={event => setShowPasswords(event.target.checked)} />Show passwords</label>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="button" disabled={busy}>{busy ? 'Updating password…' : 'Save password & continue'}<ArrowRight size={17} /></button>
+      </form>
+      <p className="workspace-password-note"><ShieldCheck size={15} />Your new password protects access to your workspace.</p>
+    </section>
+  </main>;
 }

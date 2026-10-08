@@ -21,12 +21,27 @@ def credit_user_wallet(
     description: str,
     source: str = UserWalletTransaction.SOURCE_REFUND,
     reference: str = "",
+    idempotency_key: str | None = None,
 ) -> UserWalletTransaction:
     amount_dec = Decimal(str(amount))
-    if amount_dec <= Decimal("0.00"):
+    if not amount_dec.is_finite() or amount_dec <= Decimal("0.00"):
         raise ValidationError({"detail": "Credit amount must be greater than zero."})
 
     wallet, _ = UserWallet.objects.select_for_update().get_or_create(user=user)
+    if idempotency_key:
+        existing = UserWalletTransaction.objects.filter(
+            idempotency_key=idempotency_key
+        ).first()
+        if existing:
+            if (
+                existing.wallet_id != wallet.pk
+                or existing.amount != amount_dec
+                or existing.transaction_type != UserWalletTransaction.CREDIT
+            ):
+                raise ValidationError(
+                    {"detail": "Conflicting wallet credit reference."}
+                )
+            return existing
     wallet.balance += amount_dec
     wallet.save(update_fields=["balance", "updated"])
 
@@ -37,6 +52,7 @@ def credit_user_wallet(
         source=source,
         description=description,
         reference=reference,
+        idempotency_key=idempotency_key,
     )
     return tx
 
@@ -50,7 +66,7 @@ def debit_user_wallet(
     reference: str = "",
 ) -> UserWalletTransaction:
     amount_dec = Decimal(str(amount))
-    if amount_dec <= Decimal("0.00"):
+    if not amount_dec.is_finite() or amount_dec <= Decimal("0.00"):
         raise ValidationError({"detail": "Debit amount must be greater than zero."})
 
     wallet, _ = UserWallet.objects.select_for_update().get_or_create(user=user)
@@ -69,4 +85,3 @@ def debit_user_wallet(
         reference=reference,
     )
     return tx
-

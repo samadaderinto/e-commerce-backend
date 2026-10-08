@@ -80,7 +80,7 @@ Stripe Checkout and its PaymentIntent retain the carrier, service, quote token, 
 
 ## Fulfillment boundaries
 
-Physical deliveries retain the existing US-only service area; digital products remain available worldwide. Parcels are consolidated by pickup ZIP, summing physical weights. For different origin ZIPs, quotes sum shipment charges and expose only services offered for every origin. Configure each store's default pickup address; stores without one use the existing Tampa ZIP `33602` default. Configure parcel dimensions to match the fulfillment operation; product-specific packing and international customs are outside this implementation.
+Physical deliveries retain the existing US-only service area; digital products remain available worldwide. Parcels are consolidated by pickup ZIP, summing physical weights. For different origin ZIPs, quotes sum shipment charges and expose only services offered for every origin. Every store must supply a complete default business address, including digital-only sellers. Physical shipping quotes use that address and fail clearly when it is missing; there is no fallback pickup ZIP. Configure parcel dimensions to match the fulfillment operation; product-specific packing and international customs are outside this implementation.
 
 Tax uses the configured fixed fraction, not an external jurisdictional tax engine. Quote tax is shown before coupon entry; the server applies coupon discounts before computing final tax. Cart estimates are development estimates until a delivery address and carrier are selected.
 
@@ -184,3 +184,11 @@ To maximize delivery success rates and conform directly with courier addressing 
 | **Responsive Mobile Layout (360px–430px)** | Viewport resized to 375px mobile viewport. | Country, Street, Unit, City, State, and Postal code stack into a 1-column layout (`grid-template-columns: minmax(0, 1fr)`) with min touch target height 44px; zero horizontal overflow. | `client/src/app/globals.css` |
 
 
+
+Store onboarding requires a complete business address (street, city, state/region, country and postal code). Products may be saved as drafts, but manual and scheduled publication require that address for both digital and physical listings.
+
+Purchase validation also rejects existing stores without a complete default business address, including digital-only stores. Missing physical shipment origins return a validation error rather than silently using Tampa.
+
+Time handling: Django stores timezone-aware UTC instants (`TIME_ZONE=UTC`, `USE_TZ=True`). Browser date/time inputs display local time and submit ISO UTC timestamps. Dashboard requests accept a validated IANA `time_zone` (UTC by default); the browser supplies its timezone for local calendar-day reporting. Date-only chart labels are preserved without timezone shifts. Cron and carrier request clocks use aware UTC; flash countdowns include minutes.
+
+Military postal delivery: APO/FPO/DPO destinations use USPS only with the currently supported integrations. Checkout disables other carrier options and the server rejects unsupported carriers in both demo and live rating and payment flows. Address city/state/ZIP must agree: AA uses 340xx, AE uses 090xx–098xx, AP uses 962xx–966xx, with country United States. This is a supported-service policy, not a claim that all commercial postal handoff services are prohibited: UPS Ground Saver and Mail Innovations have military-address support but are not integrated here. See [USPS military addressing standards](https://pe.usps.com/text/dmm300/703.htm) and [UPS supported services](https://www.ups.com/us/en/support/shipping-support/print-shipping-labels/how-to-write-address). ZIP blocks alone do not guarantee an active destination or eligibility for every USPS service; live carrier availability and military mail content/customs requirements still apply.

@@ -79,6 +79,7 @@ and permission details rather than inferring them from a prefix.
 | `/api/v1/checkout/wallet-session/`, `/wallet-confirm/` | Stripe & split-tender wallet checkout session creation and confirmation |
 | `/api/v1/wallet/` | ProAce customer wallet balance and credit/debit transaction log |
 | `/api/v1/wallet/topup-session/`, `/topup-confirm/` | Wallet fund top-up session and confirmation |
+| `/api/v1/affiliates/clickbank/outbound/<id>/` | ClickBank outbound affiliate redirector (generates tracking ID & logs hoplink click) |
 | `/api/v1/orders/` | Customer order list, order details, and 7-day refund request endpoints |
 | `/api/v1/orders/<id>/cancel/` | Customer order cancellation with automatic restock and wallet refund credit |
 | `/api/v1/orders/<id>/tracking/` | Recorded fulfillment milestones and official carrier links |
@@ -87,6 +88,7 @@ and permission details rather than inferring them from a prefix.
 | `/api/v1/stores/<id>/payouts/` | Merchant payout withdrawal requests against cleared escrow balance |
 | `/api/v1/notifications/` | Authenticated notification inbox and device registration |
 | `/api/v1/admin/coupons/` | Staff coupon management |
+| `/api/v1/admin/taxes/` | Destination tax jurisdiction CRUD, ZIP overrides, and baseline seeding |
 | `/api/v1/admin/stores/` | Store moderation, approval, and blocking |
 | `/api/v1/admin/staff/dashboard/` | Platform-wide business intelligence, revenue, orders, and store analytics |
 | `/api/v1/admin/staff/refunds/` | Customer refund review and moderation queue (7-day window) |
@@ -116,6 +118,8 @@ is ready for production:
 | Make Elasticsearch optional and retain a database search fallback. | Local development can run without search, while indexing failures do not become the only path to catalog results. |
 | Separate application database from logging infrastructure. | Application emits structured JSON to stdout; Grafana Alloy ships logs to Loki for aggregation in Grafana. |
 | Implement 7-day buyer refund review escrow and 4% platform commission. | Merchant earnings from orders placed within the 7-day refund window are held in review before unlocking for withdrawal requests. |
+| ClickBank affiliate partner coexistence with attribution HopLink tracking. | External ClickBank products exist alongside standard listings; cart addition is blocked and outbound HopLinks route through `/api/affiliates/clickbank/outbound/<id>` with secure TID tracking, while the Next.js proxy transparently passes HTTP 302 redirects. |
+| Hybrid destination sales tax engine (local DB rules with Stripe Tax fallback). | Destination state and ZIP jurisdiction rates, digital exemptions, and shipping fee taxability are calculated accurately and snapshotted per order. |
 | Use SQLite for direct local development/tests and PostgreSQL for Compose/production. | Direct setup is lightweight; production data must use persistent managed storage. |
 
 ## Deployment boundary
@@ -135,3 +139,7 @@ production service boundaries. Never commit production secrets or env files.
 
 See [role matrix, staff activation, and operator setup](access-control.md) and
 [multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).
+
+## October commerce audit fixes
+
+Payment accounting is centralized in `payment/accounting.py` and `payment/services.py`; `payment/fulfillment.py` owns store-level shipping transitions and `payment/funding.py` owns reserved wallet deposits and recovery. Financial mutations serialize on the order/user row, and unique wallet receipts protect retries.

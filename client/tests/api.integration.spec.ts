@@ -12,6 +12,8 @@ test('the Next.js proxy serves the Django catalog and protects private endpoints
   const profile = await request.get('/api/me/');
   expect(profile.status()).toBe(401);
   expect((await profile.json()).detail).toBeTruthy();
+  // A delayed anonymous response must not clear cookies issued by a later login.
+  expect(profile.headers()['set-cookie'] || '').not.toMatch(/proace_(access|refresh)=/);
 
   const mutationWithoutOrigin = await request.post('/api/cart/', {
     data: { product: results.results[0].id, quantity: 1 },
@@ -36,6 +38,9 @@ test('login keeps tokens in HttpOnly cookies and returns the authenticated user'
 
   expect(response.status()).toBe(200);
   const body = await response.json();
+  expect(body.user.last_login).toEqual(expect.any(String));
+  expect(body.user.last_active_at).toEqual(expect.any(String));
+  expect(body.user.updated).toEqual(expect.any(String));
   expect(body.user.email).toBe('shopper@proace.local');
   expect(body).not.toHaveProperty('access');
   expect(body).not.toHaveProperty('refresh');

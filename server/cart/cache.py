@@ -2,7 +2,7 @@ from django.conf import settings
 from django.core.cache import cache
 
 from cart.models import Cart
-from cart.seralizers import CartSerializer
+from cart.serializers import CartSerializer
 from utils.cache import invalidate_revision, versioned_lru_cache
 
 

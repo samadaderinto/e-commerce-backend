@@ -1,11 +1,12 @@
 """Direct carrier rating adapters. Live failures never become invented rates."""
 import base64
 import os
-from datetime import date, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 import requests
 from django.conf import settings
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 CARRIERS = {'USPS', 'UPS', 'FEDEX', 'DHL'}
@@ -67,7 +68,7 @@ def live_rates(carrier, origin, destination, weight, package=None):
                                   data={'originZIPCode': origin, 'destinationZIPCode': destination,
                                         'weight': float(weight), **dims, 'mailClass': mail_class,
                                         'processingCategory': 'MACHINABLE', 'destinationEntryFacilityType': 'NONE',
-                                        'rateIndicator': 'DR', 'priceType': 'RETAIL', 'mailingDate': date.today().isoformat()})
+                                        'rateIndicator': 'DR', 'priceType': 'RETAIL', 'mailingDate': timezone.now().date().isoformat()})
             rates.append(option(carrier, code, name, result['totalBasePrice']))
         return rates
     if carrier == 'UPS':
@@ -126,7 +127,7 @@ def live_rates(carrier, origin, destination, weight, package=None):
         'customerDetails': {'shipperDetails': {'postalCode': origin, 'countryCode': 'US'},
                             'receiverDetails': {'postalCode': destination, 'countryCode': 'US'}},
         'accounts': [{'typeCode': 'shipper', 'number': account}],
-        'plannedShippingDateAndTime': (date.today() + timedelta(days=1)).isoformat() + 'T12:00:00GMT-04:00',
+        'plannedShippingDateAndTime': (timezone.now() + timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0).strftime("%Y-%m-%dT%H:%M:%SGMT+00:00"),
         'unitOfMeasurement': 'imperial', 'isCustomsDeclarable': False,
         'packages': [{'weight': float(weight), 'dimensions': dims}]})
     names = {'H': 'DHL Economy Select', 'T': 'DHL Express 12:00', 'D': 'DHL Express Worldwide', 'P': 'DHL Express Worldwide', 'N': 'DHL Express Domestic'}
@@ -158,6 +159,9 @@ def calculate_carrier_rates(carrier, origin, destination, weight, subtotal, phys
         raise ValidationError({'carrier': 'Choose USPS, UPS, FEDEX, or DHL.'})
     if not physical:
         return [{**option('DIGITAL', 'delivery', 'Digital Delivery', '0.00'), 'service_id': 'digital_delivery', 'is_default': True}]
+    from payment.geo import military_zip_region
+    if military_zip_region(destination) and carrier != 'USPS':
+        raise ValidationError({'carrier': 'APO/FPO/DPO military addresses require USPS with our supported shipping services.'})
     mode = env('SHIPPING_RATE_MODE', getattr(settings, 'SHIPPING_RATE_MODE', 'demo' if settings.DEBUG else 'live'))
     if mode == 'demo':
         # Explicit development fixtures; never silently used when a live carrier fails.

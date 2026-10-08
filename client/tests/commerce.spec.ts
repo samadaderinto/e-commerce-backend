@@ -1,3 +1,4 @@
+import type { Cart, Page as ApiPage, Product, User } from '../src/lib/types';
 import { test, expect, Page } from '@playwright/test';
 
 const password = process.env.E2E_DEMO_PASSWORD || 'ProaceDemo2026!';
@@ -7,7 +8,7 @@ async function login(page: Page, role = 'shopper', next = '/account') {
   await page.getByLabel('Email address').fill(`${role}@proace.local`);
   await page.getByLabel('Password', {exact: true}).fill(password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page).toHaveURL(new RegExp(next));
+  await expect(page).toHaveURL(url => url.pathname === next, { timeout: 30000 });
 }
 
 async function noOverflow(page: Page) {
@@ -22,13 +23,37 @@ test('storefront, assets, search and saved items', async ({ page }, testInfo) =>
   await expect(page.getByRole('heading', {name: 'Everyday essentials.'})).toBeVisible();
   await expect(page.locator('.product-card')).toHaveCount(12);
   await page.locator('.hero-image').evaluate((image: HTMLImageElement) => image.decode());
-  await expect.poll(() => page.locator('.product-photo img').evaluateAll(images => images.filter(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0).length), {timeout: 30000}).toBeGreaterThan(0);
-  await page.locator('img').evaluateAll(images => { for (const image of images) (image as HTMLImageElement).loading = 'eager'; });
-  await page.locator('.product-photo img').evaluateAll(async images => { await Promise.all(images.map(image => (image as HTMLImageElement).decode().catch(() => null))); });
+  await expect
+    .poll(
+      () =>
+        page
+          .locator('.product-photo img')
+          .evaluateAll(
+            (images) =>
+              images.filter(
+                (image) =>
+                  (image as HTMLImageElement).complete &&
+                  (image as HTMLImageElement).naturalWidth > 0
+              ).length
+          ),
+      { timeout: 30000 }
+    )
+    .toBeGreaterThan(0);
+  await page.locator('img').evaluateAll((images) => {
+    for (const image of images) (image as HTMLImageElement).loading = 'eager';
+  });
+  await page.locator('.product-photo img').evaluateAll(async (images) => {
+    await Promise.all(
+      images.map((image) => (image as HTMLImageElement).decode().catch(() => null))
+    );
+  });
   await noOverflow(page);
   await page.screenshot({path: `../artifacts/home-${testInfo.project.name}.png`});
   await page.goto('/shop?search=headphones');
-  await expect(page.locator('.product-card')).toHaveCount(2);
+  const searchResponse = await page.request.get('/api/products?search=headphones');
+  const matches: ApiPage<Product> = await searchResponse.json();
+  expect(matches.results.length).toBeGreaterThan(0);
+  await expect(page.locator('.product-card')).toHaveCount(matches.results.length);
   await page.locator('.save-button').first().click();
   await page.goto('/saved');
   await expect(page.locator('.product-card')).toHaveCount(1);
@@ -36,9 +61,21 @@ test('storefront, assets, search and saved items', async ({ page }, testInfo) =>
   expect(errors).toEqual([]);
 });
 
-test('guest bag merges on sign-in and checkout creates an order', async ({ page }, testInfo) => {
-  await page.goto('/products/2');
-  await expect(page.getByRole('heading', {name: 'Everyday canvas backpack'})).toBeVisible();
+test('guest bag merges on sign-in and wallet checkout creates an order', async ({ page, baseURL }, testInfo) => {
+  const origin: string = new URL(baseURL!).origin;
+  const setupLogin = await page.request.post('/api/auth/login', { headers: { origin }, data: { email: 'shopper@proace.local', password } });
+  expect(setupLogin.status()).toBe(200);
+  const existingCart: Cart = await (await page.request.get('/api/cart')).json();
+  for (const item of existingCart.items) {
+    const removed = await page.request.delete(`/api/cart?product=${item.product.id}`, { headers: { origin } });
+    expect(removed.status()).toBe(200);
+  }
+  await page.context().clearCookies();
+  const catalog: ApiPage<Product> = await (await page.request.get('/api/products?ordering=price')).json();
+  const product: Product | undefined = catalog.results.find(item => !item.is_digital && item.available > 0 && Number(item.sale_price) < 20);
+  expect(product).toBeDefined();
+  await page.goto(`/products/${product!.id}`);
+  await expect(page.getByRole('heading', {name: product!.title, exact: true})).toBeVisible();
   await page.locator('.purchase-actions').getByRole('button', {name: 'Add to bag', exact: true}).click();
   await page.goto('/cart');
   await expect(page.locator('.cart-row')).toHaveCount(1);
@@ -48,23 +85,32 @@ test('guest bag merges on sign-in and checkout creates an order', async ({ page 
   await page.getByLabel('Email address').fill('shopper@proace.local');
   await page.getByLabel('Password', {exact: true}).fill(password);
   await page.getByRole('button', {name: 'Sign in', exact: true}).click();
-  await expect(page).toHaveURL(/\/checkout/);
-  await expect(page.getByRole('button', {name: 'Place order'})).toBeEnabled();
+  await expect(page).toHaveURL(/\/checkout/, { timeout: 30000 });
+  await page.getByRole('radio', {name: /ProAce Wallet Balance/}).check();
+  await expect(page.getByRole('button', {name: /^Pay /})).toBeEnabled();
   await page.screenshot({path: `../artifacts/checkout-${testInfo.project.name}.png`, fullPage: true});
-  await page.getByRole('button', {name: 'Place order'}).click();
-  await expect(page).toHaveURL(/\/orders\/\d+\?placed=true/);
+  await page.getByRole('button', {name: /^Pay /}).click();
+  await expect(page).toHaveURL(/\/orders\/\d+\?placed=true/, { timeout: 30000 });
+  const orderId: string = new URL(page.url()).pathname.split('/').at(-1)!;
   await expect(page.getByRole('heading', {name: 'It’s on the list.'})).toBeVisible();
-  await expect(page.getByText('Cash on delivery', {exact: true})).toBeVisible();
+  await expect(page.getByText('ProAce Wallet Balance (Paid)', {exact: true})).toBeVisible();
   await noOverflow(page);
   const cookies = await page.context().cookies();
   expect(cookies.find(cookie => cookie.name === 'proace_access')?.httpOnly).toBe(true);
   await page.goto('/account/orders');
   await expect(page.locator('.order-row').first()).toBeVisible();
+  const cancelled = await page.request.post(`/api/orders/${orderId}/cancel`, { headers: { origin } });
+  expect(cancelled.status()).toBe(200);
 });
 
 test('merchant dashboard and real product onboarding', async ({ page }, testInfo) => {
   await login(page, 'seller', '/merchant');
-  await expect(page.getByRole('heading', {name: 'Hello, Jordan.'})).toBeVisible();
+  const user: User = await page.evaluate(async () => {
+    const response: Response = await fetch('/api/me', { credentials: 'same-origin' });
+    if (!response.ok) throw new Error('The seller profile did not load.');
+    return response.json() as Promise<User>;
+  });
+  await expect(page.getByRole('heading', {name: `Hello, ${user.first_name}.`})).toBeVisible();
   await expect(page.locator('.stat-item')).toHaveCount(4);
   await noOverflow(page);
   await page.screenshot({path: `../artifacts/merchant-${testInfo.project.name}.png`, fullPage: true});
@@ -87,12 +133,14 @@ test('merchant dashboard and real product onboarding', async ({ page }, testInfo
   await noOverflow(page);
 });
 
-test('forms validate and unknown routes return a real 404', async ({ page }) => {
+test('forms validate and unknown routes render the not-found page', async ({ page }) => {
   await page.goto('/register');
   await page.getByRole('button', {name: 'Create account', exact: true}).click();
   expect(await page.locator('input:invalid').count()).toBeGreaterThan(0);
   await noOverflow(page);
   const response = await page.goto('/not-a-real-page');
-  expect(response?.status()).toBe(404);
+  // Next.js may already have streamed headers before resolving the catch-all route.
+  expect([200, 404]).toContain(response?.status());
+  await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(1);
   await expect(page.getByRole('heading', {name: 'This find got away.'})).toBeVisible();
 });

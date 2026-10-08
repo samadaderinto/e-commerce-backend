@@ -60,7 +60,8 @@ Paths below have prefix `/api/v1/`. Staff members have global backoffice access 
 | `admin/staff/stores/{id}/block` or unblock | Denied | Denied | Allowed | Allowed |
 | `admin/staff/payouts` GET / `/process` POST | Denied | Allowed | Allowed | Allowed |
 | Refund `/process` POST | Denied | Allowed (refund processing) | Allowed | Allowed |
-| Store withdrawal requests POST | Owned store only | Denied | Owned official store only | Owned official store only |
+| Store withdrawal requests POST | Owned 3P store only | Denied | Denied (official earnings route to Treasury) | Denied (official earnings route to Treasury) |
+| Platform Treasury & Commission withdrawal POST | Denied | Denied | Allowed (audited platform treasury) | Allowed (audited platform treasury) |
 | Notifications | Own recipient inbox | Own inbox (unfiltered global operator notifications) | Own inbox (unfiltered global operator notifications) | Own inbox (unfiltered global operator notifications) |
 | Grafana, Silk technical profiling | Denied | Denied | Denied | Separate technical credentials / root session |
 
@@ -96,8 +97,14 @@ Backoffice interaction with store data is strictly conducted through the central
 - Processing, approving, and rejecting refunds with automated wallet credit and merchant ledger reversal;
 - Executing overarching database queries, coupon management, user reviews, and customer service actions.
 
-### 3. Proace official stores exception
+### 3. Proace official stores exception & Platform Treasury consolidation
 For "Proace Official Stores" (`is_official=True`, created directly by Administrators), all Staff members and Admins are automatically granted access to the actual Seller Interface (`/merchant` and `StoreViewSet`) upon login. This gives staff the ability to act as the sellers specifically for app-owned official stores, while remaining locked out of third-party stores.
+
+**Platform Treasury Consolidation**:
+To enforce separation of duties and prevent rogue or untracked self-dealing withdrawals by operators:
+- Direct merchant payout requests (`stores/{id}/payouts/` and `stores/wallet/payouts/`) are **strictly blocked** for official company stores.
+- 100% of net retail sales from official company stores automatically consolidate into the centralized **Platform Treasury & Commission Wallet** (`/admin/commission`, `admin/staff/commission-wallet/`).
+- Administrators withdraw consolidated company funds (marketplace commissions + official store retail revenues) through the audited, role-controlled Platform Treasury workflow.
 
 ### 4. Backoffice operator notification feed
 Notification popups in the backoffice interface deliver an unfiltered feed of all events directed to the operator's inbox without store-based UI dropdown filters. Note that notification feeds remain recipient-specific rather than a global immutable platform audit ledger (BA-16).
@@ -123,3 +130,7 @@ Configure all six existing `DEFAULT_ADMIN_*` variables described in `.env.exampl
 Existing `is_superuser` accounts are technical admins; existing plain `is_staff` accounts remain staff. Existing staff created by trusted development seeds are already active and do not go through invitation onboarding. Production staff should use invitations.
 
 Grafana remains bound to loopback on port 3002; anonymous authentication and signup are disabled. Sign in using technical credentials configured by `DEFAULT_ADMIN_EMAIL`/`DEFAULT_ADMIN_PASSWORD`. Commerce business admins and staff are not provisioned Grafana accounts. For remote production access, use a private tunnel or a TLS gateway with technical-team-only authentication. Do not enable anonymous access or share Grafana credentials with business users. Silk remains disabled by default and requires an active Django superuser when enabled.
+
+## October commerce audit fixes
+
+Merchants can change only their own physical store fulfillment through forward shipping/delivery transitions. They cannot set financial statuses or complete other stores’ shipments. Customer refunds require actual paid funds and available claim quantities; digital downloads require full settlement.

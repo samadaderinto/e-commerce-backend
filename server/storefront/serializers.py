@@ -1,4 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Any
 
 from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
@@ -39,7 +40,7 @@ class PublicStoreSerializer(serializers.ModelSerializer):
         model = Store
         fields = [
             'id', 'username', 'name', 'status', 'is_official', 'seller_tier', 'created',
-            'profile', 'address', 'product_count', 'is_verified', 'is_preview'
+            'profile', 'address', 'product_count', 'is_verified', 'is_preview', 'updated', 'last_active_at'
         ]
 
     def get_profile(self, obj):
@@ -65,15 +66,49 @@ class PublicStoreSerializer(serializers.ModelSerializer):
         return bool(self.context.get('is_preview', not (obj.status == Store.STATUS_ACTIVE and obj.verified_at)))
 
 
-def unit_price(product):
-    return (product.price * Decimal(100 - product.discount) / 100).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
+def unit_price(product: Product, variant: str = '') -> Decimal:
+    price = (product.price * Decimal(100 - product.discount) / 100).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
+    if variant:
+        from product.policies import selected_variant
+        option = selected_variant(product, variant)
+        price += Decimal(str(option.get('price_delta') or '0'))
+    if price <= 0:
+        raise serializers.ValidationError({'variant': 'The selected option has an invalid price.'})
+    return price.quantize(Decimal('.01'))
 
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'email', 'first_name', 'last_name', 'phone1', 'is_staff', 'is_superuser', 'is_business_admin', 'must_change_password', 'role']
-        read_only_fields = ['id', 'email', 'is_staff', 'is_superuser', 'is_business_admin', 'must_change_password', 'role']
+        fields = [
+            'id',
+            'email',
+            'first_name',
+            'last_name',
+            'phone1',
+            'is_staff',
+            'is_superuser',
+            'is_business_admin',
+            'must_change_password',
+            'role',
+            'date_joined',
+            'updated',
+            'last_login',
+            'last_active_at',
+        ]
+        read_only_fields = [
+            'id',
+            'email',
+            'is_staff',
+            'is_superuser',
+            'is_business_admin',
+            'must_change_password',
+            'role',
+            'date_joined',
+            'updated',
+            'last_login',
+            'last_active_at',
+        ]
 
 
 class RegisterSerializer(UserSerializer):
@@ -82,7 +117,7 @@ class RegisterSerializer(UserSerializer):
 
     class Meta(UserSerializer.Meta):
         fields = UserSerializer.Meta.fields + ['password', 'referral_code']
-        read_only_fields = ['id', 'is_staff', 'is_superuser', 'is_business_admin', 'must_change_password', 'role']
+        read_only_fields = [field for field in UserSerializer.Meta.read_only_fields if field != 'email']
 
     def validate(self, data):
         validate_password(
@@ -93,12 +128,20 @@ class RegisterSerializer(UserSerializer):
 
 
 class AddressSerializer(serializers.ModelSerializer):
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        from payment.geo import validate_military_address
+        values = {field: str(attrs.get(field, getattr(self.instance, field, '')) or '')
+                  for field in ('city', 'state', 'zip', 'country')}
+        validate_military_address(values['city'], values['state'], values['zip'], values['country'])
+        return attrs
+
     class Meta:
         model = Address
         fields = ['id', 'address', 'city', 'state', 'country', 'zip', 'is_default']
 
 
 class CatalogSerializer(serializers.ModelSerializer):
+    selected_variant = serializers.CharField(read_only=True, default='')
     is_own_store = serializers.SerializerMethodField()
     is_official_store = serializers.BooleanField(source='store.is_official', read_only=True, default=False)
     store_verified = serializers.SerializerMethodField()
@@ -115,10 +158,45 @@ class CatalogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Product
-        fields = ['id', 'title', 'description', 'category', 'brand', 'price', 'sale_price',
-                  'discount', 'available', 'sales', 'flash_sale_end', 'variants', 'average_rating', 'rating_count', 'store',
-                  'store_name', 'store_username', 'is_official_store', 'store_verified', 'seller_tier', 'image', 'images', 'tags', 'created',
-                  'is_own_store', 'weight', 'length', 'width', 'height', 'is_digital', 'specifications']
+        fields = [
+            'id',
+            'selected_variant',
+            'title',
+            'description',
+            'category',
+            'brand',
+            'price',
+            'sale_price',
+            'discount',
+            'available',
+            'sales',
+            'flash_sale_end',
+            'variants',
+            'average_rating',
+            'rating_count',
+            'store',
+            'store_name',
+            'store_username',
+            'is_official_store',
+            'store_verified',
+            'seller_tier',
+            'image',
+            'images',
+            'tags',
+            'created',
+            'is_own_store',
+            'weight',
+            'length',
+            'width',
+            'height',
+            'is_digital',
+            'specifications',
+            'updated',
+            'product_type',
+            'affiliate_hoplink',
+            'affiliate_vendor_nickname',
+            'affiliate_button_text',
+        ]
 
     @extend_schema_field(OpenApiTypes.OBJECT)
     def get_specifications(self, obj):
@@ -175,6 +253,7 @@ class CatalogSerializer(serializers.ModelSerializer):
 
 
 class ReviewSerializer(serializers.ModelSerializer):
+    is_edited = serializers.BooleanField(read_only=True)
     author = serializers.CharField(source='user.first_name', read_only=True)
     is_verified_buyer = serializers.SerializerMethodField()
     is_own_review = serializers.SerializerMethodField()
@@ -183,7 +262,8 @@ class ReviewSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Review
-        fields = ['id', 'author', 'rating', 'label', 'comment', 'images', 'created', 'is_verified_buyer', 'is_own_review', 'can_moderate']
+        fields = ['id', 'author', 'rating', 'label', 'comment', 'images', 'created', 'updated', 'is_edited', 'is_verified_buyer', 'is_own_review', 'can_moderate']
+        read_only_fields = ['created', 'updated', 'is_edited']
         extra_kwargs = {
             'rating': {'min_value': 1, 'max_value': 5},
             'label': {'max_length': 120},
@@ -257,6 +337,7 @@ class CartLineSerializer(serializers.Serializer):
 
 
 class CartSerializer(serializers.Serializer):
+    updated = serializers.DateTimeField()
     id = serializers.IntegerField()
     items = CartLineSerializer(many=True)
     subtotal = serializers.DecimalField(max_digits=15, decimal_places=2)
@@ -270,6 +351,8 @@ class ShippingRateSerializer(serializers.Serializer):
     source = serializers.CharField()
     quote_token = serializers.CharField()
     tax = serializers.DecimalField(max_digits=10, decimal_places=2)
+    tax_rate = serializers.DecimalField(max_digits=6, decimal_places=4, required=False)
+    tax_jurisdiction = serializers.CharField(required=False, allow_blank=True)
     service_id = serializers.CharField()
     name = serializers.CharField()
     description = serializers.CharField()
@@ -298,10 +381,11 @@ class WalletCheckoutSerializer(serializers.Serializer):
 
 
 class CouponAdminSerializer(serializers.ModelSerializer):
+    last_used_at = serializers.DateTimeField(read_only=True)
     class Meta:
         model = Coupon
         fields = ['id', 'code', 'valid_from', 'valid_to', 'discount', 'num_available', 'num_used', 'active',
-                  'type', 'product', 'category', 'minimum_quantity']
+                  'type', 'product', 'category', 'minimum_quantity', 'last_used_at']
         read_only_fields = ['id', 'valid_from', 'num_used']
 
     def validate(self, attrs):
@@ -329,6 +413,10 @@ class OrderAddressSnapshotSerializer(serializers.Serializer):
 
 
 class OrderItemSnapshotSerializer(serializers.Serializer):
+    net_total = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)
+    discount_amount = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)
+    tax_amount = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)
+    line_total = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)
     product = serializers.IntegerField()
     store = serializers.IntegerField()
     title = serializers.CharField()
@@ -340,6 +428,13 @@ class OrderItemSnapshotSerializer(serializers.Serializer):
 
 
 class OrderSerializer(serializers.Serializer):
+    paid_total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    refunded_total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    updated = serializers.DateTimeField()
+    ordered_date = serializers.DateTimeField()
+    status_updated_at = serializers.DateTimeField(allow_null=True)
+    cancelled_at = serializers.DateTimeField(allow_null=True)
+    refunded_at = serializers.DateTimeField(allow_null=True)
     shipping = serializers.JSONField()
     tax = serializers.DecimalField(max_digits=10, decimal_places=2)
     id = serializers.IntegerField()
@@ -357,6 +452,7 @@ class OrderSerializer(serializers.Serializer):
     tracking_events = serializers.ListField(required=False, child=serializers.DictField(), default=list)
     items = OrderItemSnapshotSerializer(many=True)
     address = OrderAddressSnapshotSerializer()
+    tax_snapshot = serializers.JSONField(required=False, default=dict)
 
 
 
@@ -365,6 +461,7 @@ class ProductIdRequestSerializer(serializers.Serializer):
 
 
 class CartMutationRequestSerializer(ProductIdRequestSerializer):
+    variant = serializers.CharField(max_length=80, allow_blank=True, required=False)
     quantity = serializers.IntegerField(min_value=1, max_value=1000, required=False)
 
 
@@ -393,3 +490,11 @@ class UserWalletPaymentSerializer(CheckoutRequestSerializer):
 class PasswordChangeRequestSerializer(serializers.Serializer):
     current_password = serializers.CharField(write_only=True, trim_whitespace=False)
     password = serializers.CharField(write_only=True, min_length=8, max_length=128, trim_whitespace=False)
+
+
+class WalletTopupRequestSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=7, decimal_places=2, min_value=Decimal('5.00'), max_value=Decimal('25000.00'))
+
+
+class PaymentSessionRequestSerializer(serializers.Serializer):
+    session_id = serializers.CharField(max_length=255, allow_blank=False)

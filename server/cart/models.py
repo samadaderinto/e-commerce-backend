@@ -17,4 +17,13 @@ class Cart(DatesMixin):
 class CartItem(DatesMixin):
     cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name="cart_items")
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    variant = models.CharField(max_length=80, blank=True, default='')
     quantity = models.IntegerField(validators=[MinValueValidator(1)], default=1)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['cart', 'product', 'variant'],
+                name='unique_cart_product_variant',
+            ),
+        ]

@@ -1,10 +1,13 @@
 'use client';
 
+import { browserTimeZone, calendarDateLabel, toLocalDateTimeInput } from '@/lib/datetime';
+
+import { activityDate } from './activity';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState, useEffect, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Inbox, LayoutDashboard, Package, Plus, RotateCcw, Search, Settings, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
+import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
 import type { Dashboard, MerchantProduct, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent } from '@/lib/types';
 import { useShop } from './providers';
@@ -31,6 +34,10 @@ type PreviewProduct = {
   price: number; sale_price: number; discount: number; available: number; image: string;
   variants: ProductVariant[]; digital_file_name?: string; digital_file_url?: string;
   images: string[]; flash_sale_end?: string | null; digital_preview_watermark?: boolean;
+  product_type?: 'standard' | 'affiliate_clickbank';
+  affiliate_hoplink?: string;
+  affiliate_vendor_nickname?: string;
+  affiliate_button_text?: string;
 };
 
 
@@ -75,22 +82,264 @@ export function MerchantPage({ segments }: { segments: string[] }) {
     ['settings', 'Store settings', Settings],
   ] as const;
 
-  return <Gate next="/merchant"><div className="merchant-shell"><aside className="merchant-sidebar"><Link className="merchant-brand" href="/merchant"><span><StoreIcon size={20} /></span><div>Seller workspace<small>MAKE GOOD THINGS HAPPEN</small></div></Link>{store && <label className="store-select"><span>YOUR STORE</span><select aria-label="Select store" value={store.id} onChange={event => selectStore(Number(event.target.value))}>{stores.data?.results.map(store => <option key={store.id} value={store.id}>{store.name}</option>)}</select></label>}<nav>{links.filter(([key]) => key !== "payments" || !user?.is_staff || user?.is_superuser || user?.is_business_admin).map(([key, name, Icon]) => <Link key={key} className={section === key ? 'active' : ''} href={key === 'overview' ? '/merchant' : `/merchant/${key}`}><Icon size={19} />{name}{key === 'products' && <ChevronRight size={14} />}{key === 'notifications' && (notifCounts.data?.unread || 0) > 0 && <span className="count-pill highlight" style={{ marginLeft: 'auto', fontSize: 10, padding: '1px 6px' }}>{notifCounts.data!.unread}</span>}</Link>)}</nav><div className="merchant-sidebar-bottom">{!storeLimitReached && (!user?.is_staff || user?.is_superuser || user?.is_business_admin) && <Link href="/merchant/new-store"><Plus size={18} />Open another store</Link>}<Link href="/help"><CircleHelp size={18} />Help & support</Link><Link href="/"><ArrowUpRight size={18} />Back to marketplace</Link><div className="merchant-person"><span>{user?.first_name?.[0]}</span><div><strong>{user?.first_name} {user?.last_name}</strong><small>{user?.is_staff ? "Official store operations" : "Store owner"}</small></div></div></div></aside><div className="merchant-main"><div className="merchant-topline"><span>Workspace <ChevronRight size={12} />{section.replaceAll('-', ' ')}</span><Link href={store ? `/shop?store=${store.id}` : '/shop'}><Eye size={16} />View storefront <ArrowUpRight size={14} /></Link></div>{stores.isLoading || !selectionReady ? <Loading /> : stores.error ? <ErrorState error={stores.error} retry={() => stores.refetch()} /> : !store || section === 'new-store' ? (user?.is_staff && !user?.is_superuser && !user?.is_business_admin ? <Empty title="No official stores available" text="Official stores created by administrators will automatically appear here." /> : storeLimitReached ? <Empty title="10-store limit reached" text="You can create a maximum of 10 stores." href="/merchant" label="Back to your stores" /> : <OnboardStore />) : store.status === 'blocked' ? <Empty title="Your store is unavailable" text="Contact support about your store status before making further changes." href="/help" label="Visit help centre" /> : section === 'products' && segments[1] ? <ProductEditor key={`${store.id}-${segments[1]}`} store={store} id={segments[1]} /> : section === 'products' ? <MerchantProducts key={store.id} store={store} /> : section === 'orders' ? <MerchantOrders key={store.id} store={store} /> : section === 'payments' ? <MerchantPayments key={store.id} store={store} /> : section === 'notifications' ? <MerchantNotifications key={store.id} store={store} /> : section === 'settings' ? <MerchantSettings key={store.id} store={store} /> : <MerchantDashboard key={store.id} store={store} />}</div></div></Gate>;
+  return (
+    <Gate next="/merchant">
+      <div className="merchant-shell">
+        <aside className="merchant-sidebar">
+          <Link className="merchant-brand" href="/merchant">
+            <span>
+              <StoreIcon size={20} />
+            </span>
+            <div>
+              Seller workspace
+              <small>MAKE GOOD THINGS HAPPEN</small>
+            </div>
+          </Link>
+
+          {store && (
+            <label className="store-select">
+              <span>YOUR STORE</span>
+              <select
+                aria-label="Select store"
+                value={store.id}
+                onChange={(event) => selectStore(Number(event.target.value))}
+              >
+                {stores.data?.results.map((store) => (
+                  <option key={store.id} value={store.id}>
+                    {store.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          <nav>
+            {links
+              .filter(
+                ([key]) =>
+                  key !== 'payments' ||
+                  !user?.is_staff ||
+                  user?.is_superuser ||
+                  user?.is_business_admin
+              )
+              .map(([key, name, Icon]) => (
+                <Link
+                  key={key}
+                  className={section === key ? 'active' : ''}
+                  href={key === 'overview' ? '/merchant' : `/merchant/${key}`}
+                >
+                  <Icon size={19} />
+                  {name}
+                  {key === 'products' && <ChevronRight size={14} />}
+                  {key === 'notifications' && (notifCounts.data?.unread || 0) > 0 && (
+                    <span
+                      className="count-pill highlight"
+                      style={{ marginLeft: 'auto', fontSize: 10, padding: '1px 6px' }}
+                    >
+                      {notifCounts.data!.unread}
+                    </span>
+                  )}
+                </Link>
+              ))}
+          </nav>
+
+          <div className="merchant-sidebar-bottom">
+            {!storeLimitReached &&
+              (!user?.is_staff || user?.is_superuser || user?.is_business_admin) && (
+                <Link href="/merchant/new-store">
+                  <Plus size={18} />
+                  Open another store
+                </Link>
+              )}
+            <Link href="/help">
+              <CircleHelp size={18} />
+              Help & support
+            </Link>
+            <Link href="/">
+              <ArrowUpRight size={18} />
+              Back to marketplace
+            </Link>
+            <div className="merchant-person">
+              <span>{user?.first_name?.[0]}</span>
+              <div>
+                <strong>
+                  {user?.first_name} {user?.last_name}
+                </strong>
+                <small>
+                  {user?.is_staff ? 'Official store operations' : 'Store owner'}
+                </small>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <div className="merchant-main">
+          <div className="merchant-topline">
+            <span>
+              Workspace <ChevronRight size={12} />
+              {section.replaceAll('-', ' ')}
+            </span>
+            <Link href={store ? `/shop?store=${store.id}` : '/shop'}>
+              <Eye size={16} />
+              View storefront <ArrowUpRight size={14} />
+            </Link>
+          </div>
+
+          {stores.isLoading || !selectionReady ? (
+            <Loading />
+          ) : stores.error ? (
+            <ErrorState error={stores.error} retry={() => stores.refetch()} />
+          ) : !store || section === 'new-store' ? (
+            user?.is_staff && !user?.is_superuser && !user?.is_business_admin ? (
+              <Empty
+                title="No official stores available"
+                text="Official stores created by administrators will automatically appear here."
+              />
+            ) : storeLimitReached ? (
+              <Empty
+                title="10-store limit reached"
+                text="You can create a maximum of 10 stores."
+                href="/merchant"
+                label="Back to your stores"
+              />
+            ) : (
+              <OnboardStore />
+            )
+          ) : store.status === 'blocked' ? (
+            <Empty
+              title="Your store is unavailable"
+              text="Contact support about your store status before making further changes."
+              href="/help"
+              label="Visit help centre"
+            />
+          ) : section === 'products' && segments[1] ? (
+            <ProductEditor
+              key={`${store.id}-${segments[1]}`}
+              store={store}
+              id={segments[1]}
+            />
+          ) : section === 'products' ? (
+            <MerchantProducts key={store.id} store={store} />
+          ) : section === 'orders' ? (
+            <MerchantOrders key={store.id} store={store} />
+          ) : section === 'payments' ? (
+            <MerchantPayments key={store.id} store={store} />
+          ) : section === 'notifications' ? (
+            <MerchantNotifications key={store.id} store={store} />
+          ) : section === 'settings' ? (
+            <MerchantSettings key={store.id} store={store} />
+          ) : (
+            <MerchantDashboard key={store.id} store={store} />
+          )}
+        </div>
+      </div>
+    </Gate>
+  );
 }
 
 function OnboardStore() {
-  const { user, notify } = useShop(); const client = useQueryClient(); const router = useRouter(); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const { user, notify } = useShop();
+  const client = useQueryClient();
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
   async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(''); const data = Object.fromEntries(new FormData(event.currentTarget));
-    try { await api('stores', 'POST', { name: data.name, profile: { email: data.email, bio: data.bio }, address: { address: data.address, city: data.city, state: data.state, country: data.country, zip: data.zip } }); await client.invalidateQueries({ queryKey: ['stores'] }); notify('Your store is ready. Time for your first product.'); router.push('/merchant/products/new'); }
-    catch (error) { setError((error as Error).message); } finally { setBusy(false); }
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    const data = Object.fromEntries(new FormData(event.currentTarget));
+
+    try {
+      await api('stores', 'POST', {
+        name: data.name,
+        profile: { email: data.email, bio: data.bio },
+        address: {
+          address: data.address,
+          city: data.city,
+          state: data.state,
+          country: data.country,
+          zip: data.zip,
+        },
+      });
+      await client.invalidateQueries({ queryKey: ['stores'] });
+      notify('Your store is ready. Time for your first product.');
+      router.push('/merchant/products/new');
+    } catch (error) {
+      setError((error as Error).message);
+    } finally {
+      setBusy(false);
+    }
   }
-  return <section className="onboarding"><span className="eyebrow green">YOUR NEXT CHAPTER</span><h1>A home for your business.</h1><p className="muted">Introduce your store. Add your products. Meet your customers.</p><div className="onboarding-steps"><span className="active"><b>1</b>Store details</span><ChevronRight size={16} /><span><b>2</b>Your first product</span><ChevronRight size={16} /><span><b>3</b>Open for business</span></div><form className="form-stack" onSubmit={submit}><h2>Let’s make it official</h2><div className="form-row"><Field label="Store name"><input name="name" required maxLength={40} placeholder="Something memorable" /></Field><Field label="Contact email"><input type="email" name="email" required defaultValue={user?.email} /></Field></div><Field label="About your store"><textarea name="bio" placeholder="A little about what makes your store yours" /></Field><h3>Pickup address</h3><Field label="Street address"><input name="address" required /></Field><div className="form-row"><Field label="City"><input name="city" required /></Field><Field label="State / region"><input name="state" required maxLength={30} /></Field></div><div className="form-row"><Field label="Country"><input name="country" required /></Field><Field label="Postal code"><input name="zip" required maxLength={10} /></Field></div>{error && <p className="form-error">{error}</p>}<button className="button" disabled={busy}>{busy ? 'Creating your store…' : 'Create my store'}<ArrowRight size={17} /></button></form></section>;
+
+  return (
+    <section className="onboarding">
+      <span className="eyebrow green">YOUR NEXT CHAPTER</span>
+      <h1>A home for your business.</h1>
+      <p className="muted">Introduce your store. Add your products. Meet your customers.</p>
+      <div className="onboarding-steps">
+        <span className="active">
+          <b>1</b>Store details
+        </span>
+        <ChevronRight size={16} />
+        <span>
+          <b>2</b>Your first product
+        </span>
+        <ChevronRight size={16} />
+        <span>
+          <b>3</b>Open for business
+        </span>
+      </div>
+
+      <form className="form-stack" onSubmit={submit}>
+        <h2>Let’s make it official</h2>
+        <div className="form-row">
+          <Field label="Store name">
+            <input name="name" required maxLength={40} placeholder="Something memorable" />
+          </Field>
+          <Field label="Contact email">
+            <input type="email" name="email" required defaultValue={user?.email} />
+          </Field>
+        </div>
+        <Field label="About your store">
+          <textarea name="bio" placeholder="A little about what makes your store yours" />
+        </Field>
+        <h3>Business address</h3>
+        <p className="muted">
+          Required for every store, including digital sellers. Physical orders use this as the pickup address.
+        </p>
+        <Field label="Street address">
+          <input name="address" required />
+        </Field>
+        <div className="form-row">
+          <Field label="City">
+            <input name="city" required />
+          </Field>
+          <Field label="State / region">
+            <input name="state" required maxLength={30} />
+          </Field>
+        </div>
+        <div className="form-row">
+          <Field label="Country">
+            <input name="country" required />
+          </Field>
+          <Field label="Postal code">
+            <input name="zip" required maxLength={10} />
+          </Field>
+        </div>
+        {error && <p className="form-error">{error}</p>}
+        <button className="button" disabled={busy}>
+          {busy ? 'Creating your store…' : 'Create my store'}
+          <ArrowRight size={17} />
+        </button>
+      </form>
+    </section>
+  );
 }
 
 function MerchantDashboard({ store }: { store: Store }) {
   const [days, setDays] = useState('30'); const { user, notify } = useShop(); const client = useQueryClient();
-  const stats = useQuery({ queryKey: ['dashboard', store.id, days], queryFn: () => api<Dashboard>(`stores/${store.id}/dashboard?days=${days}`) });
+  const stats = useQuery({ queryKey: ['dashboard', store.id, days], queryFn: () => api<Dashboard>(`stores/${store.id}/dashboard?days=${days}&time_zone=${encodeURIComponent(browserTimeZone())}`) });
   const orders = useQuery({ queryKey: ['merchant-recent', store.id], queryFn: () => api<Page<MerchantOrder>>(`stores/${store.id}/orders?limit=5`) });
   const payouts = useQuery({ queryKey: ['merchant-payouts', store.id], queryFn: () => api<StorePayout[]>(`stores/${store.id}/payouts`) });
   const checklist = useQuery({ queryKey: ['onboarding', store.id], queryFn: () => api<{complete: boolean; steps: Record<string, boolean>}>(`stores/${store.id}/onboarding`) });
@@ -214,10 +463,19 @@ function MerchantDashboard({ store }: { store: Store }) {
           </p>
         </div>
         <div className="form-actions">
-          <button className="button secondary" onClick={() => setRequestingPayout(true)}>
-            <WalletCards size={17} />
-            Request payout
-          </button>
+          {isOfficial ? (
+            (user?.is_superuser || user?.is_business_admin) ? (
+              <Link className="button secondary" href="/admin/commission" title="Official company store earnings consolidate into Platform Treasury">
+                <WalletCards size={17} />
+                Platform Treasury
+              </Link>
+            ) : null
+          ) : (
+            <button className="button secondary" onClick={() => setRequestingPayout(true)}>
+              <WalletCards size={17} />
+              Request payout
+            </button>
+          )}
           <Link className="button" href="/merchant/products/new">
             <Plus size={17} />
             Add product
@@ -251,35 +509,401 @@ function MerchantDashboard({ store }: { store: Store }) {
             </div>
           </div>
         </div>
-      )}<div className="dashboard-period"><h2>Your store at a glance</h2><select aria-label="Dashboard period" value={days} onChange={event => setDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select></div>{stats.isLoading ? <Loading /> : stats.error ? <ErrorState error={stats.error} retry={() => stats.refetch()} /> : data && <>
-    <div className="stats-grid">{[
-      {label: 'Available for Payout', value: money(data.wallet?.available_balance || '0.00'), icon: WalletCards, note: 'Cleared sales past 7-day refund window'},
-      {label: 'In Review (Escrow)', value: money(data.wallet?.in_review || '0.00'), icon: Clock, note: 'Orders within 7-day refund period'},
-      {label: isOfficial ? 'Gross Sales (100% Retained)' : 'Gross Sales (Item Value)', value: money(data.wallet?.gross_sales || data.sales.estimated_item_value), icon: ChartNoAxesCombined, note: isOfficial ? 'Total sales with 0% platform fee' : 'Total item sales before 4% platform fee'},
-      {label: isOfficial ? 'Platform Fee (0%)' : `Platform Commission (${data.wallet?.platform_fee_percent || '4'}%)`, value: isOfficial ? '$0.00' : money(data.wallet?.platform_fee_deducted || '0.00'), icon: ShoppingBag, note: isOfficial ? 'Official company store exemption (0% fee)' : 'Marketplace hosting & payment processing'}
-    ].map(({label, value, icon: Icon, note}, index) => <div key={label} className={`stat-item stat-${index}`}><div><span>{label}</span><Icon size={19} /></div><strong>{value}</strong><small>{note}</small></div>)}</div>
-    {requestingPayout && <div className="setup-notice" style={{ flexDirection: 'column', alignItems: 'stretch' }}><h3>Request Merchant Payout</h3><p className="muted">Withdraw available cleared funds directly to your bank account.</p><form className="form-stack" onSubmit={submitPayout}><div className="form-row"><Field label={`Payout amount (Max: ${money(data.wallet?.available_balance || '0.00')})`}><input type="number" min="5.00" max={Number(data.wallet?.available_balance || '0')} step="0.01" required value={payoutAmount} onChange={e => setPayoutAmount(e.target.value)} placeholder="0.00" /></Field><Field label="Bank Name"><input required value={bankName} onChange={e => setBankName(e.target.value)} placeholder="e.g. JPMorgan Chase" /></Field></div><Field label="Account Number / IBAN"><input required value={accountNumber} onChange={e => setAccountNumber(e.target.value)} placeholder="e.g. 1234567890" /></Field><div className="form-row"><button className="button" disabled={payoutBusy}>{payoutBusy ? 'Submitting…' : 'Submit withdrawal request'}</button><button type="button" className="button secondary" onClick={() => setRequestingPayout(false)}>Cancel</button></div></form></div>}
-    {checklist.data && !checklist.data.complete && <div className="setup-notice"><span className="setup-check"><StoreIcon size={23} /></span><div><strong>Your store is taking shape.</strong><p>{Object.values(checklist.data.steps).filter(Boolean).length} of {Object.values(checklist.data.steps).length} setup steps complete.</p></div><Link className="text-link" href={checklist.data.steps.product_added ? '/merchant/settings' : '/merchant/products/new'}>Continue setup <ArrowRight size={16} /></Link></div>}
-    <div className="dashboard-columns"><section className="analytics-panel"><div className="section-heading"><div><h2>Order activity</h2><p>{data.orders.total} orders in the last {days} days</p></div><span className="chart-legend"><i />Orders</span></div><div className="bar-chart" role="img" aria-label={`Order activity: ${data.orders.total} orders in ${days} days`}><div className="chart-y"><span>{max}</span><span>{max / 2}</span><span>0</span></div><div className="chart-bars">{values.map((day, index) => <div className="chart-column" key={day.date} title={`${day.date}: ${day.count} orders`}><span style={{ height: `${day.count / max * 100}%`, minHeight: day.count ? 5 : 1 }} /><small>{index === 0 || index === values.length - 1 || (index % 7 === 0 && index < values.length - 3) ? new Date(day.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : ''}</small></div>)}</div></div></section><section className="stock-panel"><div className="section-heading"><h2>Needs a little attention</h2><span className="stock-number">{data.inventory.low_stock + data.inventory.out_of_stock}</span></div><p className="muted">Keep your best finds in stock.</p>{data.low_stock_products.length ? data.low_stock_products.slice(0, 4).map(product => <Link className="stock-row" href={`/merchant/products/${product.id}`} key={product.id}><span><Package size={19} /></span><div><strong>{product.title}</strong><small>{product.available ? `${product.available} units left` : 'Out of stock'}</small></div><ArrowUpRight size={16} /></Link>) : <div className="all-good"><Check size={26} /><strong>Looking good.</strong><p>Your inventory is in a healthy place.</p></div>}<Link className="text-link" href="/merchant/products">Manage inventory <ArrowRight size={16} /></Link></section></div>
-    <section className="merchant-section"><div className="section-heading"><h2>Recent orders</h2><Link className="text-link" href="/merchant/orders">View all orders <ArrowRight size={16} /></Link></div>{orders.isLoading ? <Loading /> : orders.error ? <ErrorState error={orders.error} /> : <MerchantOrderTable orders={orders.data?.results || []} storeId={store.id} onUpdated={() => { client.invalidateQueries({ queryKey: ['merchant-recent', store.id] }); client.invalidateQueries({ queryKey: ['dashboard', store.id] }); client.invalidateQueries({ queryKey: ['merchant-orders', store.id] }); }} />}</section>
-    <section className="merchant-section"><div className="section-heading"><h2>Payout history</h2><span className="muted">{payouts.data?.length || 0} payout requests</span></div>{payouts.isLoading ? <Loading /> : payouts.error ? <ErrorState error={payouts.error} /> : !payouts.data?.length ? <p className="muted">No payouts requested yet.</p> : <div className="table-scroll"><table><thead><tr><th>Date</th><th>Reference</th><th>Amount</th><th>Method</th><th>Status</th></tr></thead><tbody>{payouts.data.map(p => <tr key={p.id}><td>{new Date(p.created).toLocaleDateString()}</td><td><strong>{p.reference}</strong></td><td>{money(p.amount)}</td><td>{p.payout_method}</td><td><Status value={p.status} /></td></tr>)}</tbody></table></div>}</section>
-    <div className="dashboard-footnote">{isOfficial ? 'Company official store: 100% of sales are retained with zero platform commission fee.' : 'Net sales are calculated at 96% after the 4% platform fee. Funds clear from review to your available payout balance after the 7-day customer refund window expires.'}</div>
-  </>}</>
+      )}
+
+      <div className="dashboard-period">
+        <h2>Your store at a glance</h2>
+        <select
+          aria-label="Dashboard period"
+          value={days}
+          onChange={(event) => setDays(event.target.value)}
+        >
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+      </div>
+
+      {stats.isLoading ? (
+        <Loading />
+      ) : stats.error ? (
+        <ErrorState error={stats.error} retry={() => stats.refetch()} />
+      ) : (
+        data && (
+          <>
+            <div className="stats-grid">
+              {[
+                {
+                  label: 'Available for Payout',
+                  value: money(data.wallet?.available_balance || '0.00'),
+                  icon: WalletCards,
+                  note: 'Cleared sales past 7-day refund window',
+                },
+                {
+                  label: 'In Review (Escrow)',
+                  value: money(data.wallet?.in_review || '0.00'),
+                  icon: Clock,
+                  note: 'Orders within 7-day refund period',
+                },
+                {
+                  label: isOfficial
+                    ? 'Gross Sales (100% Retained)'
+                    : 'Gross Sales (Item Value)',
+                  value: money(
+                    data.wallet?.gross_sales || data.sales.estimated_item_value
+                  ),
+                  icon: ChartNoAxesCombined,
+                  note: isOfficial
+                    ? 'Total sales with 0% platform fee'
+                    : 'Total item sales before 4% platform fee',
+                },
+                {
+                  label: isOfficial
+                    ? 'Platform Fee (0%)'
+                    : `Platform Commission (${data.wallet?.platform_fee_percent || '4'}%)`,
+                  value: isOfficial
+                    ? '$0.00'
+                    : money(data.wallet?.platform_fee_deducted || '0.00'),
+                  icon: ShoppingBag,
+                  note: isOfficial
+                    ? 'Official company store exemption (0% fee)'
+                    : 'Marketplace hosting & payment processing',
+                },
+              ].map(({ label, value, icon: Icon, note }, index) => (
+                <div key={label} className={`stat-item stat-${index}`}>
+                  <div>
+                    <span>{label}</span>
+                    <Icon size={19} />
+                  </div>
+                  <strong>{value}</strong>
+                  <small>{note}</small>
+                </div>
+              ))}
+            </div>
+
+            {requestingPayout && !isOfficial && (
+              <div
+                className="setup-notice"
+                style={{ flexDirection: 'column', alignItems: 'stretch' }}
+              >
+                <h3>Request Merchant Payout</h3>
+                <p className="muted">
+                  Withdraw available cleared funds directly to your bank account.
+                </p>
+                <form className="form-stack" onSubmit={submitPayout}>
+                  <div className="form-row">
+                    <Field
+                      label={`Payout amount (Max: ${money(data.wallet?.available_balance || '0.00')})`}
+                    >
+                      <input
+                        type="number"
+                        min="5.00"
+                        max={Number(data.wallet?.available_balance || '0')}
+                        step="0.01"
+                        required
+                        value={payoutAmount}
+                        onChange={(e) => setPayoutAmount(e.target.value)}
+                        placeholder="0.00"
+                      />
+                    </Field>
+                    <Field label="Bank Name">
+                      <input
+                        required
+                        value={bankName}
+                        onChange={(e) => setBankName(e.target.value)}
+                        placeholder="e.g. JPMorgan Chase"
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Account Number / IBAN">
+                    <input
+                      required
+                      value={accountNumber}
+                      onChange={(e) => setAccountNumber(e.target.value)}
+                      placeholder="e.g. 1234567890"
+                    />
+                  </Field>
+                  <div className="form-row">
+                    <button className="button" disabled={payoutBusy}>
+                      {payoutBusy ? 'Submitting…' : 'Submit withdrawal request'}
+                    </button>
+                    <button
+                      type="button"
+                      className="button secondary"
+                      onClick={() => setRequestingPayout(false)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+
+            {checklist.data && !checklist.data.complete && (
+              <div className="setup-notice">
+                <span className="setup-check">
+                  <StoreIcon size={23} />
+                </span>
+                <div>
+                  <strong>Your store is taking shape.</strong>
+                  <p>
+                    {Object.values(checklist.data.steps).filter(Boolean).length} of{' '}
+                    {Object.values(checklist.data.steps).length} setup steps complete.
+                  </p>
+                </div>
+                <Link
+                  className="text-link"
+                  href={
+                    checklist.data.steps.product_added
+                      ? '/merchant/settings'
+                      : '/merchant/products/new'
+                  }
+                >
+                  Continue setup <ArrowRight size={16} />
+                </Link>
+              </div>
+            )}
+
+            <div className="dashboard-columns">
+              <section className="analytics-panel">
+                <div className="section-heading">
+                  <div>
+                    <h2>Order activity</h2>
+                    <p>
+                      {data.orders.total} orders in the last {days} days
+                    </p>
+                  </div>
+                  <span className="chart-legend">
+                    <i />
+                    Orders
+                  </span>
+                </div>
+                <div
+                  className="bar-chart"
+                  role="img"
+                  aria-label={`Order activity: ${data.orders.total} orders in ${days} days`}
+                >
+                  <div className="chart-y">
+                    <span>{max}</span>
+                    <span>{max / 2}</span>
+                    <span>0</span>
+                  </div>
+                  <div className="chart-bars">
+                    {values.map((day, index) => (
+                      <div
+                        className="chart-column"
+                        key={day.date}
+                        title={`${day.date}: ${day.count} orders`}
+                      >
+                        <span
+                          style={{
+                            height: `${(day.count / max) * 100}%`,
+                            minHeight: day.count ? 5 : 1,
+                          }}
+                        />
+                        <small>
+                          {index === 0 ||
+                          index === values.length - 1 ||
+                          (index % 7 === 0 && index < values.length - 3)
+                            ? calendarDateLabel(day.date)
+                            : ''}
+                        </small>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+
+              <section className="stock-panel">
+                <div className="section-heading">
+                  <h2>Needs a little attention</h2>
+                  <span className="stock-number">
+                    {data.inventory.low_stock + data.inventory.out_of_stock}
+                  </span>
+                </div>
+                <p className="muted">Keep your best finds in stock.</p>
+                {data.low_stock_products.length ? (
+                  data.low_stock_products.slice(0, 4).map((product) => (
+                    <Link
+                      className="stock-row"
+                      href={`/merchant/products/${product.id}`}
+                      key={product.id}
+                    >
+                      <span>
+                        <Package size={19} />
+                      </span>
+                      <div>
+                        <strong>{product.title}</strong>
+                        <small>
+                          {product.available
+                            ? `${product.available} units left`
+                            : 'Out of stock'}
+                        </small>
+                      </div>
+                      <ArrowUpRight size={16} />
+                    </Link>
+                  ))
+                ) : (
+                  <div className="all-good">
+                    <Check size={26} />
+                    <strong>Looking good.</strong>
+                    <p>Your inventory is in a healthy place.</p>
+                  </div>
+                )}
+                <Link className="text-link" href="/merchant/products">
+                  Manage inventory <ArrowRight size={16} />
+                </Link>
+              </section>
+            </div>
+
+            <section className="merchant-section">
+              <div className="section-heading">
+                <h2>Recent orders</h2>
+                <Link className="text-link" href="/merchant/orders">
+                  View all orders <ArrowRight size={16} />
+                </Link>
+              </div>
+              {orders.isLoading ? (
+                <Loading />
+              ) : orders.error ? (
+                <ErrorState error={orders.error} />
+              ) : (
+                <MerchantOrderTable
+                  orders={orders.data?.results || []}
+                  storeId={store.id}
+                  onUpdated={() => {
+                    client.invalidateQueries({
+                      queryKey: ['merchant-recent', store.id],
+                    });
+                    client.invalidateQueries({
+                      queryKey: ['dashboard', store.id],
+                    });
+                    client.invalidateQueries({
+                      queryKey: ['merchant-orders', store.id],
+                    });
+                  }}
+                />
+              )}
+            </section>
+
+            <section className="merchant-section">
+              <div className="section-heading">
+                <h2>Payout history</h2>
+                <span className="muted">
+                  {payouts.data?.length || 0} payout requests
+                </span>
+              </div>
+              {payouts.isLoading ? (
+                <Loading />
+              ) : payouts.error ? (
+                <ErrorState error={payouts.error} />
+              ) : !payouts.data?.length ? (
+                <p className="muted">No payouts requested yet.</p>
+              ) : (
+                <div className="table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Reference</th>
+                        <th>Amount</th>
+                        <th>Method</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payouts.data.map((p) => (
+                        <tr key={p.id}>
+                          <td>{new Date(p.created).toLocaleDateString()}</td>
+                          <td>
+                            <strong>{p.reference}</strong>
+                          </td>
+                          <td>{money(p.amount)}</td>
+                          <td>{p.payout_method}</td>
+                          <td>
+                            <Status value={p.status} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
+            <div className="dashboard-footnote">
+              {isOfficial
+                ? 'Company official store: 100% of sales are retained and consolidated into the Platform Treasury at /admin/commission.'
+                : 'Net sales are calculated at 96% after the 4% platform fee. Funds clear from review to your available payout balance after the 7-day customer refund window expires.'}
+            </div>
+          </>
+        )
+      )}
+    </>
   );
 }
 
 function exportRows(products: MerchantProduct[]) {
-  const escape = (value: unknown) => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`;
-  const rows = [['ID', 'Product', 'Price', 'Stock', 'Published'], ...products.map(product => [product.id, product.title, product.price, product.is_digital ? 'Unlimited' : product.available, product.visibility])];
-  const url = URL.createObjectURL(new Blob([rows.map(row => row.map(escape).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8;' }));
-  const link = document.createElement('a'); link.href = url; link.download = 'proace-products.csv'; link.click(); URL.revokeObjectURL(url);
+  const escape = (value: unknown) =>
+    `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`;
+
+  const rows = [
+    ['ID', 'Product', 'Price', 'Stock', 'Published'],
+    ...products.map((product) => [
+      product.id,
+      product.title,
+      product.price,
+      product.is_digital ? 'Unlimited' : product.available,
+      product.visibility,
+    ]),
+  ];
+
+  const csvContent = rows.map((row) => row.map(escape).join(',')).join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = 'proace-products.csv';
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 function MerchantProducts({ store }: { store: Store }) {
-  const [search, setSearch] = useState(''); const [filter, setFilter] = useState(''); const [offset, setOffset] = useState(0); const [busy, setBusy] = useState<number | null>(null); const { notify } = useShop(); const client = useQueryClient();
-  const query = new URLSearchParams({ search, limit: '15', offset: String(offset) }); if (filter) query.set('visibility', filter);
-  const products = useQuery({ queryKey: ['merchant-products', store.id, query.toString()], queryFn: () => api<Page<MerchantProduct>>(`stores/${store.id}/products?${query}`) });
-  async function toggle(product: MerchantProduct) { setBusy(product.id); try { await api(`stores/${store.id}/products/${product.id}`, 'PATCH', { visibility: !product.visibility }); await client.invalidateQueries({ queryKey: ['merchant-products'] }); await client.invalidateQueries({ queryKey: ['dashboard'] }); await client.invalidateQueries({ queryKey: ['products'] }); notify(product.visibility ? 'Product unpublished' : 'Your product is live'); } catch (error) { notify((error as Error).message, true); } finally { setBusy(null); } }
+  const [ordering, setOrdering] = useState<string>('-updated');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [busy, setBusy] = useState<number | null>(null);
+  const { notify } = useShop();
+  const client = useQueryClient();
+
+  const query = new URLSearchParams({ search, ordering, limit: '15', offset: String(offset) });
+  if (filter) {
+    query.set('visibility', filter);
+  }
+
+  const products = useQuery({
+    queryKey: ['merchant-products', store.id, query.toString()],
+    queryFn: () => api<Page<MerchantProduct>>(`stores/${store.id}/products?${query}`),
+  });
+
+  async function toggle(product: MerchantProduct) {
+    setBusy(product.id);
+    try {
+      await api(`stores/${store.id}/products/${product.id}`, 'PATCH', {
+        visibility: !product.visibility,
+      });
+      await client.invalidateQueries({ queryKey: ['merchant-products'] });
+      await client.invalidateQueries({ queryKey: ['dashboard'] });
+      await client.invalidateQueries({ queryKey: ['products'] });
+      notify(product.visibility ? 'Product unpublished' : 'Your product is live');
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  }
 
 function parseCsvRows(text: string): string[][] {
   const rows: string[][] = [];
@@ -329,6 +953,7 @@ function parseCsvRows(text: string): string[][] {
     }
   }
 
+  if (inQuotes) throw new Error('CSV contains an unterminated quoted field.');
   if (currentField.length > 0 || currentRow.length > 0) {
     currentRow.push(currentField);
     if (currentRow.some(field => field.trim().length > 0)) {
@@ -342,14 +967,18 @@ function parseCsvRows(text: string): string[][] {
   async function handleCsvImport(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { notify('CSV files must be at most 2 MB.', true); return; }
     const text = await file.text();
-    const rows = parseCsvRows(text);
+    let rows: string[][];
+    try { rows = parseCsvRows(text); } catch (error) { notify((error as Error).message, true); return; }
     if (rows.length < 2) {
       notify('CSV file is empty or missing rows.', true);
       return;
     }
+    if (rows.length > 501) { notify('Import at most 500 products per CSV.', true); return; }
     const headers = rows[0].map(h => h.trim().toLowerCase().replace(/^["']|["']$/g, ''));
     let count = 0;
+    const failedRows: number[] = [];
     for (let i = 1; i < rows.length; i++) {
       const values = rows[i].map(v => v.trim());
       if (values.length < 2 || !values[0]) continue;
@@ -358,7 +987,9 @@ function parseCsvRows(text: string): string[][] {
         row[header] = values[idx] || '';
       });
       const title = row['title'] || row['product'] || values[0];
-      const price = Number(row['price'] || values[1] || 10);
+      const priceText = row['price'] || values[1] || '';
+      if (!/^\d+(?:\.\d{1,2})?$/.test(priceText)) { failedRows.push(i + 1); continue; }
+      const price = Number(priceText);
       const category = row['category'] || 'sports';
       const available = Number(row['stock'] || row['available'] || values[2] || 10);
       const description = row['description'] || `${title} - Quality listing`;
@@ -375,8 +1006,10 @@ function parseCsvRows(text: string): string[][] {
               return { name: vName?.trim() || '', price_delta: vDelta?.trim() || '0.00', available: Number(vStock || 10) };
             }).filter(v => v.name);
           }
-        } catch (_) {}
+        } catch (_) { failedRows.push(i + 1); continue; }
+        if (!Array.isArray(variantsList) || variantsList.length > 100) { failedRows.push(i + 1); continue; }
       }
+      if (!Number.isFinite(price) || price <= 0 || !Number.isSafeInteger(available) || available < 0) { failedRows.push(i + 1); continue; }
       try {
         await api(`stores/${store.id}/products`, 'POST', {
           title,
@@ -393,24 +1026,240 @@ function parseCsvRows(text: string): string[][] {
         });
         count++;
       } catch (err) {
+        failedRows.push(i + 1);
         console.error(err);
       }
     }
     await client.invalidateQueries({ queryKey: ['merchant-products'] });
     await client.invalidateQueries({ queryKey: ['dashboard'] });
     await client.invalidateQueries({ queryKey: ['products'] });
-    notify(`Imported ${count} products from CSV!`);
+    notify(`Imported ${count} products.${failedRows.length ? ` Failed rows: ${failedRows.slice(0, 10).join(', ')}${failedRows.length > 10 ? '…' : ''}. Use plain decimal prices, for example 1200.50.` : ''}`, failedRows.length > 0);
     event.target.value = '';
   }
 
-  return <><div className="merchant-heading"><div><h1>Your products</h1><p>A collection worth discovering.</p></div><div className="form-actions"><label className="button secondary" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} title="Bulk import products from CSV"><Upload size={17} />Import CSV<input type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={handleCsvImport} /></label><button className="button secondary" title="Export current page" disabled={!products.data?.results.length} onClick={() => exportRows(products.data!.results)}><ArrowDownToLine size={17} />Export page</button><Link className="button" href="/merchant/products/new"><Plus size={17} />Add product</Link></div></div><div className="merchant-toolbar"><div className="tabs">{[['', 'All products'], ['true', 'Published'], ['false', 'Drafts']].map(([value, label]) => <button className={filter === value ? 'active' : ''} key={value} onClick={() => { setFilter(value); setOffset(0); }}>{label}</button>)}</div><div className="search-box"><Search size={17} /><input aria-label="Search your products" placeholder="Search products…" value={search} onChange={event => { setSearch(event.target.value); setOffset(0); }} /></div></div>{products.isLoading ? <Loading /> : products.error ? <ErrorState error={products.error} retry={() => products.refetch()} /> : !products.data?.results.length ? <Empty title={search ? 'Nothing matches just yet' : 'Your first product starts here'} text={search ? 'Try another search or change the filter.' : 'Add your first listing and give your customers something to discover.'} href="/merchant/products/new" label="Add product" /> : <><div className="table-scroll"><table><thead><tr><th>Product</th><th>Category</th><th>Price</th><th>Inventory</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{products.data.results.map(product => <tr key={product.id}><td><Link className="table-product" href={`/merchant/products/${product.id}`}><ProductImage src={product.images[0]?.image || product.image_url} alt={product.title} /><span><strong>{product.title}</strong><small style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>#{String(product.id).padStart(5, '0')} · {product.brand || store.name}<VerifiedBadge tier={store.is_official ? 'official' : 'starter'} tierData={store.seller_tier} size={12} /></small></span></Link></td><td>{categories.find(category => category.key === product.category)?.name || product.category}</td><td className="table-price">{money(product.price)}</td><td>{product.is_digital ? <span>Unlimited</span> : <span className={product.available <= 5 ? 'low-stock' : ''}>{product.available} in stock</span>}</td><td><button className={`publish-toggle ${product.visibility ? 'on' : ''}`} disabled={busy === product.id} role="switch" aria-checked={product.visibility} aria-label={`Publish ${product.title}`} onClick={() => toggle(product)}><span />{product.visibility ? 'Published' : 'Draft'}</button></td><td><Link className="icon-button" title="Edit product" aria-label={`Edit ${product.title}`} href={`/merchant/products/${product.id}`}><ArrowUpRight size={18} /></Link></td></tr>)}</tbody></table></div><Pagination page={Math.floor(offset / 15) + 1} totalPages={Math.ceil((products.data.count) / 15)} onChange={page => setOffset((page - 1) * 15)} /></>}</>;
+  return (
+    <>
+      <div className="merchant-heading">
+        <div>
+          <h1>Your products</h1>
+          <p>A collection worth discovering.</p>
+        </div>
+        <div className="form-actions">
+          <label
+            className="button secondary"
+            style={{
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+            title="Bulk import products from CSV"
+          >
+            <Upload size={17} />
+            Import CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              style={{ display: 'none' }}
+              onChange={handleCsvImport}
+            />
+          </label>
+          <button
+            className="button secondary"
+            title="Export current page"
+            disabled={!products.data?.results.length}
+            onClick={() => exportRows(products.data!.results)}
+          >
+            <ArrowDownToLine size={17} />
+            Export page
+          </button>
+          <Link className="button" href="/merchant/products/new">
+            <Plus size={17} />
+            Add product
+          </Link>
+        </div>
+      </div>
+
+      <div className="merchant-toolbar">
+        <select
+          aria-label="Sort products"
+          value={ordering}
+          onChange={(event) => {
+            setOrdering(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="-updated">Recently updated</option>
+          <option value="-created">Recently created</option>
+          <option value="created">Oldest first</option>
+        </select>
+        <div className="tabs">
+          {[
+            ['', 'All products'],
+            ['true', 'Published'],
+            ['false', 'Drafts'],
+          ].map(([value, label]) => (
+            <button
+              className={filter === value ? 'active' : ''}
+              key={value}
+              onClick={() => {
+                setFilter(value);
+                setOffset(0);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="search-box">
+          <Search size={17} />
+          <input
+            aria-label="Search your products"
+            placeholder="Search products…"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setOffset(0);
+            }}
+          />
+        </div>
+      </div>
+
+      {products.isLoading ? (
+        <Loading />
+      ) : products.error ? (
+        <ErrorState error={products.error} retry={() => products.refetch()} />
+      ) : !products.data?.results.length ? (
+        <Empty
+          title={search ? 'Nothing matches just yet' : 'Your first product starts here'}
+          text={
+            search
+              ? 'Try another search or change the filter.'
+              : 'Add your first listing and give your customers something to discover.'
+          }
+          href="/merchant/products/new"
+          label="Add product"
+        />
+      ) : (
+        <>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Created / Updated</th>
+                  <th>Category</th>
+                  <th>Price</th>
+                  <th>Inventory</th>
+                  <th>Status</th>
+                  <th>
+                    <span className="sr-only">Actions</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {products.data.results.map((product) => (
+                  <tr key={product.id}>
+                    <td>
+                      <Link
+                        className="table-product"
+                        href={`/merchant/products/${product.id}`}
+                      >
+                        <ProductImage
+                          src={product.images[0]?.image || product.image_url}
+                          alt={product.title}
+                        />
+                        <span>
+                          <strong>{product.title}</strong>
+                          <small
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                            }}
+                          >
+                            #{String(product.id).padStart(5, '0')} ·{' '}
+                            {product.brand || store.name}
+                            <VerifiedBadge
+                              tier={store.is_official ? 'official' : 'starter'}
+                              tierData={store.seller_tier}
+                              size={12}
+                            />
+                          </small>
+                        </span>
+                      </Link>
+                    </td>
+                    <td>
+                      {activityDate(product.created)}
+                      <br />
+                      {activityDate(product.updated)}
+                    </td>
+                    <td>
+                      {categories.find((category) => category.key === product.category)
+                        ?.name || product.category}
+                    </td>
+                    <td className="table-price">{money(product.price)}</td>
+                    <td>
+                      {product.is_digital ? (
+                        <span>Unlimited</span>
+                      ) : (
+                        <span className={product.available <= 5 ? 'low-stock' : ''}>
+                          {product.available} in stock
+                        </span>
+                      )}
+                    </td>
+                    <td>
+                      <button
+                        className={`publish-toggle ${product.visibility ? 'on' : ''}`}
+                        disabled={busy === product.id}
+                        role="switch"
+                        aria-checked={product.visibility}
+                        aria-label={`Publish ${product.title}`}
+                        onClick={() => toggle(product)}
+                      >
+                        <span />
+                        {product.visibility ? 'Published' : 'Draft'}
+                      </button>
+                    </td>
+                    <td>
+                      <Link
+                        className="icon-button"
+                        title="Edit product"
+                        aria-label={`Edit ${product.title}`}
+                        href={`/merchant/products/${product.id}`}
+                      >
+                        <ArrowUpRight size={18} />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination
+            page={Math.floor(offset / 15) + 1}
+            totalPages={Math.ceil(products.data.count / 15)}
+            onChange={(page) => setOffset((page - 1) * 15)}
+          />
+        </>
+      )}
+    </>
+  );
 }
 
 function ProductEditor({ store, id }: { store: Store; id: string }) {
-  const isNew = id === 'new'; const client = useQueryClient(); const router = useRouter(); const { notify } = useShop(); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const product = useQuery({ queryKey: ['merchant-product', store.id, id], queryFn: () => api<MerchantProduct>(`stores/${store.id}/products/${id}`), enabled: !isNew });
+  const [savedProductId, setSavedProductId] = useState<number | null>(null);
+  const persistedId = useRef<number | null>(id === 'new' ? null : Number(id));
+  const saving = useRef<boolean>(false);
+  const productId: string = savedProductId !== null ? String(savedProductId) : id;
+  const isNew: boolean = productId === 'new';
+  const client = useQueryClient(); const router = useRouter(); const { notify } = useShop(); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const product = useQuery({ queryKey: ['merchant-product', store.id, productId], queryFn: () => api<MerchantProduct>(`stores/${store.id}/products/${productId}`), enabled: !isNew });
+  const [productType, setProductType] = useState<string | null>(null);
+  const effectiveProductType = productType ?? product.data?.product_type ?? 'standard';
+  const isAffiliate = effectiveProductType === 'affiliate_clickbank';
   const [isDigital, setIsDigital] = useState<boolean | null>(null);
-  const effectiveIsDigital = isDigital ?? product.data?.is_digital ?? false;
+  const effectiveIsDigital = !isAffiliate && (isDigital ?? product.data?.is_digital ?? false);
   const [variants, setVariants] = useState<ProductVariant[] | null>(null);
 
   const effectiveVariants = variants ?? product.data?.variants ?? [];
@@ -421,7 +1270,6 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
 
   const [digitalFile, setDigitalFile] = useState<File | null>(null);
   const [digitalPreviewUrl, setDigitalPreviewUrl] = useState<string | null>(null);
-  const [preview, setPreview] = useState<PreviewProduct | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const [showDigitalUrlInput, setShowDigitalUrlInput] = useState(false);
 
@@ -470,21 +1318,40 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     const form = formRef.current;
     if (!form) return;
     const values = Object.fromEntries(new FormData(form)) as Record<string, string>;
-    const digital = values.is_digital === 'on';
+    const affiliate = values.product_type === 'affiliate_clickbank';
+    const digital = !affiliate && values.is_digital === 'on';
     const price = Number(values.price);
-    setPreview({
+    const preview: PreviewProduct = {
       title: values.title?.trim() || 'Untitled product', description: values.description?.trim() || 'Product description coming soon.',
       brand: values.brand?.trim() || store.name, category: values.category || 'General', is_digital: digital,
       price: Number.isFinite(price) && price > 0 ? price : 0,
       sale_price: Number.isFinite(price) && price > 0 ? price * (100 - Number(values.discount || 0)) / 100 : 0,
-      discount: Number(values.discount || 0), available: digital ? 0 : Number(values.available || 0),
+      discount: Number(values.discount || 0), available: affiliate ? 999 : (digital ? 0 : Number(values.available || 0)),
       image: effectiveCoverImage || 'https://placehold.co/900x900/1b2921/9bd7b5?text=Product+Preview',
       images: [...new Set([effectiveCoverImage, ...effectiveVariants.map(v => v.image_url || '')].filter(Boolean))],
       flash_sale_end: values.flash_sale_end ? new Date(values.flash_sale_end).toISOString() : null,
       digital_preview_watermark: digital && values.digital_preview_watermark === 'on',
-      variants: digital ? [] : effectiveVariants.filter(v => v.name.trim()).map(v => ({ ...v, price_delta: v.price_delta || '0.00', available: Number(v.available || 0) })),
+      variants: (digital || affiliate) ? [] : effectiveVariants.filter(v => v.name.trim()).map(v => ({ ...v, price_delta: v.price_delta || '0.00', available: Number(v.available || 0) })),
       digital_file_name: digitalFile?.name || (values.digital_file_url ? 'Digital download' : undefined), digital_file_url: digitalPreviewUrl || values.digital_file_url || undefined,
-    });
+      product_type: affiliate ? 'affiliate_clickbank' : 'standard',
+      affiliate_hoplink: values.affiliate_hoplink?.trim() || '',
+      affiliate_vendor_nickname: values.affiliate_vendor_nickname?.trim() || '',
+      affiliate_button_text: values.affiliate_button_text?.trim() || 'Buy on Partner Site',
+    };
+    const tab: Window | null = window.open('about:blank', '_blank');
+    if (!tab) {
+      setError('Allow pop-ups to open the product preview. Your draft is still here.');
+      return;
+    }
+    try {
+      tab.sessionStorage.setItem('proace-product-preview', JSON.stringify(preview));
+      tab.opener = null;
+      tab.location.replace('/merchant/products/preview');
+      setError('');
+    } catch {
+      tab.close();
+      setError('Could not open the preview. Please try again.');
+    }
   }
 
   function addVariant() {
@@ -502,10 +1369,14 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(''); const form = Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>;
-    const digital = form.is_digital === 'on';
+    event.preventDefault();
+    if (saving.current) return;
+    saving.current = true;
+    setBusy(true); setError(''); const form = Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>;
+    const affiliate = form.product_type === 'affiliate_clickbank';
+    const digital = !affiliate && form.is_digital === 'on';
     const flashEnd = form.flash_sale_end ? new Date(form.flash_sale_end).toISOString() : null;
-    const validVariants = effectiveVariants
+    const validVariants = (affiliate || digital) ? [] : effectiveVariants
       .filter(v => v.name && v.name.trim().length > 0)
       .map(v => ({
         ...v,
@@ -522,22 +1393,33 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
 
     const payload = {
       ...form,
+      product_type: affiliate ? 'affiliate_clickbank' : 'standard',
+      affiliate_hoplink: affiliate ? (form.affiliate_hoplink?.trim() || '') : '',
+      affiliate_vendor_nickname: affiliate ? (form.affiliate_vendor_nickname?.trim() || '') : '',
+      affiliate_button_text: affiliate ? (form.affiliate_button_text?.trim() || 'Buy on Partner Site') : '',
       image_url: coverFile ? '' : (form.image_url || data?.image_url || ''),
-      available: digital ? 0 : Number(form.available),
-      discount: Number(form.discount),
+      available: affiliate ? 999 : (digital ? 0 : Number(form.available)),
+      discount: Number(form.discount || 0),
       flash_sale_end: flashEnd,
-      variants: digital ? [] : validVariants,
-      weight: digital ? '0.00' : (form.weight || '1.00'),
-      length: digital ? null : Number(form.length), width: digital ? null : Number(form.width), height: digital ? null : Number(form.height),
+      variants: validVariants,
+      weight: (affiliate || digital) ? '0.00' : (form.weight || '1.00'),
+      length: (affiliate || digital) ? null : Number(form.length),
+      width: (affiliate || digital) ? null : Number(form.width),
+      height: (affiliate || digital) ? null : Number(form.height),
       visibility: form.visibility === 'on',
       is_digital: digital,
       digital_file_url: digital ? fileUrl : '',
       digital_preview_watermark: digital ? form.digital_preview_watermark === 'on' : false,
-      tags: form.tags.split(',').map(value => value.trim()).filter(Boolean),
+      tags: form.tags ? form.tags.split(',').map(value => value.trim()).filter(Boolean) : [],
     };
     try {
-      const result = await api<MerchantProduct>(`stores/${store.id}/products${isNew ? '' : `/${id}`}`, isNew ? 'POST' : 'PATCH', payload);
-      const targetId = result.id;
+      const existingId: number | null = persistedId.current;
+      const result = await api<MerchantProduct>(`stores/${store.id}/products${existingId === null ? '' : `/${existingId}`}`, existingId === null ? 'POST' : 'PATCH', payload);
+      const targetId: number = result.id;
+      // Remember the saved listing before uploads, which can fail independently.
+      persistedId.current = targetId;
+      client.setQueryData<MerchantProduct>(['merchant-product', store.id, String(targetId)], result);
+      setSavedProductId(targetId);
 
       // Direct file upload to MinIO for cover image
       if (coverFile) {
@@ -545,6 +1427,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         coverForm.append('image', coverFile);
         coverForm.append('is_cover', 'true');
         await api(`stores/${store.id}/products/${targetId}/images`, 'POST', coverForm);
+        setCoverFile(null);
       }
 
       // Direct file upload to MinIO for digital download
@@ -552,6 +1435,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         const assetForm = new FormData();
         assetForm.append('file', digitalFile);
         await api(`stores/${store.id}/products/${targetId}/digital-file`, 'POST', assetForm);
+        setDigitalFile(null);
       }
 
       await client.invalidateQueries({ queryKey: ['merchant-products'] });
@@ -559,15 +1443,183 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       await client.invalidateQueries({ queryKey: ['merchant-product'] });
       await client.invalidateQueries({ queryKey: ['products'] });
       notify(isNew ? 'Your product has been created with assets uploaded' : 'Product and assets updated');
-      if (isNew) router.replace(`/merchant/products/${targetId}`);
+      if (id === 'new') router.replace(`/merchant/products/${targetId}`);
     } catch (error) {
-      setError((error as Error).message);
+      const message: string = error instanceof Error ? error.message : 'Please try again.';
+      setError(persistedId.current !== null ? `Your product is saved, but this step failed: ${message} Save changes will retry on the same product.` : message);
+      void client.invalidateQueries({ queryKey: ['merchant-products'] });
+      void client.invalidateQueries({ queryKey: ['merchant-product'] });
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   }
-  if (!isNew && product.isLoading) return <Loading />; if (product.error) return <ErrorState error={product.error} />; const data = product.data;
-  return <><Link className="text-link" href="/merchant/products"><ArrowLeft size={16} />All products</Link><div className="merchant-heading"><div><h1>{isNew ? 'Something new to discover.' : 'The details make it yours.'}</h1><p>{isNew ? 'Give your next best-seller a good start.' : `Editing ${data?.title}`}</p></div>{data?.visibility && <Link className="button secondary" href={`/products/${id}`}><Eye size={16} />View listing</Link>}</div><form ref={formRef} className="product-editor" onSubmit={save}><section className="form-stack"><h2>Product information</h2><Field label="Product title"><input name="title" defaultValue={data?.title} required maxLength={225} placeholder="A clear, descriptive name" /></Field><Field label="Description"><textarea name="description" defaultValue={data?.description} required rows={5} placeholder="What makes this product a good find?" /></Field><div className="form-row"><Field label="Brand"><input name="brand" maxLength={80} defaultValue={data?.brand} /></Field><Field label="Category"><select name="category" defaultValue={data?.category || ''} required><option value="" disabled>Select a category</option>{categories.map(category => <option value={category.key} key={category.key}>{category.name}</option>)}</select></Field></div><label className="check-row"><input type="checkbox" name="is_digital" checked={effectiveIsDigital} onChange={e => setIsDigital(e.target.checked)} />Digital download / e-book (available worldwide, 0 lbs weight)</label>{effectiveIsDigital ? (
+  if (!isNew && product.isLoading) return <Loading />;
+  if (product.error) return <ErrorState error={product.error} />;
+
+  const data = product.data;
+
+  return (
+    <>
+      <Link className="text-link" href="/merchant/products">
+        <ArrowLeft size={16} />
+        All products
+      </Link>
+      <div className="merchant-heading">
+        <div>
+          <h1>{isNew ? 'Something new to discover.' : 'The details make it yours.'}</h1>
+          <p>{isNew ? 'Give your next best-seller a good start.' : `Editing ${data?.title}`}</p>
+        </div>
+        {data?.visibility && (
+          <Link className="button secondary" href={`/products/${productId}?preview=1`}>
+            <Eye size={16} />
+            View listing
+          </Link>
+        )}
+      </div>
+
+      <form ref={formRef} className="product-editor" onSubmit={save}>
+        <section className="form-stack">
+          <h2>Product information</h2>
+          {store.is_official || isAffiliate ? (
+            <Field label="Listing type">
+              <select
+                name="product_type"
+                value={effectiveProductType}
+                onChange={(e) => setProductType(e.target.value)}
+              >
+                <option value="standard">
+                  Standard marketplace listing (Fulfilled by your store)
+                </option>
+                <option value="affiliate_clickbank">
+                  ClickBank partner offer (External affiliate listing)
+                </option>
+              </select>
+            </Field>
+          ) : (
+            <input type="hidden" name="product_type" value="standard" />
+          )}
+
+          {isAffiliate && (
+            <div
+              style={{
+                background: 'var(--surface-subtle, rgba(234, 88, 12, 0.08))',
+                border: '1px solid rgba(234, 88, 12, 0.25)',
+                borderRadius: '8px',
+                padding: '14px 16px',
+                marginBottom: '16px',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginBottom: '6px',
+                }}
+              >
+                <span
+                  style={{
+                    background: '#ea580c',
+                    color: '#fff',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                  }}
+                >
+                  ClickBank Offer
+                </span>
+                <strong>Partner Offer Configuration</strong>
+              </div>
+              <p className="fine-print" style={{ margin: '0 0 12px 0' }}>
+                Shoppers viewing this product will be routed via ProAce tracking to the partner merchant. You earn affiliate commissions directly on ClickBank.
+              </p>
+              <Field label="Affiliate HopLink (Target URL)">
+                <input
+                  name="affiliate_hoplink"
+                  type="url"
+                  required={isAffiliate}
+                  defaultValue={data?.affiliate_hoplink || ''}
+                  placeholder="https://hop.clickbank.net/?affiliate=proace&vendor=sample"
+                />
+              </Field>
+              <div className="form-row" style={{ marginTop: '10px' }}>
+                <Field label="ClickBank Vendor Nickname (Optional)">
+                  <input
+                    name="affiliate_vendor_nickname"
+                    maxLength={64}
+                    defaultValue={data?.affiliate_vendor_nickname || ''}
+                    placeholder="e.g. samplevendor"
+                  />
+                </Field>
+                <Field label="Button CTA text">
+                  <input
+                    name="affiliate_button_text"
+                    maxLength={64}
+                    defaultValue={data?.affiliate_button_text || 'Buy on Partner Site'}
+                    placeholder="Buy on Partner Site"
+                  />
+                </Field>
+              </div>
+            </div>
+          )}
+
+          <Field label="Product title">
+            <input
+              name="title"
+              defaultValue={data?.title}
+              required
+              maxLength={225}
+              placeholder="A clear, descriptive name"
+            />
+          </Field>
+          <Field label="Description">
+            <textarea
+              name="description"
+              defaultValue={data?.description}
+              required
+              rows={5}
+              placeholder="What makes this product a good find?"
+            />
+          </Field>
+          <div className="form-row">
+            <Field label="Brand">
+              <input
+                name="brand"
+                maxLength={80}
+                defaultValue={data?.brand}
+              />
+            </Field>
+            <Field label="Category">
+              <select
+                name="category"
+                defaultValue={data?.category || ''}
+                required
+              >
+                <option value="" disabled>
+                  Select a category
+                </option>
+                {categories.map((category) => (
+                  <option value={category.key} key={category.key}>
+                    {category.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          {!isAffiliate && (
+            <label className="check-row">
+              <input
+                type="checkbox"
+                name="is_digital"
+                checked={effectiveIsDigital}
+                onChange={(e) => setIsDigital(e.target.checked)}
+              />
+              Digital download / e-book (available worldwide, 0 lbs weight)
+            </label>
+          )}
+          {!isAffiliate && (effectiveIsDigital ? (
     <div style={{ marginTop: '10px', marginBottom: '14px' }}>
       {digitalFile ? (
         <div className="upload-preview-card">
@@ -610,63 +1662,399 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           {showDigitalUrlInput ? 'Hide download URL field' : 'Or enter external download link'}
         </button>
       </div>
-      <label className="check-row"><input type="checkbox" name="digital_preview_watermark" defaultChecked={data?.digital_preview_watermark || false} />Protect image previews with a buyer watermark</label>{showDigitalUrlInput && (
+      <label className="check-row">
+        <input
+          type="checkbox"
+          name="digital_preview_watermark"
+          defaultChecked={data?.digital_preview_watermark || false}
+        />
+        Protect image previews with a buyer watermark
+      </label>
+      {showDigitalUrlInput && (
         <Field label="Download URL">
-          <input name="digital_file_url" type="url" maxLength={1000} defaultValue={data?.digital_file_url} placeholder="https://…" />
+          <input
+            name="digital_file_url"
+            type="url"
+            maxLength={1000}
+            defaultValue={data?.digital_file_url}
+            placeholder="https://…"
+          />
         </Field>
       )}
     </div>
-  ) : <div className="form-row"><Field label="Shipping weight (lbs)"><input name="weight" type="number" min="0.01" max="999.99" step="0.01" defaultValue={data?.weight || '1.00'} required placeholder="e.g. 1.25" /></Field><Field label="Length (in)"><input name="length" type="number" min="0.01" step="0.01" defaultValue={data?.length || '10'} required /></Field><Field label="Width (in)"><input name="width" type="number" min="0.01" step="0.01" defaultValue={data?.width || '8'} required /></Field><Field label="Height (in)"><input name="height" type="number" min="0.01" step="0.01" defaultValue={data?.height || '4'} required /></Field></div>}<p className="fine-print">{effectiveIsDigital ? 'Digital products are fulfilled automatically worldwide with $0.00 shipping and unlimited inventory.' : 'Physical products are shipped within the US with live USPS rate calculation.'}</p><Field label="Tags"><input name="tags" defaultValue={data?.tags?.join(', ')} placeholder="Audio, wireless, everyday" /></Field>{!effectiveIsDigital && <><h2>Product options &amp; variants</h2>
-      <p className="fine-print">Add a separate option for each color, size, or combination, such as Black / Large. Each option has its own stock and price adjustment.</p>
-      <p className="fine-print">The base price after the product discount is <strong>{money(salePrice)}</strong>. Enter 0 to use that price, 5 to add $5, or -5 to subtract $5. Changing the base price or discount updates every variant price.</p>
-      <div className="variant-list">{effectiveVariants.map((variant, index) => <fieldset className="variant-card" key={index}>
-        <legend>Variant {index + 1}{variant.name ? ` · ${variant.name}` : ''}</legend>
-        <div className="variant-card-heading"><strong>Customer price: {money(salePrice + Number(variant.price_delta || 0))}</strong><button type="button" className="icon-button" aria-label={`Remove variant ${index + 1}`} onClick={() => removeVariant(index)}><X size={16} /></button></div>
-        <div className="variant-fields">
-          <Field label="Variant name"><input placeholder="e.g. Black / Large" value={variant.name} onChange={event => updateVariant(index, 'name', event.target.value)} required /></Field>
-          <Field label="SKU (optional)"><input placeholder="e.g. TEE-BLK-L" value={variant.sku || ''} onChange={event => updateVariant(index, 'sku', event.target.value)} /></Field>
-          <Field label="Barcode (optional)"><input placeholder="UPC / EAN / ISBN" value={variant.barcode || ''} onChange={event => updateVariant(index, 'barcode', event.target.value)} /></Field>
-          <Field label="Price adjustment (USD)"><input type="number" step="0.01" min={(0.01 - salePrice).toFixed(2)} placeholder="0.00" value={variant.price_delta ?? '0.00'} onChange={event => updateVariant(index, 'price_delta', event.target.value)} required /></Field>
-          <Field label="Variant image"><select value={variant.image_url || ''} onChange={event => updateVariant(index, 'image_url', event.target.value)}>
-            <option value="">Use main product image</option>
-            {variant.image_url && !variantImages.includes(variant.image_url) && <option value={variant.image_url}>Previously mapped image</option>}
-            {variantImages.map((image, photoIndex) => <option value={image} key={image}>{image === effectiveCoverImage ? 'Cover image' : `Gallery photo ${photoIndex + 1}`}</option>)}
-          </select></Field>
-          {variant.image_url && <div style={{ width: '80px', height: '80px', overflow: 'hidden', borderRadius: '6px' }}><ProductImage src={variant.image_url} alt={`${variant.name || 'Variant'} mapped photo`} /></div>}
-          <Field label="Variant stock"><input type="number" min="0" step="1" placeholder="Units of this option" value={variant.available ?? ''} onChange={event => updateVariant(index, 'available', event.target.value === '' ? '' : Number(event.target.value))} required /></Field>
-        </div>
-      </fieldset>)}</div>
-      <button type="button" className="button secondary" onClick={addVariant} style={{ width: 'fit-content', marginBottom: '16px' }}><Plus size={15} />Add variant</button></>}<h2>Product photography</h2><p className="fine-print">Upload a primary cover image for your product (stored directly on MinIO). Gallery photos and variant mapping can be managed below after saving.</p>{coverPreview ? (
-        <div className="upload-preview-card">
-          <img src={coverPreview} alt="Cover preview" className="upload-preview-thumb" />
-          <div className="upload-preview-meta">
-            <strong>{coverFile?.name || 'Selected cover photo'}</strong>
-            <span>{coverFile ? `${(coverFile.size / 1024).toFixed(1)} KB` : ''} · Direct MinIO upload</span>
-            <span className="upload-preview-badge">Ready to upload</span>
-          </div>
-          <button type="button" className="icon-button" aria-label="Remove photo" onClick={removeCoverFile}><X size={16} /></button>
-        </div>
-      ) : effectiveCoverImage ? (
-        <div className="upload-preview-card">
-          <ProductImage src={effectiveCoverImage} alt="Current cover photo" className="upload-preview-thumb" />
-          <div className="upload-preview-meta">
-            <strong>Cover photo</strong>
-            <span style={{ fontSize: '11px', color: 'var(--muted)', wordBreak: 'break-all' }}>{effectiveCoverImage}</span>
-            <span className="upload-preview-badge">Active cover</span>
-          </div>
-          <label className="button secondary" style={{ fontSize: '11px', padding: '6px 10px', cursor: 'pointer' }}>
-            <Upload size={13} /> Change
-            <input type="file" accept="image/jpeg,image/png,image/webp" style={{ display: 'none' }} onChange={handleCoverFileChange} />
-          </label>
-        </div>
-      ) : (
-        <label className="upload-dropzone">
-          <div className="upload-dropzone-icon"><Upload size={20} /></div>
-          <span className="upload-dropzone-text">Click or drag image to upload cover photo</span>
-          <span className="upload-dropzone-sub">PNG, JPG, or WEBP up to 5 MB · Saved directly to MinIO storage</span>
-          <input type="file" accept="image/jpeg,image/png,image/webp" style={{ display: 'none' }} onChange={handleCoverFileChange} />
-        </label>
-      )}<div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}><button type="button" className="text-button" style={{ fontSize: '11px' }} onClick={() => setShowCoverUrlInput(!showCoverUrlInput)}>{showCoverUrlInput ? 'Hide image URL field' : 'Or paste online image URL'}</button></div>{showCoverUrlInput && <Field label="Image URL"><input name="image_url" type="url" maxLength={1000} value={coverImage ?? (coverPreview ? '' : (data?.image_url ?? ''))} onChange={event => setCoverImage(event.target.value)} placeholder="https://…" /></Field>}</section><aside className="editor-aside"><section><h2>{effectiveIsDigital ? 'Pricing' : 'Pricing & stock'}</h2><Field label="Price (USD)"><input name="price" type="number" min="0.01" step="0.01" required value={effectiveBasePrice} onChange={event => setBasePrice(event.target.value)} /></Field><div className="form-row"><Field label="Discount (%)"><input type="number" name="discount" min="0" max="60" step="1" required value={effectiveDiscount} onChange={event => setDiscount(event.target.value)} /></Field>{!effectiveIsDigital && <Field label="Stock quantity"><input name="available" type="number" min="0" step="1" required defaultValue={data?.available || 0} /></Field>}</div>{effectiveIsDigital && <input type="hidden" name="available" value="0" />}<Field label="Flash Deal Expiration (Optional)"><input name="flash_sale_end" type="datetime-local" defaultValue={data?.flash_sale_end ? new Date(data.flash_sale_end).toISOString().slice(0, 16) : ''} /></Field><hr /><h3>Availability</h3><label className="check-row"><input type="checkbox" name="visibility" defaultChecked={data?.visibility || false} />Publish to the marketplace</label>{error && <p className="form-error">{error}</p>}<div className="form-actions"><button type="button" className="button secondary" onClick={openPreview}><Eye size={17} />Preview</button><button className="button" disabled={busy}>{busy ? 'Saving…' : isNew ? 'Create product' : 'Save changes'}<Check size={17} /></button></div><Link className="button secondary" href="/merchant/products">Back to products</Link></section></aside></form>{!isNew && <ProductAssets store={store} product={data!} />}{preview && <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Product preview"><div className="modal-card product-page" style={{ maxWidth: '960px', maxHeight: '92vh', overflowY: 'auto' }}><div className="modal-head"><div><span className="eyebrow green">STOREFRONT PREVIEW</span><h2>How customers will see it</h2></div><button type="button" className="icon-button" aria-label="Close preview" onClick={() => setPreview(null)}><X size={18} /></button></div><div className="product-detail-grid"><div><div style={{ position: 'relative' }}><ProductGallery images={preview.images.length ? preview.images : [preview.image]} title={preview.title} discount={preview.discount} />{preview.digital_preview_watermark && <span style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.55)', fontSize: 'clamp(18px, 4vw, 42px)', fontWeight: 700, transform: 'rotate(-24deg)', pointerEvents: 'none', textAlign: 'center' }}>PROACE PREVIEW</span>}</div><div style={{ marginTop: '10px' }}>{preview.flash_sale_end && <FlashCountdown end={preview.flash_sale_end} />}<div className="fine-print">Preview only · Nothing has been saved.</div></div></div><div className="form-stack"><span className="eyebrow green">{preview.category}</span><h1>{preview.title}</h1><p className="muted">by {preview.brand}</p><div className="summary-total"><span>{preview.discount ? <s>{money(preview.price)}</s> : 'Price'}</span><strong>{preview.sale_price ? money(preview.sale_price) : 'Price TBD'}</strong></div><p>{preview.description}</p>{preview.variants.length > 0 && <div><h3>Options</h3>{preview.variants.map((variant, index) => <button type="button" className="button secondary" key={index} style={{ margin: '0 6px 6px 0' }}>{variant.name || `Option ${index + 1}`} · {money(preview.sale_price + Number(variant.price_delta || 0))}</button>)}</div>}{preview.is_digital && <div className="digital-badge"><strong>Instant digital download</strong><span>{preview.digital_file_name || 'File will be available after purchase'}</span>{preview.digital_file_url?.startsWith('blob:') && <a className="text-link" href={preview.digital_file_url} target="_blank" rel="noreferrer">Open temporary file</a>}</div>}<button type="button" className="button" disabled>Add to bag <ShoppingBag size={16} /></button></div></div></div></div>}</>;
+  ) : (
+    <div className="form-row">
+      <Field label="Shipping weight (lbs)">
+        <input
+          name="weight"
+          type="number"
+          min="0.01"
+          max="999.99"
+          step="0.01"
+          defaultValue={data?.weight || '1.00'}
+          required
+          placeholder="e.g. 1.25"
+        />
+      </Field>
+      <Field label="Length (in)">
+        <input
+          name="length"
+          type="number"
+          min="0.01"
+          step="0.01"
+          defaultValue={data?.length || '10'}
+          required
+        />
+      </Field>
+      <Field label="Width (in)">
+        <input
+          name="width"
+          type="number"
+          min="0.01"
+          step="0.01"
+          defaultValue={data?.width || '8'}
+          required
+        />
+      </Field>
+      <Field label="Height (in)">
+        <input
+          name="height"
+          type="number"
+          min="0.01"
+          step="0.01"
+          defaultValue={data?.height || '4'}
+          required
+        />
+      </Field>
+    </div>
+  ))}
+
+  <p className="fine-print">
+    {isAffiliate
+      ? 'Partner products are fulfilled directly by the external ClickBank vendor.'
+      : effectiveIsDigital
+        ? 'Digital products are fulfilled automatically worldwide with $0.00 shipping and unlimited inventory.'
+        : 'Physical products are shipped within the US with live USPS rate calculation.'}
+  </p>
+
+  <Field label="Tags">
+    <input
+      name="tags"
+      defaultValue={data?.tags?.join(', ')}
+      placeholder="Audio, wireless, everyday"
+    />
+  </Field>
+
+  {!isAffiliate && !effectiveIsDigital && (
+    <>
+      <h2>Product options &amp; variants</h2>
+      <p className="fine-print">
+        Add a separate option for each color, size, or combination, such as Black / Large. Each option has its own stock and price adjustment.
+      </p>
+      <p className="fine-print">
+        The base price after the product discount is <strong>{money(salePrice)}</strong>. Enter 0 to use that price, 5 to add $5, or -5 to subtract $5. Changing the base price or discount updates every variant price.
+      </p>
+      <div className="variant-list">
+        {effectiveVariants.map((variant, index) => (
+          <fieldset className="variant-card" key={index}>
+            <legend>
+              Variant {index + 1}
+              {variant.name ? ` · ${variant.name}` : ''}
+            </legend>
+            <div className="variant-card-heading">
+              <strong>
+                Customer price: {money(salePrice + Number(variant.price_delta || 0))}
+              </strong>
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={`Remove variant ${index + 1}`}
+                onClick={() => removeVariant(index)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="variant-fields">
+              <Field label="Variant name">
+                <input
+                  placeholder="e.g. Black / Large"
+                  value={variant.name}
+                  onChange={(event) => updateVariant(index, 'name', event.target.value)}
+                  required
+                />
+              </Field>
+              <Field label="SKU (optional)">
+                <input
+                  placeholder="e.g. TEE-BLK-L"
+                  value={variant.sku || ''}
+                  onChange={(event) => updateVariant(index, 'sku', event.target.value)}
+                />
+              </Field>
+              <Field label="Barcode (optional)">
+                <input
+                  placeholder="UPC / EAN / ISBN"
+                  value={variant.barcode || ''}
+                  onChange={(event) => updateVariant(index, 'barcode', event.target.value)}
+                />
+              </Field>
+              <Field label="Price adjustment (USD)">
+                <input
+                  type="number"
+                  step="0.01"
+                  min={(0.01 - salePrice).toFixed(2)}
+                  placeholder="0.00"
+                  value={variant.price_delta ?? '0.00'}
+                  onChange={(event) =>
+                    updateVariant(index, 'price_delta', event.target.value)
+                  }
+                  required
+                />
+              </Field>
+              <Field label="Variant image">
+                <select
+                  value={variant.image_url || ''}
+                  onChange={(event) => updateVariant(index, 'image_url', event.target.value)}
+                >
+                  <option value="">Use main product image</option>
+                  {variant.image_url && !variantImages.includes(variant.image_url) && (
+                    <option value={variant.image_url}>Previously mapped image</option>
+                  )}
+                  {variantImages.map((image, photoIndex) => (
+                    <option value={image} key={image}>
+                      {image === effectiveCoverImage
+                        ? 'Cover image'
+                        : `Gallery photo ${photoIndex + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {variant.image_url && (
+                <div
+                  style={{
+                    width: '80px',
+                    height: '80px',
+                    overflow: 'hidden',
+                    borderRadius: '6px',
+                  }}
+                >
+                  <ProductImage
+                    src={variant.image_url}
+                    alt={`${variant.name || 'Variant'} mapped photo`}
+                  />
+                </div>
+              )}
+              <Field label="Variant stock">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="Units of this option"
+                  value={variant.available ?? ''}
+                  onChange={(event) =>
+                    updateVariant(
+                      index,
+                      'available',
+                      event.target.value === '' ? '' : Number(event.target.value)
+                    )
+                  }
+                  required
+                />
+              </Field>
+            </div>
+          </fieldset>
+        ))}
+      </div>
+      <button
+        type="button"
+        className="button secondary"
+        onClick={addVariant}
+        style={{ width: 'fit-content', marginBottom: '16px' }}
+      >
+        <Plus size={15} />
+        Add variant
+      </button>
+    </>
+  )}
+
+  <h2>Product photography</h2>
+  <p className="fine-print">
+    Upload a primary cover image for your product (stored directly on MinIO). Gallery photos and variant mapping can be managed below after saving.
+  </p>
+
+  {coverPreview ? (
+    <div className="upload-preview-card">
+      <img src={coverPreview} alt="Cover preview" className="upload-preview-thumb" />
+      <div className="upload-preview-meta">
+        <strong>{coverFile?.name || 'Selected cover photo'}</strong>
+        <span>
+          {coverFile ? `${(coverFile.size / 1024).toFixed(1)} KB` : ''} · Direct MinIO upload
+        </span>
+        <span className="upload-preview-badge">Ready to upload</span>
+      </div>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Remove photo"
+        onClick={removeCoverFile}
+      >
+        <X size={16} />
+      </button>
+    </div>
+  ) : effectiveCoverImage ? (
+    <div className="upload-preview-card">
+      <ProductImage
+        src={effectiveCoverImage}
+        alt="Current cover photo"
+        className="upload-preview-thumb"
+      />
+      <div className="upload-preview-meta">
+        <strong>Cover photo</strong>
+        <span style={{ fontSize: '11px', color: 'var(--muted)', wordBreak: 'break-all' }}>
+          {effectiveCoverImage}
+        </span>
+        <span className="upload-preview-badge">Active cover</span>
+      </div>
+      <label
+        className="button secondary"
+        style={{ fontSize: '11px', padding: '6px 10px', cursor: 'pointer' }}
+      >
+        <Upload size={13} /> Change
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp"
+          style={{ display: 'none' }}
+          onChange={handleCoverFileChange}
+        />
+      </label>
+    </div>
+  ) : (
+    <label className="upload-dropzone">
+      <div className="upload-dropzone-icon">
+        <Upload size={20} />
+      </div>
+      <span className="upload-dropzone-text">Click or drag image to upload cover photo</span>
+      <span className="upload-dropzone-sub">
+        PNG, JPG, or WEBP up to 5 MB · Saved directly to MinIO storage
+      </span>
+      <input
+        type="file"
+        accept="image/jpeg,image/png,image/webp"
+        style={{ display: 'none' }}
+        onChange={handleCoverFileChange}
+      />
+    </label>
+  )}
+
+  <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
+    <button
+      type="button"
+      className="text-button"
+      style={{ fontSize: '11px' }}
+      onClick={() => setShowCoverUrlInput(!showCoverUrlInput)}
+    >
+      {showCoverUrlInput ? 'Hide image URL field' : 'Or paste online image URL'}
+    </button>
+  </div>
+
+  {showCoverUrlInput && (
+    <Field label="Image URL">
+      <input
+        name="image_url"
+        type="url"
+        maxLength={1000}
+        value={coverImage ?? (coverPreview ? '' : data?.image_url ?? '')}
+        onChange={(event) => setCoverImage(event.target.value)}
+        placeholder="https://…"
+      />
+    </Field>
+  )}
+</section>
+
+<aside className="editor-aside">
+  <section>
+    <h2>{effectiveIsDigital || isAffiliate ? 'Pricing' : 'Pricing & stock'}</h2>
+    <Field label="Price (USD)">
+      <input
+        name="price"
+        type="number"
+        min="0.01"
+        step="0.01"
+        required
+        value={effectiveBasePrice}
+        onChange={(event) => setBasePrice(event.target.value)}
+      />
+    </Field>
+    <div className="form-row">
+      <Field label="Discount (%)">
+        <input
+          type="number"
+          name="discount"
+          min="0"
+          max="60"
+          step="1"
+          required
+          value={effectiveDiscount}
+          onChange={(event) => setDiscount(event.target.value)}
+        />
+      </Field>
+      {!effectiveIsDigital && !isAffiliate && (
+        <Field label="Stock quantity">
+          <input
+            name="available"
+            type="number"
+            min="0"
+            step="1"
+            required
+            defaultValue={data?.available || 0}
+          />
+        </Field>
+      )}
+    </div>
+    {effectiveIsDigital && <input type="hidden" name="available" value="0" />}
+    {isAffiliate && (
+      <p className="fine-print" style={{ color: 'var(--muted)', marginTop: '4px' }}>
+        Inventory is managed directly by ClickBank partner vendor.
+      </p>
+    )}
+    <Field label="Flash Deal Expiration (Optional)">
+      <input
+        name="flash_sale_end"
+        type="datetime-local"
+        defaultValue={
+          data?.flash_sale_end ? toLocalDateTimeInput(data.flash_sale_end) : ''
+        }
+      />
+    </Field>
+    <hr />
+    <h3>Availability</h3>
+    <label className="check-row">
+      <input
+        type="checkbox"
+        name="visibility"
+        defaultChecked={data?.visibility || false}
+      />
+      Publish to the marketplace
+    </label>
+    {error && <p className="form-error">{error}</p>}
+    <div className="form-actions">
+      <button type="button" className="button secondary" onClick={openPreview}>
+        <Eye size={17} />
+        Preview
+      </button>
+      <button className="button" disabled={busy}>
+        {busy ? 'Saving…' : isNew ? 'Create product' : 'Save changes'}
+        <Check size={17} />
+      </button>
+    </div>
+    <Link className="button secondary" href="/merchant/products">
+      Back to products
+    </Link>
+  </section>
+</aside>
+</form>
+{!isNew && <ProductAssets store={store} product={data!} />}
+</>
+);
 }
 
 function ProductAssets({ store, product }: { store: Store; product: MerchantProduct }) {
@@ -899,17 +2287,330 @@ function MerchantOrderTable({ orders, storeId, onUpdated }: { orders: MerchantOr
     }
   }
 
-  if (!orders.length) return <div className="empty-state"><ShoppingBag size={30} /><h2>The first of many.</h2><p>Your customer orders will appear here.</p></div>;
-  return <>
-    <div className="table-scroll"><table><thead><tr><th>Order</th><th>Date</th><th>Products</th><th>Units</th><th>Tracking</th><th>Status</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{orders.map(order => <tr key={order.id}><td><strong>{order.reference}</strong></td><td>{new Date(order.created).toLocaleDateString('en-GB', {day: 'numeric', month: 'short', year: 'numeric'})}</td><td>{expanded === order.id ? order.items.map(item => <p key={item.product}>{item.title} × {item.quantity}</p>) : `${order.items[0]?.title || 'Order'}${order.items.length > 1 ? ` +${order.items.length - 1}` : ''}`}</td><td>{order.items.reduce((sum, item) => sum + item.quantity, 0)}</td><td>{order.tracking_number ? <small style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><Truck size={13} color="var(--green)" />{order.carrier || 'USPS'}: {order.tracking_number}</small> : <span className="muted" style={{ fontSize: '0.8rem' }}>No tracking</span>}</td><td><Status value={order.status} /></td><td style={{ whiteSpace: 'nowrap' }}><button className="icon-button" aria-label={`View items for ${order.reference}`} title="View order items" onClick={() => setExpanded(expanded === order.id ? null : order.id)}><Eye size={17} /></button>{storeId && ['pending', 'confirmed', 'shipped'].includes(order.status) && <button className="button secondary" style={{ padding: '0.25rem 0.6rem', fontSize: '0.78rem', marginLeft: '0.4rem' }} onClick={() => { setTrackingOrder(order); setTrackingNumber(order.tracking_number || ''); setCarrier(order.carrier || 'USPS'); setOrderStatus(order.status === 'pending' ? 'shipped' : order.status); setAllowEditTracking(!order.tracking_number); setConfirmVerified(false); }}><Truck size={13} />Ship / Track</button>}</td></tr>)}</tbody></table></div>
-    {trackingOrder && <div className="admin-dialog-backdrop" role="presentation" onMouseDown={e => { if (e.target === e.currentTarget) setTrackingOrder(null); }}><section ref={trackingDialogRef} className="admin-dialog" role="dialog" aria-modal="true" aria-labelledby="tracking-title"><div className="admin-dialog-head"><div><span className="eyebrow green">FULFILLMENT & TRACKING</span><h2 id="tracking-title">Update Order #{trackingOrder.reference}</h2></div><button className="icon-button" aria-label="Close" onClick={() => setTrackingOrder(null)}><X size={19} /></button></div><form className="form-stack" onSubmit={submitTracking}><div className="form-row"><Field label="Shipping Carrier"><select value={carrier} onChange={e => setCarrier(e.target.value)}><option value="USPS">USPS (United States Postal Service)</option><option value="UPS">UPS</option><option value="FedEx">FedEx</option><option value="DHL">DHL</option></select></Field><Field label="Order Status"><select value={orderStatus} onChange={e => setOrderStatus(e.target.value)}><option value="confirmed">Confirmed</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option></select></Field></div>{hasExistingTracking && <div className="tracking-info-callout"><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Active Tracking Number</span><span className="tracking-carrier-pill">{trackingOrder.carrier || 'USPS'}</span></div><strong>{trackingOrder.tracking_number}</strong><label className="check-row" style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}><input type="checkbox" checked={allowEditTracking} onChange={e => { setAllowEditTracking(e.target.checked); if (!e.target.checked) { setTrackingNumber(trackingOrder.tracking_number || ''); setConfirmVerified(false); } }} />Enable editing to change or replace tracking number</label></div>}<Field label="Order Tracking Number"><input required maxLength={100} value={trackingNumber} readOnly={hasExistingTracking && !allowEditTracking} onChange={e => setTrackingNumber(e.target.value)} placeholder="e.g. 9400 1000 0000 0000 00" style={hasExistingTracking && !allowEditTracking ? { background: 'var(--soft)', color: 'var(--muted)', cursor: 'not-allowed' } : undefined} /></Field>{hasExistingTracking && !allowEditTracking && <p className="fine-print" style={{ margin: '-0.4rem 0 0' }}>Locked to prevent accidental edits. Check the box above to modify.</p>}{isTrackingModified && <div className="tracking-warning-callout"><p>⚠️ You are replacing an active tracking number. This updates order history and re-notifies the customer.</p><label className="check-row"><input type="checkbox" required checked={confirmVerified} onChange={e => setConfirmVerified(e.target.checked)} />I confirm that I have verified this new tracking number with the carrier receipt.</label></div>}<div className="form-actions"><button type="button" className="button secondary" onClick={() => setTrackingOrder(null)}>Cancel</button><button className="button" disabled={busy || (isTrackingModified && !confirmVerified)}>{busy ? 'Updating…' : 'Save tracking & notify customer'}</button></div></form></section></div>}
-  </>;
+  if (!orders.length) {
+    return (
+      <div className="empty-state">
+        <ShoppingBag size={30} />
+        <h2>The first of many.</h2>
+        <p>Your customer orders will appear here.</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Order</th>
+              <th>Date</th>
+              <th>Products</th>
+              <th>Units</th>
+              <th>Tracking</th>
+              <th>Status</th>
+              <th>
+                <span className="sr-only">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map((order) => (
+              <tr key={order.id}>
+                <td>
+                  <strong>{order.reference}</strong>
+                </td>
+                <td>
+                  {new Date(order.created).toLocaleDateString('en-GB', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                  })}
+                </td>
+                <td>
+                  {expanded === order.id
+                    ? order.items.map((item) => (
+                        <p key={item.product}>
+                          {item.title} × {item.quantity}
+                        </p>
+                      ))
+                    : `${order.items[0]?.title || 'Order'}${
+                        order.items.length > 1 ? ` +${order.items.length - 1}` : ''
+                      }`}
+                </td>
+                <td>
+                  {order.items.reduce((sum, item) => sum + item.quantity, 0)}
+                </td>
+                <td>
+                  {order.tracking_number ? (
+                    <small style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Truck size={13} color="var(--green)" />
+                      {order.carrier || 'USPS'}: {order.tracking_number}
+                    </small>
+                  ) : (
+                    <span className="muted" style={{ fontSize: '0.8rem' }}>
+                      No tracking
+                    </span>
+                  )}
+                </td>
+                <td>
+                  <Status value={order.status} />
+                </td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button
+                    className="icon-button"
+                    aria-label={`View items for ${order.reference}`}
+                    title="View order items"
+                    onClick={() => setExpanded(expanded === order.id ? null : order.id)}
+                  >
+                    <Eye size={17} />
+                  </button>
+                  {storeId && ['pending', 'confirmed', 'shipped'].includes(order.status) && (
+                    <button
+                      className="button secondary"
+                      style={{
+                        padding: '0.25rem 0.6rem',
+                        fontSize: '0.78rem',
+                        marginLeft: '0.4rem',
+                      }}
+                      onClick={() => {
+                        setTrackingOrder(order);
+                        setTrackingNumber(order.tracking_number || '');
+                        setCarrier(order.carrier || 'USPS');
+                        setOrderStatus(order.status === 'pending' ? 'shipped' : order.status);
+                        setAllowEditTracking(!order.tracking_number);
+                        setConfirmVerified(false);
+                      }}
+                    >
+                      <Truck size={13} />
+                      Ship / Track
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {trackingOrder && (
+        <div
+          className="admin-dialog-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setTrackingOrder(null);
+          }}
+        >
+          <section
+            ref={trackingDialogRef}
+            className="admin-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="tracking-title"
+          >
+            <div className="admin-dialog-head">
+              <div>
+                <span className="eyebrow green">FULFILLMENT & TRACKING</span>
+                <h2 id="tracking-title">Update Order #{trackingOrder.reference}</h2>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="Close"
+                onClick={() => setTrackingOrder(null)}
+              >
+                <X size={19} />
+              </button>
+            </div>
+
+            <form className="form-stack" onSubmit={submitTracking}>
+              <div className="form-row">
+                <Field label="Shipping Carrier">
+                  <select value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+                    <option value="USPS">USPS (United States Postal Service)</option>
+                    <option value="UPS">UPS</option>
+                    <option value="FedEx">FedEx</option>
+                    <option value="DHL">DHL</option>
+                  </select>
+                </Field>
+                <Field label="Order Status">
+                  <select
+                    value={orderStatus}
+                    onChange={(e) => setOrderStatus(e.target.value)}
+                  >
+                    <option value="confirmed">Confirmed</option>
+                    <option value="shipped">Shipped</option>
+                    <option value="delivered">Delivered</option>
+                  </select>
+                </Field>
+              </div>
+
+              {hasExistingTracking && (
+                <div className="tracking-info-callout">
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        color: 'var(--muted)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      Active Tracking Number
+                    </span>
+                    <span className="tracking-carrier-pill">
+                      {trackingOrder.carrier || 'USPS'}
+                    </span>
+                  </div>
+                  <strong>{trackingOrder.tracking_number}</strong>
+                  <label className="check-row" style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={allowEditTracking}
+                      onChange={(e) => {
+                        setAllowEditTracking(e.target.checked);
+                        if (!e.target.checked) {
+                          setTrackingNumber(trackingOrder.tracking_number || '');
+                          setConfirmVerified(false);
+                        }
+                      }}
+                    />
+                    Enable editing to change or replace tracking number
+                  </label>
+                </div>
+              )}
+
+              <Field label="Order Tracking Number">
+                <input
+                  required
+                  maxLength={100}
+                  value={trackingNumber}
+                  readOnly={hasExistingTracking && !allowEditTracking}
+                  onChange={(e) => setTrackingNumber(e.target.value)}
+                  placeholder="e.g. 9400 1000 0000 0000 00"
+                  style={
+                    hasExistingTracking && !allowEditTracking
+                      ? { background: 'var(--soft)', color: 'var(--muted)', cursor: 'not-allowed' }
+                      : undefined
+                  }
+                />
+              </Field>
+
+              {hasExistingTracking && !allowEditTracking && (
+                <p className="fine-print" style={{ margin: '-0.4rem 0 0' }}>
+                  Locked to prevent accidental edits. Check the box above to modify.
+                </p>
+              )}
+
+              {isTrackingModified && (
+                <div className="tracking-warning-callout">
+                  <p>
+                    ⚠️ You are replacing an active tracking number. This updates order history and re-notifies the customer.
+                  </p>
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      required
+                      checked={confirmVerified}
+                      onChange={(e) => setConfirmVerified(e.target.checked)}
+                    />
+                    I confirm that I have verified this new tracking number with the carrier receipt.
+                  </label>
+                </div>
+              )}
+
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setTrackingOrder(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button"
+                  disabled={busy || (isTrackingModified && !confirmVerified)}
+                >
+                  {busy ? 'Updating…' : 'Save tracking & notify customer'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+    </>
+  );
 }
 
 function MerchantOrders({ store }: { store: Store }) {
-  const [status, setStatus] = useState(''); const [offset, setOffset] = useState(0); const client = useQueryClient();
-  const orders = useQuery({ queryKey: ['merchant-orders', store.id, status, offset], queryFn: () => api<Page<MerchantOrder>>(`stores/${store.id}/orders?status=${status}&limit=20&offset=${offset}`) });
-  return <><div className="merchant-heading"><div><h1>Every order, a good beginning.</h1><p>Follow your customers’ finds from your store.</p></div><select aria-label="Filter orders by status" value={status} onChange={event => { setStatus(event.target.value); setOffset(0); }}><option value="">All statuses</option>{['pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'].map(value => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}</select></div>{orders.isLoading ? <Loading /> : orders.error ? <ErrorState error={orders.error} retry={() => orders.refetch()} /> : <><MerchantOrderTable orders={orders.data?.results || []} storeId={store.id} onUpdated={() => { client.invalidateQueries({ queryKey: ['merchant-orders', store.id] }); client.invalidateQueries({ queryKey: ['merchant-recent', store.id] }); client.invalidateQueries({ queryKey: ['dashboard', store.id] }); }} /><Pagination page={Math.floor(offset / 20) + 1} totalPages={Math.ceil((orders.data?.count || 0) / 20)} onChange={page => setOffset((page - 1) * 20)} /></>}</>;
+  const [status, setStatus] = useState('');
+  const [offset, setOffset] = useState(0);
+  const client = useQueryClient();
+
+  const orders = useQuery({
+    queryKey: ['merchant-orders', store.id, status, offset],
+    queryFn: () =>
+      api<Page<MerchantOrder>>(
+        `stores/${store.id}/orders?status=${status}&limit=20&offset=${offset}`
+      ),
+  });
+
+  return (
+    <>
+      <div className="merchant-heading">
+        <div>
+          <h1>Every order, a good beginning.</h1>
+          <p>Follow your customers’ finds from your store.</p>
+        </div>
+        <select
+          aria-label="Filter orders by status"
+          value={status}
+          onChange={(event) => {
+            setStatus(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="">All statuses</option>
+          {['pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'].map(
+            (value) => (
+              <option key={value} value={value}>
+                {value.charAt(0).toUpperCase() + value.slice(1)}
+              </option>
+            )
+          )}
+        </select>
+      </div>
+
+      {orders.isLoading ? (
+        <Loading />
+      ) : orders.error ? (
+        <ErrorState error={orders.error} retry={() => orders.refetch()} />
+      ) : (
+        <>
+          <MerchantOrderTable
+            orders={orders.data?.results || []}
+            storeId={store.id}
+            onUpdated={() => {
+              client.invalidateQueries({ queryKey: ['merchant-orders', store.id] });
+              client.invalidateQueries({ queryKey: ['merchant-recent', store.id] });
+              client.invalidateQueries({ queryKey: ['dashboard', store.id] });
+            }}
+          />
+          <Pagination
+            page={Math.floor(offset / 20) + 1}
+            totalPages={Math.ceil((orders.data?.count || 0) / 20)}
+            onChange={(page) => setOffset((page - 1) * 20)}
+          />
+        </>
+      )}
+    </>
+  );
 }
 
 function formatRelativeTime(dateString: string): string {
@@ -945,7 +2646,7 @@ function MerchantPayments({ store }: { store: Store }) {
 
   const stats = useQuery({
     queryKey: ['dashboard', store.id, '30'],
-    queryFn: () => api<Dashboard>(`stores/${store.id}/dashboard?days=30`),
+    queryFn: () => api<Dashboard>(`stores/${store.id}/dashboard?days=30&time_zone=${encodeURIComponent(browserTimeZone())}`),
   });
 
   const payouts = useQuery({
@@ -996,25 +2697,34 @@ function MerchantPayments({ store }: { store: Store }) {
           <p>Financial balance, cleared withdrawals, and earnings ledger for {store.name}.</p>
         </div>
         <div className="form-actions">
-          {canWithdraw && <button
-            className="button"
-            disabled={availableBal < 5}
-            onClick={() => setRequestingPayout(true)}
-            title={availableBal < 5 ? 'Minimum payout is $5.00' : 'Request payout to bank'}
-          >
-            <WalletCards size={17} />
-            Request payout
-          </button>}
+          {isOfficial ? (
+            (user?.is_superuser || user?.is_business_admin) ? (
+              <Link className="button secondary" href="/admin/commission" title="Official company store revenues consolidate into Platform Treasury">
+                <WalletCards size={17} />
+                Platform Treasury
+              </Link>
+            ) : null
+          ) : (
+            canWithdraw && <button
+              className="button"
+              disabled={availableBal < 5}
+              onClick={() => setRequestingPayout(true)}
+              title={availableBal < 5 ? 'Minimum payout is $5.00' : 'Request payout to bank'}
+            >
+              <WalletCards size={17} />
+              Request payout
+            </button>
+          )}
         </div>
       </div>
 
       <div className="stats-grid">
         {[
           {
-            label: 'Available for Payout',
+            label: isOfficial ? 'Consolidated Treasury Sales' : 'Available for Payout',
             value: money(wallet?.available_balance || '0.00'),
             icon: WalletCards,
-            note: 'Cleared sales past 7-day refund window',
+            note: isOfficial ? 'Cleared sales consolidated into Platform Treasury (/admin/commission)' : 'Cleared sales past 7-day refund window',
             highlight: availableBal > 0,
           },
           {
@@ -1047,7 +2757,7 @@ function MerchantPayments({ store }: { store: Store }) {
         ))}
       </div>
 
-      {requestingPayout && (
+      {!isOfficial && requestingPayout && (
         <div className="setup-notice" style={{ flexDirection: 'column', alignItems: 'stretch', marginTop: 24, padding: 24 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <div>
@@ -1157,8 +2867,12 @@ function MerchantPayments({ store }: { store: Store }) {
             <div className="empty-state">
               <WalletCards size={36} />
               <h2>No payout requests yet</h2>
-              <p>When you request withdrawals for cleared sales, they will be tracked here with their status and references.</p>
-              {availableBal >= 5 && (
+              <p>
+                {isOfficial
+                  ? 'Official company store earnings are consolidated into the Platform Treasury. Payouts and transfers are audited at /admin/commission.'
+                  : 'When you request withdrawals for cleared sales, they will be tracked here with their status and references.'}
+              </p>
+              {!isOfficial && availableBal >= 5 && canWithdraw && (
                 <button className="button" onClick={() => setRequestingPayout(true)}>
                   Request your first payout
                 </button>
@@ -1706,5 +3420,289 @@ function MerchantSettings({ store }: { store: Store }) {
         </form>
       )}
     </>
+  );
+}
+
+
+export function ProductPreviewPage(): React.JSX.Element {
+  const [selectedVariant, setSelectedVariant] = useState<number>(0);
+  const [quantity, setQuantity] = useState<number>(1);
+  const [preview, setPreview] = useState<PreviewProduct | null>(null);
+  const [ready, setReady] = useState<boolean>(false);
+  useEffect(() => {
+    try {
+      const saved: string | null = sessionStorage.getItem('proace-product-preview');
+      if (saved) setPreview(JSON.parse(saved) as PreviewProduct);
+    } catch { /* Show an empty state when tab storage is unavailable. */ }
+    setReady(true);
+  }, []);
+  if (!ready) return <Loading />;
+  if (!preview) return <Empty title="No product preview available" text="Open Preview from your product editor to see your unsaved listing here." href="/merchant/products" label="Back to products" />;
+  const activeVariant: ProductVariant | undefined = preview.variants[selectedVariant];
+  const displayedPrice: number = preview.sale_price + Number(activeVariant?.price_delta || 0);
+  const effectiveStock: number = preview.is_digital ? 99 : typeof activeVariant?.available === 'number' ? activeVariant.available : preview.available;
+  const originalPrice: number = preview.price + Number(activeVariant?.price_delta || 0);
+  const previewImages = [...new Set([...(preview.images.length ? preview.images : [preview.image]), preview.image, ...(preview.variants || []).map(variant => variant.image_url || '')].filter(Boolean))];
+  return (
+    <Gate next="/merchant">
+      <main className="container product-page">
+        <div className="breadcrumb"><span>Home</span><ChevronRight size={12} /><span>Shop</span><ChevronRight size={12} /><span>{preview.title}</span></div>
+        <div className="storefront-preview-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span style={{ fontSize: '20px' }}>🔒</span>
+            <div>
+              <div className="storefront-preview-title">Product Preview Mode</div>
+              <div className="storefront-preview-desc">Preview only. Nothing has been saved, and purchase actions are disabled.</div>
+            </div>
+          </div>
+          <button type="button" className="button secondary storefront-preview-button" onClick={() => window.close()}>Close preview</button>
+        </div>
+        <div className="product-detail">
+          <div>
+            <div style={{ position: 'relative' }}>
+              <ProductGallery images={previewImages} title={preview.title} discount={preview.discount} activeImage={activeVariant?.image_url || preview.image} />
+              {preview.digital_preview_watermark && <span style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.55)', fontSize: 'clamp(18px, 4vw, 42px)', fontWeight: 700, transform: 'rotate(-24deg)', pointerEvents: 'none', textAlign: 'center' }}>PROACE PREVIEW</span>}
+            </div>
+          </div>
+          <div className="product-information">
+            <span className="eyebrow green" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              {preview.brand || preview.category}
+              <VerifiedBadge tier="starter" size={14} />
+            </span>
+            <h1>{preview.title}</h1>
+            <div className="rating-line" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Star size={16} fill="currentColor" /><strong>New arrival</strong></span>
+              <span style={{ color: 'var(--line)' }}>•</span>
+              <button className="text-button" type="button" disabled>0 reviews</button>
+            </div>
+            <div className="detail-price" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <strong>{displayedPrice > 0 ? money(displayedPrice) : 'Price TBD'}</strong>
+              {preview.discount > 0 && (
+                <>
+                  <del>{money(originalPrice)}</del>
+                  <span>You save {money(originalPrice - displayedPrice)}</span>
+                </>
+              )}
+              {preview.flash_sale_end && (
+                <FlashCountdown end={preview.flash_sale_end} />
+              )}
+            </div>
+            <p className="description">{preview.description}</p>
+            {preview.variants.length > 0 && (
+              <div className="product-variants" style={{ margin: '16px 0' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Option: <strong style={{ color: 'var(--green)' }}>{activeVariant?.name || 'Select'}</strong></span>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  {preview.variants.map((variant, index) => (
+                    <button
+                      type="button"
+                      key={index}
+                      aria-pressed={selectedVariant === index}
+                      onClick={() => setSelectedVariant(index)}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: '8px',
+                        border: selectedVariant === index ? '2px solid var(--green)' : '1px solid var(--line)',
+                        background: selectedVariant === index ? 'var(--green-light)' : 'var(--paper)',
+                        color: selectedVariant === index ? 'var(--green)' : 'var(--ink)',
+                        fontWeight: selectedVariant === index ? 600 : 500,
+                        fontSize: '13px',
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        transition: 'all 0.15s ease',
+                      }}
+                    >
+                      <span>{variant.name || `Option ${index + 1}`}</span>
+                      {variant.price_delta && (
+                        <span style={{ fontSize: '11px', opacity: 0.85 }}>
+                          (
+                          {variant.price_delta.startsWith('+') || variant.price_delta.startsWith('-')
+                            ? variant.price_delta
+                            : `+$${variant.price_delta}`}
+                          )
+                        </span>
+                      )}
+                      {typeof variant.available === 'number' && variant.available <= 0 && (
+                        <span style={{ fontSize: '11px', color: 'var(--muted)' }}>(Sold out)</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <div
+              className={`stock ${
+                preview.product_type === 'affiliate_clickbank' || preview.is_digital || effectiveStock > 0
+                  ? ''
+                  : 'sold-out'
+              }`}
+            >
+              <span />
+              {preview.product_type === 'affiliate_clickbank'
+                ? 'Official Partner Listing · In Stock'
+                : preview.is_digital
+                  ? 'Unlimited digital inventory'
+                  : effectiveStock > 5
+                    ? 'In stock. Ready for your everyday.'
+                    : effectiveStock
+                      ? `Only ${effectiveStock} left in stock`
+                      : 'Currently out of stock'}
+            </div>
+            {!preview.is_digital && preview.product_type !== 'affiliate_clickbank' && (
+              <label className="field">
+                <span>Quantity</span>
+                <span className="quantity">
+                  <button
+                    type="button"
+                    disabled={quantity <= 1}
+                    onClick={() => setQuantity((value) => Math.max(1, value - 1))}
+                  >
+                    −
+                  </button>
+                  <span>{quantity}</span>
+                  <button
+                    type="button"
+                    disabled={quantity >= effectiveStock}
+                    onClick={() => setQuantity((value) => Math.min(effectiveStock, value + 1))}
+                  >
+                    +
+                  </button>
+                </span>
+              </label>
+            )}
+            {preview.is_digital && (
+              <div className="digital-badge">
+                <strong>Instant digital download</strong>
+                <span>{preview.digital_file_name || 'File will be available after purchase'}</span>
+              </div>
+            )}
+            <div className="purchase-actions">
+              {preview.product_type === 'affiliate_clickbank' ? (
+                <button
+                  type="button"
+                  className="button"
+                  style={{ background: '#ea580c', borderColor: '#ea580c', color: '#fff' }}
+                  disabled
+                >
+                  <ArrowUpRight size={16} />
+                  {preview.affiliate_button_text || 'Buy on Partner Site'}
+                </button>
+              ) : (
+                <button type="button" className="button" disabled>
+                  <ShoppingBag size={16} />Add to bag
+                </button>
+              )}
+              <button
+                type="button"
+                className="button secondary"
+                aria-label="Save product"
+                disabled
+              >
+                <Heart size={20} />
+              </button>
+            </div>
+            <div className="delivery-note">
+              <Truck size={21} />
+              <div>
+                <strong>
+                  {preview.product_type === 'affiliate_clickbank'
+                    ? 'Fulfilled by partner'
+                    : preview.is_digital
+                      ? 'Worldwide digital download'
+                      : 'US delivery only'}
+                </strong>
+                <p>
+                  {preview.product_type === 'affiliate_clickbank'
+                    ? 'Order processing and shipping are handled directly by ClickBank and the partner vendor.'
+                    : preview.is_digital
+                      ? 'Your download link appears in your order after checkout. No shipping fee.'
+                      : 'Physical products are currently delivered only within the United States.'}
+                </p>
+              </div>
+            </div>
+            <div className="delivery-note">
+              <ShieldCheck size={21} />
+              <div>
+                <strong>Secure payment</strong>
+                <p>
+                  {preview.product_type === 'affiliate_clickbank'
+                    ? 'ClickBank guarantees secure payment processing and customer purchase protection.'
+                    : 'Major credit and debit cards, Apple Pay, Google Pay via Stripe, and ProAce Wallet are supported.'}
+                </p>
+              </div>
+            </div>
+            <div
+              className="seller-link"
+              aria-disabled="true"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '12px 16px',
+                background: 'var(--soft)',
+                border: '1px solid var(--line)',
+                borderRadius: '10px',
+                marginTop: '16px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div
+                  style={{
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '50%',
+                    background: 'var(--green-light)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    color: 'var(--green)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <StoreIcon size={18} />
+                </div>
+                <div>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      fontSize: '13px',
+                    }}
+                  >
+                    Sold by <strong style={{ color: 'var(--ink)' }}>{preview.brand || 'Your store'}</strong>
+                    <VerifiedBadge tier="starter" size={16} />
+                  </span>
+                  <p className="muted" style={{ fontSize: '11px', margin: 0 }}>
+                    Preview seller profile
+                  </p>
+                </div>
+              </div>
+              <ArrowUpRight size={18} className="muted" />
+            </div>
+          </div>
+        </div>
+        <section className="product-tabs">
+          <div className="tabs" role="tablist">
+            <button role="tab" aria-selected className="active" disabled>
+              Product details
+            </button>
+            <button role="tab" disabled>
+              Reviews (0)
+            </button>
+            <button role="tab" disabled>
+              Delivery &amp; returns
+            </button>
+          </div>
+          <div className="tab-content" role="tabpanel">
+            <h2>Made for your everyday</h2>
+            <p>{preview.description}</p>
+            <p className="fine-print">
+              Preview only. Customer reviews and delivery details will appear after publishing.
+            </p>
+          </div>
+        </section>
+      </main>
+    </Gate>
   );
 }

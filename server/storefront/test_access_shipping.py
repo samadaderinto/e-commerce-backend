@@ -26,6 +26,7 @@ class AccessAndShippingTests(TestCase):
         self.buyer = User.objects.create_user(email='buyer@test.com', password='Buyer-password-123!')
         self.seller = User.objects.create_user(email='seller@test.com', password='Seller-password-123!')
         self.store = Store.objects.create(user=self.seller, name='Store', status='active', verified_at=timezone.now())
+        StoreAddress.objects.create(store=self.store, is_default=True, **{'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'})
         self.product = Product.objects.create(store=self.store, title='Product', price=Decimal('20'), discount=0, available=10, weight=Decimal('2'))
         self.address = Address.objects.create(user=self.buyer, address='123 Test St', zip='33601', country='US', state='FL', city='Tampa')
         self.client = APIClient()
@@ -68,7 +69,7 @@ class AccessAndShippingTests(TestCase):
         self.assertEqual(self.client.get(f'/api/v1/stores/{official_store.pk}/products/').status_code, 200)
 
         # Staff cannot create stores, delete stores, or approve sellers
-        self.assertEqual(self.client.post('/api/v1/stores/', {'name': 'Forbidden', 'username': 'forbidden'}, format='json').status_code, 403)
+        self.assertEqual(self.client.post('/api/v1/stores/', {'name': 'Forbidden', 'username': 'forbidden', 'address': {'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'}}, format='json').status_code, 403)
         self.assertEqual(self.client.delete(f'/api/v1/stores/{official_store.pk}/delete/').status_code, 403)
         self.assertEqual(self.client.post(f'/api/v1/admin/stores/{self.store.pk}/approve/').status_code, 403)
 
@@ -102,6 +103,69 @@ class AccessAndShippingTests(TestCase):
         self.assertTrue(user.staff_email_verified)
         self.assertEqual(user.staff_invitation_secret, '')
 
+
+    def test_missing_store_address_blocks_digital_and_physical_sales(self) -> None:
+        self.client.force_authenticate(self.buyer)
+        StoreAddress.objects.filter(store=self.store).delete()
+        for digital in (False, True):
+            self.product.is_digital = digital
+            self.product.save()
+            response = self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': 1}, format='json')
+            self.assertEqual(response.status_code, 400, response.data)
+            self.assertIn('store_address', response.data['error']['details'])
+
+    def test_shipping_quotes_do_not_fall_back_to_tampa(self) -> None:
+        self.client.force_authenticate(self.buyer)
+        self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': 1}, format='json')
+        StoreAddress.objects.filter(store=self.store).delete()
+        response = self.client.get(f'/api/v1/checkout/shipping-rates/?address={self.address.pk}&carrier=UPS')
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('store_address', response.data['error']['details'])
+
+    def test_military_address_consistency_and_partial_updates(self) -> None:
+        self.client.force_authenticate(self.buyer)
+        for city, state, zipcode in [('Djibouti', 'AE', '09012'), ('APO', 'CA', '90210'), ('APO', 'AE', '90210')]:
+            response = self.client.post('/api/v1/addresses/', {'address': 'Unit 1 Box 2', 'city': city, 'state': state, 'zip': zipcode, 'country': 'US'}, format='json')
+            self.assertEqual(response.status_code, 400, response.data)
+        response = self.client.post('/api/v1/addresses/', {'address': 'Unit 1 Box 2', 'city': 'APO', 'state': 'AE', 'zip': '09012', 'country': 'US'}, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        response = self.client.patch(f"/api/v1/addresses/{response.data['id']}/", {'zip': '90210'}, format='json')
+        self.assertEqual(response.status_code, 400, response.data)
+
+    def test_military_carriers_blocked_in_demo_live_and_checkout(self) -> None:
+        from payment.carriers import calculate_carrier_rates
+        from rest_framework.exceptions import ValidationError
+        for mode in ('demo', 'live'):
+            with override_settings(SHIPPING_RATE_MODE=mode):
+                for carrier in ('UPS', 'FEDEX', 'DHL'):
+                    with self.assertRaises(ValidationError):
+                        calculate_carrier_rates(carrier, '33602', '09012', Decimal('1'), Decimal('20'), True)
+        self.address.city, self.address.state, self.address.zip = 'APO', 'AE', '09012'
+        self.address.save()
+        self.client.force_authenticate(self.buyer)
+        self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': 1}, format='json')
+        for carrier in ('UPS', 'FEDEX', 'DHL'):
+            response = self.client.get(f'/api/v1/checkout/shipping-rates/?address={self.address.pk}&carrier={carrier}')
+            self.assertEqual(response.status_code, 400, response.data)
+            response = self.client.post('/api/v1/checkout/', {'address': self.address.pk, 'checkout_key': str(uuid4()), 'shipping_service': carrier.lower() + '_03'}, format='json')
+            self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(self.client.get(f'/api/v1/checkout/shipping-rates/?address={self.address.pk}&carrier=USPS').status_code, 200)
+
+    def test_preexisting_commercial_quote_cannot_pay_for_military_delivery(self) -> None:
+        from payment.shipping_quotes import issue_quote
+        from cart.models import Cart
+        self.address.city, self.address.state, self.address.zip = 'APO', 'AE', '09012'
+        self.address.save()
+        self.client.force_authenticate(self.buyer)
+        self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': 1}, format='json')
+        cart = Cart.objects.get(user=self.buyer, ordered=False)
+        token = issue_quote({'carrier': 'UPS', 'service_id': 'ups_03', 'amount': '8.00'}, self.buyer, cart, self.address)
+        response = self.client.post('/api/v1/checkout/', {'address': self.address.pk, 'checkout_key': str(uuid4()), 'shipping_service': 'ups_03', 'shipping_quote': token}, format='json')
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('carrier', response.data['error']['details'])
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.available, 10)
+        self.assertFalse(Order.objects.filter(user=self.buyer).exists())
 
     def rates(self, carrier='UPS'):
         self.client.force_authenticate(self.buyer)

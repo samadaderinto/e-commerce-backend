@@ -26,6 +26,24 @@ class StaffAdministrationTests(TestCase):
         )
         self.client = APIClient()
 
+    def test_user_detail_serializes_notification_timestamp(self) -> None:
+        from django.contrib.contenttypes.models import ContentType
+        from notification.models import Notification
+
+        activity = Notification.objects.create(
+            recipient=self.staff, actor_content_type=ContentType.objects.get_for_model(User),
+            actor_object_id=str(self.admin.pk), verb='Account updated', description='Staff activity',
+        )
+        self.client.force_authenticate(self.admin)
+        response = self.client.get(f'/staffs/users/{self.staff.pk}/')
+        self.assertEqual(response.status_code, 200, response.data)
+        payload = response.json()
+        self.assertEqual(payload['activity'][0]['id'], activity.pk)
+        self.assertEqual(payload['activity'][0]['created'], activity.timestamp.isoformat())
+        self.assertEqual(payload['user']['id'], self.staff.pk)
+        self.assertIn('wallet', payload)
+        self.assertIn('orders', payload)
+
     def staff_payload(self):
         return {
             "email": "new.staff@example.com",
@@ -147,7 +165,7 @@ class StaffEmergencyOperationsTests(TestCase):
         )
         self.order = Order.objects.create(
             user=self.customer, cart=cart, delivery=delivery, status="confirmed", ordered=True,
-            total="25.00", subtotal="20.00",
+            total="25.00", subtotal="20.00", paid_total="25.00",
         )
 
     def test_staff_can_deactivate_and_delete_unused_coupon(self):
@@ -197,6 +215,7 @@ class StaffEmergencyOperationsTests(TestCase):
 
     def test_staff_can_process_original_payment_refund_via_api(self):
         self.order.payment_type = "user_wallet"
+        self.order.wallet_paid = self.order.paid_total
         self.order.save()
         refund = Refund.objects.create(
             email=self.customer.email,
@@ -226,6 +245,7 @@ class StaffEmergencyOperationsTests(TestCase):
             status=StoreEarningsLedger.STATUS_PENDING,
         )
         self.order.payment_type = "wallet"
+        self.order.wallet_paid = self.order.paid_total
         self.order.save()
         refund = Refund.objects.create(
             email=self.customer.email,
@@ -240,7 +260,7 @@ class StaffEmergencyOperationsTests(TestCase):
         wallet.refresh_from_db()
         self.assertEqual(wallet.pending_balance, Decimal("26.00"))
 
-    def test_staff_approve_card_refund_without_stripe_session(self):
+    def test_staff_cannot_approve_original_card_refund_without_provider_reference(self) -> None:
         self.order.payment_type = "card"
         self.order.stripe_session_id = None
         self.order.save()
@@ -251,12 +271,14 @@ class StaffEmergencyOperationsTests(TestCase):
             refund_type=Refund.REFUND_TYPE_ORIGINAL_PAYMENT,
         )
         response = self.client.post(f"/staffs/refunds/{refund.pk}/process/", {"action": "approve", "reason": "Approved after card review."}, format="json")
-        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.status_code, 400, response.data)
         refund.refresh_from_db()
-        self.assertEqual(refund.status, Refund.STATUS_APPROVED)
-        self.assertTrue(refund.provider_reference.startswith("STRIPE-"))
+        self.assertEqual(refund.status, Refund.STATUS_FAILED)
+        self.assertEqual(refund.provider_reference, "")
 
     def test_staff_order_status_cancel_restores_inventory_via_api(self):
+        self.order.payment_type = 'user_wallet'
+        self.order.wallet_paid = self.order.paid_total
         from product.models import Product
         from store.models import Store
         store = Store.objects.create(user=self.staff, name="Official Store", username="official-store", status=Store.STATUS_ACTIVE, verified_at=timezone.now())
@@ -386,3 +408,60 @@ class StaffEmergencyOperationsTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["count"], 1)
         self.assertEqual(res.data["results"][0]["id"], r1.id)
+
+    def test_platform_commission_wallet_includes_official_store_sales(self):
+        from decimal import Decimal
+        from store.models import Store, StoreEarningsLedger, MerchantWallet
+        admin = User.objects.create_superuser(email="admin.finance@example.com", password="Admin-password-123!")
+        self.client.force_authenticate(admin)
+
+        # 3P store with $100 sale, 4% platform fee ($4.00)
+        merchant_user = User.objects.create_user(email="vendor@example.com", password="passWord123!")
+        third_party_store = Store.objects.create(user=merchant_user, name="Third Party Store", is_official=False)
+        m_wallet = MerchantWallet.objects.create(user=merchant_user)
+        StoreEarningsLedger.objects.create(
+            wallet=m_wallet,
+            store=third_party_store,
+            entry_type=StoreEarningsLedger.TYPE_SALE,
+            gross_amount=Decimal("100.00"),
+            fee_amount=Decimal("4.00"),
+            net_amount=Decimal("96.00"),
+            status=StoreEarningsLedger.STATUS_AVAILABLE,
+            reference="ORD-3P-001",
+        )
+
+        # Official store with $200 sale, 0% platform fee, $200.00 net sales
+        official_store = Store.objects.create(user=admin, name="Official Store", is_official=True)
+        admin_wallet = MerchantWallet.objects.create(user=admin)
+        StoreEarningsLedger.objects.create(
+            wallet=admin_wallet,
+            store=official_store,
+            entry_type=StoreEarningsLedger.TYPE_SALE,
+            gross_amount=Decimal("200.00"),
+            fee_amount=Decimal("0.00"),
+            net_amount=Decimal("200.00"),
+            status=StoreEarningsLedger.STATUS_AVAILABLE,
+            reference="ORD-OFFICIAL-001",
+        )
+
+        # Query commission-wallet endpoint
+        resp = self.client.get("/staffs/commission-wallet/")
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data["marketplace_commission"], "4.00")
+        self.assertEqual(resp.data["official_stores_revenue"], "200.00")
+        self.assertEqual(resp.data["earned"], "204.00")
+        self.assertEqual(resp.data["available"], "204.00")
+
+        # Admin can withdraw combined treasury funds
+        withdraw_resp = self.client.post("/staffs/commission-wallet/withdraw/", {
+            "amount": "150.00",
+            "payout_method": "stripe",
+            "account_details": {"destination": "Stripe Corporate Balance"},
+        }, format="json")
+        self.assertEqual(withdraw_resp.status_code, 201)
+        self.assertEqual(withdraw_resp.data["status"], "pending")
+
+        # Check refreshed available balance
+        resp2 = self.client.get("/staffs/commission-wallet/")
+        self.assertEqual(resp2.data["available"], "54.00")
+        self.assertEqual(resp2.data["withdrawn_or_pending"], "150.00")

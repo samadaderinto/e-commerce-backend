@@ -76,6 +76,7 @@ services:
       RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
       RUN_COLLECTSTATIC: ${RUN_COLLECTSTATIC:-false}
     volumes:
+      - .:/app:cached
       - media-data:/app/media
       - prometheus-multiproc:/tmp/prometheus
     depends_on:
@@ -178,6 +179,7 @@ services:
         mc mb --ignore-existing "local/$${MINIO_BUCKET_NAME}";
         mc admin user add local "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}" 2>/dev/null || true;
         mc admin policy attach local readwrite --user "$${MINIO_ACCESS_KEY}";
+        mc admin policy attach local consoleAdmin --user "$${MINIO_ROOT_USER}" 2>/dev/null || true;
         mc anonymous set download "local/$${MINIO_BUCKET_NAME}/static" || true
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.5

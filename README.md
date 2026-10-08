@@ -1,9 +1,15 @@
 # Proace Commerce
 
+Shared frontend styling in `client/src/app/design-system.css` standardizes form controls, buttons, cards, dialogs, catalog typography, and ClickBank partner badges across light and dark themes. Mobile controls use readable input sizes, touch devices expose quick product actions, and reduced-motion preferences are respected.
+
+Lifecycle tracking records JWT sign-ins, throttled authenticated user/store activity, profile/catalog revisions, cart mutations, notification reads, review edits, coupon redemptions, affiliate clicks, and order transitions. Apply the new Django migrations with `python server/manage.py migrate`; admin/account/merchant views surface the timestamps. Existing unknown activity and transition times remain unrecorded rather than being inferred.
+
+Admin and staff record details share a responsive dialog with a labeled header, status badge, two-column definition list (one column on mobile), and print/close actions. Printing isolates the selected record.
+
 A Next.js marketplace and Django API in one base repository.
 
 ```text
-client/                 Next.js 15 App Router frontend and browser UI
+client/                 Next.js 16 App Router frontend and browser UI
 server/                 Django REST Framework modular monolith API
 docs/                   Canonical documentation directory (all technical guides & architecture)
 monitoring/             Observability stack (Grafana, Loki, Prometheus, Tempo, Alloy)
@@ -31,6 +37,7 @@ All detailed technical documentation is centralized exclusively in [`docs/`](doc
 - **UI Design System, Tokens & Modals**: [`docs/ui-and-events.md`](docs/ui-and-events.md)
 - **Infrastructure & Container Stacks**: [`docs/infrastructure.md`](docs/infrastructure.md)
 - **Observability & Health Monitoring**: [`docs/observability.md`](docs/observability.md)
+- **Current Bug Audit (8 October 2026)**: [`docs/bug-audit-2026-10-08.md`](docs/bug-audit-2026-10-08.md)
 - **Global AI Agent Operational Rules**: [`AGENTS.md`](AGENTS.md)
 
 Whenever code behavior, models, endpoints, or configurations change, developers and AI agents must update the matching guide in `docs/` AND the root `README.md` in the same pass.
@@ -57,9 +64,7 @@ npm ci
 python3 -m venv .venv
 .venv/bin/python -m pip install -r server/requirements.txt
 .venv/bin/python server/manage.py migrate --settings=codematics.storefront_settings
-.venv/bin/python server/manage.py seed_demo --settings=codematics.storefront_settings --password 'ProaceDemo2026!'
-# Or generate realistic high-volume marketplace load (~150 products, ~350 orders):
-# .venv/bin/python server/manage.py populate_fake_data --scale standard
+.venv/bin/python server/manage.py populate_fake_data --settings=codematics.storefront_settings --password 'ProaceDemo2026!'
 ```
 
 Run the API and client in separate terminals:
@@ -95,6 +100,15 @@ docker compose -f monitoring/compose.yaml up -d
 ```
 
 The Next.js storefront will be available at <http://127.0.0.1:3000>, the Django API at <http://127.0.0.1:8000>, and Grafana at <http://127.0.0.1:3002>.
+
+The API image copies `mc` from a digest-pinned MinIO client image and invokes
+its entrypoint through `/bin/sh` so local bind mounts do not require an executable
+script. If builds report `http.docker.internal` DNS timeouts and container starts
+hang, restart Docker Desktop and retry; see [infrastructure](docs/infrastructure.md).
+
+Gunicorn's optional `gunicornc` control socket is disabled in the container
+configuration. Docker manages shutdown and restart through signals, and disabling
+the socket avoids unsupported Unix socket operations on macOS bind mounts.
 
 ### Option B: Backend Stack Only
 From the repository root:
@@ -191,31 +205,34 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 - **Flash Deals & Live Countdowns**: Urgency badges and real-time countdown clocks on limited-time discounts.
 - **Store Profiles & Announcements**: Dedicated merchant showcase pages with marquee announcements, pinned items, and direct "Message Store" contact actions.
 - **Seller Tier Badges**: Dynamic verification tick and rank badges (Starter 🔵, Booster ⚪, Accelerator 🟣, Power 🟢, Mega 💎, Legendary 👑, and Official 🟡).
+- **ClickBank Affiliate & Partner Offers**: Seamless integration of external ClickBank partner products coexisting alongside native marketplace listings. Features partner badges, custom CTA labels ("Buy on Partner Site"), and transparent partner fulfillment notes. Secure outbound routing via `/api/affiliates/clickbank/outbound/<id>` attaches tracking tokens (`tid=cb_*`) and logs outbound clicks while blocking local cart checkout.
 - Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
 - Email-verified registration, sign-in, password reset, and session management.
 - Profile, delivery addresses, order history, and detailed order pages.
 - **Order Tracking**: Recorded fulfillment milestones and official USPS, UPS, FedEx, and DHL tracking links. Shipping service and carrier quotes are preserved in each order.
 - **In-App Password Management**: In-dialog password updates (`/api/v1/password/change/`) verifying current passwords and enforcing secure credential hygiene.
 - **ProAce Wallet, Top-Ups & Refunds**: Integrated customer wallet balance with Stripe Checkout top-up sessions (`/api/v1/wallet/topup-session/`), 7-day physical return window, and instant store credit refund resolution.
-- **Order Cancellation**: Self-service shopper cancellation for unfulfilled orders with atomic physical inventory restock and wallet balance refund.
+- **Order Cancellation**: Self-service shopper cancellation for unfulfilled orders with atomic variant inventory restock, merchant earnings reversal, and refunds limited to actual wallet/card payments.
 - **Flexible Checkout**: Supports Cash-on-Delivery, ProAce Wallet balance, and Stripe Wallet payments with transactional stock deductions and idempotent retry handling.
 
 ## Seller Experience
 
 Visit `/merchant` after signing in:
 - **Seller Workspace Dashboard**: Daily order activity trend bar charts, low-stock inventory alerts, top-selling products, and tier milestone celebration banners.
-- **Product Management & Variants**: Create physical and digital goods, define customizable variant options with price deltas and individual stock allocations, set flash sale timers, and upload image galleries.
+- **Product Management & Variants**: Create physical goods, digital assets, or ClickBank affiliate offers. Configure custom variant matrices with price deltas and individual stock allocations, flash sale timers, HopLink targets, and MinIO photo galleries.
+- **Partner Offer Configuration**: Publish ClickBank affiliate listings with direct HopLink URLs, vendor account nicknames, and custom landing CTA buttons, with automatic bypassing of physical shipping and variant restrictions.
 - **Bulk CSV Catalog Import**: RFC 4180-compliant batch upload supporting quotes, multiline values, variants, and tags.
 - **Storefront Customization**: Configure store announcement banner, banner covers, avatars, bio, and direct customer inquiry channels.
-- **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`).
+- **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`). Official company stores automatically consolidate 100% of retail sales into Platform Treasury.
 - **Order Fulfillment**: Review store-specific customer orders, assign carrier & tracking numbers, update fulfillment milestones, and trigger instant buyer notifications.
 
 ## Admin & Staff Experience
 
-Visit `/admin` (Platform Intelligence) and `/admin/staff` (Team Administration):
+Visit `/admin` (Platform Intelligence), `/admin/commission` (Platform Treasury), and `/admin/staff` (Team Administration):
 - **Executive Analytics Dashboard**: Platform gross revenue, order volume, active user growth, and store fleet health across 7/30/90/365-day periods.
 - **Order Status Distribution Chart**: Visual fulfillment pipeline breakdown across order lifecycle stages.
-- **Moderation Queues**: Review 7-day customer refund requests, moderate or remove abusive product reviews, and approve/reject merchant payout requests (`/admin/staff/payouts`).
+- **Moderation & Payout Queues**: Review 7-day customer refund requests, moderate or remove abusive product reviews, and approve/reject third-party merchant payout requests (`/admin/payouts`).
+- **Platform Treasury & Commission Wallet**: Unified corporate finance ledger (`/admin/commission`) consolidating marketplace 4% fee commissions and 100% of official company store retail sales with audited withdrawal workflows.
 - **Store Moderation**: Review pending store onboardings, approve verified sellers, or suspend non-compliant stores with instant catalog cache invalidation.
 - **Role Hierarchy & Credential Isolation**:
   - **Technical Super Admin (`is_superuser=True`)**: Password resets via UI or `manage.py recover_privileged_user` automatically sync across Django, MinIO, and Grafana via `server/core/auth_sync.py`.
@@ -251,15 +268,15 @@ Run locally before staging or committing changes:
 # 1. Frontend TypeScript Validation (zero type errors required)
 npm run typecheck
 
-# 2. Frontend Unit Tests (19 tests via Node native runner)
+# 2. Frontend Unit Tests (24 tests via Node native runner)
 npm run test:unit
 
-# 3. Backend Test Suite (Django / Pytest — 184 passing tests)
+# 3. Backend Test Suite (Django / Pytest: 283 tests; 8 environment-dependent skips offline)
 .venv/bin/pytest server/
 ```
 
 ### Tier 2: Integration & End-to-End Suites (Live Dev Servers)
-Run with the backend (`python server/manage.py runserver 127.0.0.1:8000`) and frontend (`npm run dev`) running with seeded demo data (`manage.py seed_demo`):
+Run with the backend (`python server/manage.py runserver 127.0.0.1:8000`) and frontend (`npm run dev`) running with seeded demo data (`manage.py populate_fake_data`):
 
 ```bash
 # Next.js API proxy integration tests
@@ -270,17 +287,16 @@ npm run test:e2e
 ```
 
 Unit tests exercise frontend API serialization/error handling, currency formatting,
-categories, and backend price rounding without making external service calls.
+categories, address validation, and backend price rounding without making external service calls.
 Backend tests cover authentication, permissions, cart atomicity, coupon redemption,
-wallet transactions, 7-day refund escrow, USPS tracking, review photo validations,
-variants serialization, flash sale countdowns, and merchant payouts.
+wallet transactions, 7-day refund escrow, destination sales tax calculation & admin management,
+USPS tracking, review photo validations, variants serialization, flash sale countdowns, and merchant payouts.
 
 ## Deployment Boundaries
 
 - Set `DJANGO_DEBUG=false`, a strong `SECRET_KEY`, `ALLOWED_HOSTS`, `FRONTEND_URL`,
-  Resend API/sender configuration, and persistent media/database storage. Build
+  Resend API/sender configuration, ClickBank affiliate keys (`CLICKBANK_AFFILIATE_NICKNAME`, `CLICKBANK_SECRET_KEY`), and persistent media/database storage. Build
   the client with `npm run build` (or `npm --prefix client run build`) and run `npm run start --workspace=client`
-  behind HTTPS.
   behind HTTPS.
 - Dedicated monitoring stack (Grafana Loki, Alloy, Prometheus, Tempo) runs via
   `monitoring/compose.yaml` with centralized dashboards at `http://127.0.0.1:3002`.
@@ -296,3 +312,29 @@ Staff/admin accounts use operational workspaces and cannot shop. Grafana require
 technical-admin credentials; anonymous access is disabled.
 
 See [UI components and live event pipeline](docs/ui-and-events.md) for responsive conventions, pagination, carrier selection, cart states, scoped SSE events, and verification procedures.
+
+Product editors open unsaved storefront previews at `/merchant/products/preview` in a separate tab, preserving the draft while matching the buyer product-detail layout with checkout, save, and seller navigation disabled. Digital products accept zero shipping weight; physical products require at least 0.01 lb.
+
+Product creation and asset uploads are separate steps. Failed uploads retain the saved product ID so Save changes updates the same listing rather than creating a duplicate. Local media volumes must be writable by the API’s `app` user; see [infrastructure](docs/infrastructure.md).
+
+Product updates accept the existing server-generated cover URL, including local media hostnames; new pasted cover URLs still undergo URL validation.
+
+Backoffice order-status overrides require an audit reason in the confirmation dialog. Browser commerce tests select listings and seller names from the seeded API and use ProAce Wallet checkout rather than legacy cash-on-delivery flows.
+
+The unsaved product preview displays variant options with selectable prices and images, plus the configured flash deal countdown in the product price block. Expired draft deals show an explanation instead of disappearing.
+
+Anonymous API failures cannot clear cookies set by a concurrent successful login; authenticated failures still expire invalid sessions.
+
+Backoffice navigation uses a dedicated responsive icon navigation row with active-page highlighting, separate from account controls. Dashboard shortcuts use a responsive grid. Required admin and staff password changes use a focused security card with password confirmation and a visibility toggle.
+
+Store onboarding requires a complete business address (street, city, state/region, country and postal code). Products may be saved as drafts, but manual and scheduled publication require that address for both digital and physical listings.
+
+Purchase validation also rejects existing stores without a complete default business address, including digital-only stores. Missing physical shipment origins return a validation error rather than silently using Tampa.
+
+Time handling: Django stores timezone-aware UTC instants (`TIME_ZONE=UTC`, `USE_TZ=True`). Browser date/time inputs display local time and submit ISO UTC timestamps. Dashboard requests accept a validated IANA `time_zone` (UTC by default); the browser supplies its timezone for local calendar-day reporting. Date-only chart labels are preserved without timezone shifts. Cron and carrier request clocks use aware UTC; flash countdowns include minutes.
+
+Military postal delivery: APO/FPO/DPO destinations use USPS only with the currently supported integrations. Checkout disables other carrier options and the server rejects unsupported carriers in both demo and live rating and payment flows. Address city/state/ZIP must agree: AA uses 340xx, AE uses 090xx–098xx, AP uses 962xx–966xx, with country United States. This is a supported-service policy, not a claim that all commercial postal handoff services are prohibited: UPS Ground Saver and Mail Innovations have military-address support but are not integrated here. See [USPS military addressing standards](https://pe.usps.com/text/dmm300/703.htm) and [UPS supported services](https://www.ups.com/us/en/support/shipping-support/print-shipping-labels/how-to-write-address). ZIP blocks alone do not guarantee an active destination or eligibility for every USPS service; live carrier availability and military mail content/customs requirements still apply.
+
+Commerce safety: split-tender checkout reserves wallet funds and records recoverable Stripe attempts with 30-minute expiry; Celery Beat retries failed refunds and releases abandoned holds. Cart lines persist variants, merchant refund debt is retained, destination sales tax is computed via a hybrid database & Stripe Tax engine, and buyer digital downloads are authenticated streams. Apply the new cart/payment migrations before running the updated app. See [audit remediation](docs/security-audit-remediation.md) for recovery behavior, import limits and verification boundaries.
+
+Commerce bug-audit fixes persist settled tender amounts, allocated coupon/tax line totals, cumulative refunds, store-scoped fulfillment, and unique wallet funding receipts. Apply `python server/manage.py migrate` before running the updated backend, then restart API/Celery processes. COD supports physical goods only and never grants paid balances or digital access. See [the remediation and verification record](docs/bug-audit-2026-10-08.md) and [backend accounting rules](docs/backend.md).

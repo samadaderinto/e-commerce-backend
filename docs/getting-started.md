@@ -24,7 +24,7 @@ npm ci
 python3 -m venv .venv
 .venv/bin/python -m pip install -r server/requirements.txt
 .venv/bin/python server/manage.py migrate
-.venv/bin/python server/manage.py seed_demo --password 'ProaceDemo2026!'
+.venv/bin/python server/manage.py populate_fake_data --password 'ProaceDemo2026!'
 ```
 
 The active settings default to SQLite for a direct local run, so this path does
@@ -43,15 +43,14 @@ Open <http://127.0.0.1:3000>. The client calls the Django API at
 `client/.env` using `client/.env.example` as a starting point and set
 `API_URL=http://127.0.0.1:8000/api/v1`.
 
-The demo password above is for local seeded accounts only. `seed_demo` is
+The dev password above is for local seeded accounts only. `populate_fake_data` is
 refused when `DJANGO_DEBUG=false`; do not use demo credentials or template
 secrets in deployed environments.
 
-### Seeding & Demo Data Options
-- **Deterministic E2E Test Data (`seed_demo`)**: Prepares predictable accounts (`admin@proace.local`, `staff@proace.local`, `seller@proace.local`, `shopper@proace.local`) required by Playwright test suites.
-- **Realistic Marketplace Load (`populate_fake_data`)**: If you prefer exploring the UI with hundreds of realistic products, customer reviews, order lifecycles, and seller escrow balances, run:
+### Seeding & Demo Data
+- **Authoritative Seeding (`populate_fake_data`)**: The single command to populate the local environment. It always creates all essential role profiles (`admin@proace.local`, `business-admin@proace.local`, `staff@proace.local`, `seller@proace.local`, `shopper@proace.local`) along with a full catalog, reviews, orders, and financial escrow balances.
   ```sh
-  .venv/bin/python server/manage.py populate_fake_data --scale standard
+  .venv/bin/python server/manage.py populate_fake_data
   ```
 - **Reindexing Search (`rebuild_product_index`)**: Rebuilds the Elasticsearch catalog index (`commerce-products`).
   *(See [Backend Engineering](backend.md#management-commands--data-seeding) for full flag descriptions and Docker commands).*
@@ -103,27 +102,17 @@ npm run test:unit
 npm run build                  # or npm --prefix client run build
 ```
 
-Backend test settings are isolated from the local development database:
+Backend test settings are isolated from the local development database. You can run the complete offline pytest suite (184 tests) directly with your virtual environment:
 
 ```sh
-.venv/bin/python server/manage.py check --settings=codematics.test_settings
+# Fast offline backend pytest suite (184 tests)
+.venv/bin/pytest server/
+
+# Or using Django's runner with storefront test settings
 .venv/bin/python server/manage.py test storefront --settings=codematics.storefront_settings --noinput
 ```
 
-The CI-equivalent pytest and coverage run uses the development dependencies in
-[`server/Pipfile`](../server/Pipfile). To reproduce it, install Pipenv and run
-these commands from `server/`:
-
-```sh
-pipenv install --dev --skip-lock
-pipenv run python manage.py check --settings=codematics.test_settings
-pipenv run coverage run -m pytest --verbose
-pipenv run coverage report --show-missing
-pipenv run python manage.py test storefront --settings=codematics.storefront_settings --noinput
-```
-
-The integration and browser tests require the API and frontend to be running,
-and seeded demo accounts to exist:
+The integration and browser tests require the API (`python server/manage.py runserver 127.0.0.1:8000`) and frontend (`npm run dev`) to be running with seeded demo accounts (`manage.py populate_fake_data`):
 
 ```sh
 npm run test:integration
@@ -150,3 +139,17 @@ cache so tests do not need production services.
 
 See [role matrix, staff activation, and operator setup](access-control.md) and
 [multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).
+
+For isolated browser verification, run a separate seeded API/database and frontend, set the frontend `API_URL` to that API’s `/api/v1`, and set `E2E_BASE_URL` to the test frontend URL. Verify the ports are free first. Integration and browser runs share `artifacts/playwright`; run them sequentially to preserve traces. Commerce tests create products/orders and clear the demo shopper’s active cart, so use a disposable seeded database.
+
+## October commerce audit fixes
+
+Optional PostgreSQL race verification uses `codematics.postgres_test_settings` against a disposable database. Set `AUDIT_POSTGRES_PASSWORD` and, if needed, `AUDIT_POSTGRES_HOST`, `AUDIT_POSTGRES_PORT` (default 15432), `AUDIT_POSTGRES_USER` and `AUDIT_POSTGRES_DATABASE` (both default `proace_audit`). The configured test database is `test_proace_audit`; use a dedicated instance and a user allowed to create it.
+
+```bash
+.venv/bin/pytest server/payment/test_audit_regressions.py --ds=codematics.postgres_test_settings
+```
+
+The audit regressions include three concurrent-request tests that skip on SQLite. Run the mandatory offline suites normally, then run this optional suite to verify PostgreSQL row locking. Apply all Django migrations before testing the live app.
+
+Live wallet-checkout browser tests require a funded seeded `shopper@proace.local` account. Successful checkout tests cancel their own orders afterward to restore inventory and wallet funds. On a slow development frontend, authentication, placement and preview assertions allow up to 30 seconds; per-test execution can be raised with Playwright `--timeout=120000`.
