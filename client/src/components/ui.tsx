@@ -133,6 +133,18 @@ export function VerifiedBadge({
   );
 }
 
+export function normalizeImageUrl(url?: string | null): string {
+  if (!url) return '';
+  let clean = url.trim();
+  if (clean.includes('minio:9000')) {
+    clean = clean.replace(/https?:\/\/minio:9000/g, 'http://127.0.0.1:9000');
+  }
+  if (clean.includes('/media/') && clean.includes('?')) {
+    clean = clean.split('?')[0];
+  }
+  return clean;
+}
+
 export function ProductImage({
   src,
   alt,
@@ -142,11 +154,17 @@ export function ProductImage({
   alt: string;
   className?: string;
 }) {
+  const resolvedSrc = normalizeImageUrl(src);
   const [failed, setFailed] = useState(false);
-  return src && !failed ? (
+
+  useEffect(() => {
+    setFailed(false);
+  }, [resolvedSrc]);
+
+  return resolvedSrc && !failed ? (
     <img
       className={className}
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       loading="lazy"
       onError={() => setFailed(true)}
@@ -158,17 +176,59 @@ export function ProductImage({
     </div>
   );
 }
-export function ProductGallery({ images, title, discount, activeImage, onImageChange }: { images: string[]; title: string; discount: number; activeImage?: string; onImageChange?: (image: string) => void }) {
-  const photos = [...new Set(images.filter(Boolean))];
-  const [selected, setSelected] = useState(0);
+
+export function ProductGallery({
+  images,
+  title,
+  discount,
+  activeImage,
+  onImageChange,
+}: {
+  images: string[];
+  title: string;
+  discount: number;
+  activeImage?: string;
+  onImageChange?: (image: string) => void;
+}) {
+  const photos = [...new Set(images.map(normalizeImageUrl).filter(Boolean))];
+  const normalizedActive = activeImage ? normalizeImageUrl(activeImage) : undefined;
+
+  const [selected, setSelected] = useState<number>(() => {
+    if (normalizedActive) {
+      const idx = photos.indexOf(normalizedActive);
+      if (idx >= 0) return idx;
+    }
+    return 0;
+  });
+
+  const prevPropRef = useRef<string | undefined>(normalizedActive);
   const touchStart = useRef<number | null>(null);
-  const mappedIndex = activeImage ? photos.indexOf(activeImage) : -1;
-  const current = mappedIndex >= 0 ? mappedIndex : Math.min(selected, Math.max(0, photos.length - 1));
+
+  // Synchronize with external activeImage prop changes (e.g. variant selection)
+  useEffect(() => {
+    if (normalizedActive !== prevPropRef.current) {
+      prevPropRef.current = normalizedActive;
+      if (normalizedActive) {
+        const idx = photos.indexOf(normalizedActive);
+        if (idx >= 0) {
+          setSelected(idx);
+        }
+      }
+    }
+  }, [normalizedActive, photos]);
+
+  const current = Math.min(selected, Math.max(0, photos.length - 1));
+
   const selectPhoto = (index: number) => {
-    setSelected(index);
-    onImageChange?.(photos[index]);
+    const validIndex = Math.min(Math.max(0, index), Math.max(0, photos.length - 1));
+    setSelected(validIndex);
+    onImageChange?.(photos[validIndex]);
   };
-  const move = (direction: number) => selectPhoto((current + direction + photos.length) % photos.length);
+
+  const move = (direction: number) => {
+    if (photos.length === 0) return;
+    selectPhoto((current + direction + photos.length) % photos.length);
+  };
 
   return (
     <div className="gallery" role="region" aria-roledescription="carousel" aria-label={`${title} photos`}>

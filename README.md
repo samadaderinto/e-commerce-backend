@@ -245,7 +245,7 @@ All browser API calls use the Next.js `/api/*` server proxy. Access and refresh
 tokens live in HTTP-only, SameSite cookies, not browser local storage. Mutating
 requests require a same-origin `Origin` header. The proxy refreshes expired access
 tokens, excludes credentials from JSON responses, and clears cookies on sign-out.
-Production cookies require HTTPS.
+Public catalog, product, and store pages retry anonymously when saved authentication is rejected, clearing invalid cookies while retaining Django’s public visibility rules. Invalid or revoked refresh tokens return HTTP 401 so the proxy can clear stale sessions; temporary refresh outages preserve the saved session. Production cookies require HTTPS.
 
 The Django API uses `/api/v1/`. It reuses existing users, stores, products, carts, and
 orders. Ownership is derived from authentication. Public catalog responses exclude
@@ -271,7 +271,7 @@ npm run typecheck
 # 2. Frontend Unit Tests (24 tests via Node native runner)
 npm run test:unit
 
-# 3. Backend Test Suite (Django / Pytest: 283 tests; 8 environment-dependent skips offline)
+# 3. Backend Test Suite (Django / Pytest: 294 tests; 286 passed, 8 environment-dependent skips offline)
 .venv/bin/pytest server/
 ```
 
@@ -290,6 +290,7 @@ Unit tests exercise frontend API serialization/error handling, currency formatti
 categories, address validation, and backend price rounding without making external service calls.
 Backend tests cover authentication, permissions, cart atomicity, coupon redemption,
 wallet transactions, 7-day refund escrow, destination sales tax calculation & admin management,
+transactional HTML email dispatching across auth, store moderation, security, inventory, orders, refunds, and payouts,
 USPS tracking, review photo validations, variants serialization, flash sale countdowns, and merchant payouts.
 
 ## Deployment Boundaries
@@ -325,7 +326,7 @@ The unsaved product preview displays variant options with selectable prices and 
 
 Anonymous API failures cannot clear cookies set by a concurrent successful login; authenticated failures still expire invalid sessions.
 
-Backoffice navigation uses a dedicated responsive icon navigation row with active-page highlighting, separate from account controls. Dashboard shortcuts use a responsive grid. Required admin and staff password changes use a focused security card with password confirmation and a visibility toggle.
+Backoffice navigation uses a dedicated responsive icon navigation row with active-page highlighting, separate from account controls. Overview destinations appear once in the same horizontally scrollable navigation row, including merchant payouts, users, administrator commission withdrawals, and technical-admin Grafana metrics. Required admin and staff password changes use a focused security card with password confirmation and a visibility toggle.
 
 Store onboarding requires a complete business address (street, city, state/region, country and postal code). Products may be saved as drafts, but manual and scheduled publication require that address for both digital and physical listings.
 
@@ -338,3 +339,11 @@ Military postal delivery: APO/FPO/DPO destinations use USPS only with the curren
 Commerce safety: split-tender checkout reserves wallet funds and records recoverable Stripe attempts with 30-minute expiry; Celery Beat retries failed refunds and releases abandoned holds. Cart lines persist variants, merchant refund debt is retained, destination sales tax is computed via a hybrid database & Stripe Tax engine, and buyer digital downloads are authenticated streams. Apply the new cart/payment migrations before running the updated app. See [audit remediation](docs/security-audit-remediation.md) for recovery behavior, import limits and verification boundaries.
 
 Commerce bug-audit fixes persist settled tender amounts, allocated coupon/tax line totals, cumulative refunds, store-scoped fulfillment, and unique wallet funding receipts. Apply `python server/manage.py migrate` before running the updated backend, then restart API/Celery processes. COD supports physical goods only and never grants paid balances or digital access. See [the remediation and verification record](docs/bug-audit-2026-10-08.md) and [backend accounting rules](docs/backend.md).
+
+Transactional service emails cover store verification, blocking (including the review reason), and restoration; administrative account suspension/restoration and backoffice permission changes; successful password changes/resets; and low physical stock for the store owner and authorized operators. Store, account-security, and inventory notices use branded HTML templates through the existing delivery outbox. No-op moderation/access requests do not resend notices. When a dedicated receipt is sent for checkout, shipment/delivery, refund decisions, cancellation, wallet top-ups, or payout decisions, the companion inbox notification suppresses its generic email while retaining inbox and push delivery. Delivery requires the configured email provider and notification worker; local console delivery does not send real email.
+
+Inbox notifications and their email/push outbox rows are persisted in one database transaction. Worker dispatch waits until commit, so rollback removes both and broker outages leave persisted deliveries available for recovery.
+
+Store settings use plain customer-facing labels for store branding, the logo URL, cover image URL, and store announcement. Design references are kept out of the settings interface.
+
+Email receipts display actual order snapshot and recipient data. Missing personal details are omitted; digital-only orders omit delivery address sections and physical-shipment language. Delivery notices report recorded status and never include sample verification codes, names, addresses, phone numbers, carrier values, or product photos.

@@ -15,6 +15,7 @@ from payment.models import Order
 from payment.accounting import order_paid_lines
 from store.models import Store
 from store.services import process_refund_deduction
+from utils.functions import send_mail
 
 try:
     import stripe
@@ -408,6 +409,31 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
                     "order_id": order.pk,
                     "refund_id": refund.pk,
                     "event": "refund_approved",
+                    "email": False,
+                },
+            )
+
+        recipient_email = order.buyer_email or (order.user.email if order.user else None)
+        if recipient_email:
+            send_mail(
+                "refund-response",
+                recipient_email,
+                {
+                    "firstname": (order.user.first_name if order.user else ""),
+                    "orderId": order.orderId,
+                    "status": "Approved",
+                    "refund_amount": str(amount),
+                    "refund_destination": (
+                        "ProAce Wallet"
+                        if refund.refund_type == Refund.REFUND_TYPE_STORE_CREDIT
+                        else "Original Payment Method"
+                    ),
+                    "message": (
+                        "Store credit has been added to your ProAce Wallet."
+                        if refund.refund_type == Refund.REFUND_TYPE_STORE_CREDIT
+                        else "Payment has been returned to your original payment method."
+                    ),
+                    "subject": f"Refund Update for Order #{order.orderId}",
                 },
             )
 
@@ -461,6 +487,33 @@ def decline_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund
                         "order_id": order.pk,
                         "refund_id": refund.pk,
                         "event": "refund_declined",
+                        "email": False,
+                    },
+                )
+
+            recipient_email = (
+                order.buyer_email or (order.user.email if order.user else None)
+                if refund.order
+                else refund.email
+            )
+            if recipient_email:
+                first_name = (
+                    order.user.first_name
+                    if refund.order and order.user
+                    else ""
+                )
+                order_id = order.orderId if refund.order else ""
+                send_mail(
+                    "refund-response",
+                    recipient_email,
+                    {
+                        "firstname": first_name,
+                        "orderId": order_id,
+                        "status": "Declined",
+                        "refund_amount": str(refund.refund_amount),
+                        "refund_destination": "",
+                        "message": f"Your refund request was declined. Reason: {refund.failure_reason}",
+                        "subject": f"Refund Update for Order #{order_id}",
                     },
                 )
 
@@ -650,6 +703,7 @@ def execute_order_status_transition(
                     "order_id": order.pk,
                     "status": next_status,
                     "event": "order_status_override",
+                    "email": next_status not in {"cancelled", "shipped", "delivered"},
                 },
             )
 
@@ -674,5 +728,49 @@ def execute_order_status_transition(
                             "event": "order_cancelled",
                         },
                     )
+
+        recipient_email = order.buyer_email or (order.user.email if order.user else None)
+        if recipient_email:
+            firstname = (order.user.first_name if order.user else "")
+            if next_status == "cancelled":
+                card_refund = max(Decimal("0.00"), (order.paid_total - order.wallet_paid).quantize(Decimal(".01")))
+                send_mail(
+                    "order-cancelled",
+                    recipient_email,
+                    {
+                        "firstname": firstname,
+                        "orderId": order.orderId,
+                        "refund_amount": str(order.paid_total),
+                        "wallet_refund": str(order.wallet_paid),
+                        "card_refund": str(card_refund),
+                        "reason": reason,
+                        "subject": f"Order #{order.orderId} Cancelled",
+                    },
+                )
+            elif next_status == "shipped":
+                send_mail(
+                    "order-shipped",
+                    recipient_email,
+                    {
+                        "firstname": firstname,
+                        "orderId": order.orderId,
+                        "carrier": order.carrier,
+                        "tracking_number": order.tracking_number or "",
+                        "tracking_url": order.tracking_url or "",
+                        "subject": f"Order #{order.orderId} Has Shipped",
+                    },
+                )
+            elif next_status == "delivered":
+                send_mail(
+                    "delivery-confirmation",
+                    recipient_email,
+                    {
+                        "firstname": firstname,
+                        "orderId": order.orderId,
+                        "carrier": order.carrier,
+                        "tracking_number": order.tracking_number,
+                        "subject": f"Order #{order.orderId} Delivered",
+                    },
+                )
 
     return order

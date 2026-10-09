@@ -2,6 +2,46 @@ import { expect, test } from '@playwright/test';
 
 const password = process.env.E2E_DEMO_PASSWORD || 'ProaceDemo2026!';
 
+test('shop search stays public in a browser with stale session cookies', async ({ page, context, baseURL }) => {
+  await context.addCookies([
+    { name: 'proace_access', value: 'invalid-access', url: baseURL!, httpOnly: true },
+    { name: 'proace_refresh', value: 'invalid-refresh', url: baseURL!, httpOnly: true },
+  ]);
+  await page.goto('/shop?search=xqzzzznosuchitem', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('heading', { name: 'No finds just yet' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Something interrupted your visit' })).toHaveCount(0);
+  const cookies = await context.cookies();
+  expect(cookies.some((cookie) => ['proace_access', 'proace_refresh'].includes(cookie.name))).toBe(false);
+});
+
+test('public catalog reads recover from stale login cookies', async ({ request }) => {
+  for (const cookie of [
+    'proace_access=invalid-access',
+    'proace_access=invalid-access; proace_refresh=invalid-refresh',
+  ]) {
+    const catalog = await request.get('/api/products?search=headphones', {
+      headers: { cookie },
+    });
+    expect(catalog.status()).toBe(200);
+    const data: { results: { id: number; store: number }[] } = await catalog.json();
+    expect(data.results.length).toBeGreaterThan(0);
+    expect(catalog.headers()['set-cookie']).toContain('proace_access=;');
+    expect(catalog.headers()['set-cookie']).toContain('proace_refresh=;');
+
+    const product = data.results[0];
+    for (const route of [
+      `/api/products/${product.id}`,
+      `/api/stores/${product.store}/public`,
+    ]) {
+      const response = await request.get(route, { headers: { cookie } });
+      expect(response.status()).toBe(200);
+    }
+
+    const privateResponse = await request.get('/api/me', { headers: { cookie } });
+    expect(privateResponse.status()).toBe(401);
+  }
+});
+
 test('the Next.js proxy serves the Django catalog and protects private endpoints', async ({ request }) => {
   const catalog = await request.get('/api/products/?search=headphones');
   expect(catalog.status()).toBe(200);

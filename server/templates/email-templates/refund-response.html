@@ -1,1 +1,243 @@
-acknowledge refund mail
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width">
+    <title>ProAce International - Refund Update for Order #{{orderId}}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&amp;display=swap" rel="stylesheet">
+    <style type="text/css">
+      html {
+        -webkit-text-size-adjust: none;
+        -ms-text-size-adjust: none;
+      }
+
+      @media only screen and (max-device-width: 660px), only screen and (max-width: 660px) {
+        .table800 {
+          width: 100% !important;
+        }
+
+        .mob_100 {
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+      }
+
+      .table800 {
+        width: 800px;
+      }
+
+      @media screen {
+        .Inter400 {
+          font-family: 'Inter', Arial, sans-serif !important;
+          font-weight: 400 !important;
+        }
+
+        .Inter500 {
+          font-family: 'Inter', Arial, sans-serif !important;
+          font-weight: 500 !important;
+        }
+
+        .Inter700 {
+          font-family: 'Inter', Arial, sans-serif !important;
+          font-weight: 700 !important;
+        }
+      }
+    </style>
+  </head>
+
+  <body style="margin: 0; padding: 0; background-color: #f4f6f1;">
+    <span style="display: none !important; visibility: hidden; opacity: 0; color: #FFFFFF; height: 0; width: 0; font-size: 1px;">
+      Refund decision and status update for Order #{{orderId}} - ProAce International
+    </span>
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background: #f4f6f1; min-width: 360px; font-size: 1px; line-height: normal;">
+      <tr em="group">
+        <td align="center" valign="top">
+          <!--[if (gte mso 9)|(IE)]> <table border="0" cellspacing="0" cellpadding="0"> <tr><td align="center" valign="top" width="800"><![endif]-->
+          <table cellpadding="0" cellspacing="0" border="0" width="800" class="table800" style="width: 100%; max-width: 800px; min-width: 360px; background: #ffffff;">
+            
+            <!-- Header Logo -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #17251b; padding: 24px 0;">
+                <div class="Inter700" style="font-family: Arial, sans-serif; font-size: 26px; line-height: 30px; font-weight: bold; color: #ffffff; letter-spacing: 1px;">
+                  proace<span style="color: #44cf9c;">®</span>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Banner Card -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding-top: 24px;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px; background: #44cf9c; border-radius: 12px;" bgcolor="#44CF9C">
+                  <tr>
+                    <td align="left" style="padding: 24px 20px; border-radius: 12px;">
+                      <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                        <tr>
+                          <td align="center">
+                            <div class="Inter700" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 26px; line-height: 34px; font-weight: bold;">
+                              Refund Status Update
+                            </div>
+                            <div style="height: 6px; font-size: 1px; line-height: 6px;">&nbsp;</div>
+                            <div class="Inter400" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 20px;">
+                              Order #{{orderId}} Resolution
+                            </div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Greeting & Intro -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding: 24px 0 12px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px;">
+                  <tr>
+                    <td align="left">
+                      <div class="Inter700" style="font-family: Arial, sans-serif; color: #171717; font-size: 18px; line-height: 24px; font-weight: bold;">
+                        Hello{% if firstname %} {{ firstname }}{% endif %},
+                      </div>
+                      <div style="height: 12px; font-size: 1px; line-height: 12px;">&nbsp;</div>
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #333333; font-size: 15px; line-height: 23px;">
+                        This email is an update regarding your recent refund request for <strong>Order #{{orderId}}</strong>.
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Resolution Details Card -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding: 0 0 24px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px; background: #f8faf7; border: 1px solid #e1e7df; border-radius: 10px;">
+                  <tr>
+                    <td style="padding: 20px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                        <tr>
+                          <td class="Inter700" style="font-family: Arial, sans-serif; color: #17251b; font-size: 15px; line-height: 20px; font-weight: bold; border-bottom: 1px solid #e1e7df; padding-bottom: 10px;" colspan="2">
+                            Resolution Details
+                          </td>
+                        </tr>
+                        {% if orderId %}
+                        <tr>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #697067; font-size: 14px; line-height: 24px; padding-top: 10px;" width="40%">
+                            Order ID:
+                          </td>
+                          <td class="Inter700" style="font-family: Arial, sans-serif; color: #171717; font-size: 14px; line-height: 24px; padding-top: 10px;">
+                            #{{orderId}}
+                          </td>
+                        </tr>
+                        {% endif %}
+                        {% if status %}
+                        <tr>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #697067; font-size: 14px; line-height: 24px;">
+                            Status:
+                          </td>
+                          <td class="Inter700" style="font-family: Arial, sans-serif; font-size: 14px; line-height: 24px; color: {% if status == 'Declined' or action == 'decline' %}#c0392b{% else %}#1f5b3a{% endif %};">
+                            {{status}}
+                          </td>
+                        </tr>
+                        {% endif %}
+                        {% if refund_amount %}
+                        <tr>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #697067; font-size: 14px; line-height: 24px;">
+                            Refund Amount:
+                          </td>
+                          <td class="Inter700" style="font-family: Arial, sans-serif; color: #1f5b3a; font-size: 14px; line-height: 24px;">
+                            ${{refund_amount}}
+                          </td>
+                        </tr>
+                        {% endif %}
+                        {% if refund_destination %}
+                        <tr>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #697067; font-size: 14px; line-height: 24px;">
+                            Settlement Destination:
+                          </td>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #171717; font-size: 14px; line-height: 24px;">
+                            {{refund_destination}}
+                          </td>
+                        </tr>
+                        {% endif %}
+                        {% if message %}
+                        <tr>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #697067; font-size: 14px; line-height: 24px; vertical-align: top;">
+                            Staff Notes:
+                          </td>
+                          <td class="Inter400" style="font-family: Arial, sans-serif; color: #171717; font-size: 14px; line-height: 22px;">
+                            {{message}}
+                          </td>
+                        </tr>
+                        {% endif %}
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Informational Notes -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding: 0 0 28px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px;">
+                  <tr>
+                    <td align="left">
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #555555; font-size: 14px; line-height: 22px;">
+                        {% if status == 'Declined' or action == 'decline' %}
+                          If you believe this decision was made in error or have additional return documentation to provide, you may contact our customer support team for an administrative review.
+                        {% else %}
+                          If your refund was processed as ProAce Store Credit, funds are immediately credited to your ProAce Wallet. If refunded to your original payment method, please allow 3–5 business days for banking processing.
+                        {% endif %}
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- CTA Button -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding-bottom: 36px;">
+                <table cellpadding="0" cellspacing="0" border="0" width="255">
+                  <tr>
+                    <td align="center" valign="middle" height="44" style="height: 44px; background: #44cf9c; border-radius: 10px;" bgcolor="#44CF9C">
+                      <a href="https://proace.local/account/orders" class="Inter700" target="_blank" style="display: table-cell; width: 255px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
+                        View My Orders
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #f4f6f1; padding: 32px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px;">
+                  <tr>
+                    <td align="center">
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #697067; font-size: 13px; line-height: 19px;">
+                        <strong>ProAce International Customer Care</strong><br>
+                        Questions? Reach us at: <a href="mailto:orders@proace.local" style="color: #1f5b3a; text-decoration: none;">orders@proace.local</a><br>
+                        US Physical Delivery · Worldwide Digital Products · USD $
+                      </div>
+                      <div style="height: 14px; font-size: 1px; line-height: 14px;">&nbsp;</div>
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #9aa198; font-size: 12px; line-height: 17px;">
+                        © {% now "Y" %} ProAce International. All rights reserved.
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+          </table>
+          <!--[if (gte mso 9)|(IE)]> </td></tr> </table><![endif]-->
+        </td>
+      </tr>
+    </table>
+  </body>
+
+</html>

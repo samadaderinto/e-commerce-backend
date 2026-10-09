@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.db import transaction
+from django.core.files.uploadedfile import UploadedFile
 from rest_framework import serializers
 from taggit.serializers import TaggitSerializer, TagListSerializerField
 
@@ -16,6 +17,7 @@ from store.models import (
 
 
 from store.services import calculate_store_tier
+from utils.functions import normalize_media_url
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -48,6 +50,34 @@ class StoreInfoSerializer(serializers.ModelSerializer):
         extra_kwargs = {field: {'required': False, 'allow_blank': True}
                         for field in ['bio', 'announcement', 'avatar_url', 'banner_url', 'website',
                                       'instagram', 'twitter', 'facebook']}
+
+    def to_representation(self, instance: StoreInfo) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        for kind in ('avatar', 'banner'):
+            image = getattr(instance, f'{kind}_image')
+            if image:
+                data[f'{kind}_url'] = (
+                    f'/api/stores/{instance.store_id}/public/images/{kind}'
+                    f'?v={instance.updated.strftime("%Y%m%d%H%M%S%f")}'
+                )
+        return data
+
+
+class StoreBrandingImageSerializer(serializers.Serializer):
+    image = serializers.ImageField(allow_empty_file=False)
+
+    def validate_image(self, value: UploadedFile) -> UploadedFile:
+        if value.size > 5 * 1024 * 1024:
+            raise serializers.ValidationError('Images must be at most 5 MB.')
+        image = getattr(value, 'image')
+        if image.format not in {'JPEG', 'PNG', 'WEBP'}:
+            raise serializers.ValidationError('Use a JPEG, PNG or WebP image.')
+        dimensions = (512, 512) if self.context['kind'] == 'avatar' else (1600, 600)
+        if image.size != dimensions:
+            raise serializers.ValidationError(
+                f'Crop this image to {dimensions[0]} × {dimensions[1]} pixels.'
+            )
+        return value
 
 
 class StoreAddressSerializer(serializers.ModelSerializer):
@@ -92,6 +122,12 @@ class MerchantImageSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Use a JPEG, PNG or WebP image.')
         return value
 
+    def to_representation(self, instance: ProductImg) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if data.get('image'):
+            data['image'] = normalize_media_url(data['image'])
+        return data
+
 
 class MerchantSpecificationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -100,6 +136,12 @@ class MerchantSpecificationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created', 'updated']
         extra_kwargs = {field: {'min_value': Decimal('0.01')}
                         for field in ['height', 'width', 'breadth', 'weight']}
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        product = self.context.get('product') or getattr(self.instance, 'product', None)
+        if product and (product.is_digital or product.product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK):
+            raise serializers.ValidationError('Digital and affiliate partner products cannot have physical specifications.')
+        return attrs
 
 
 class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
@@ -150,6 +192,12 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             return value
         return serializers.URLField(allow_blank=True, max_length=1000).run_validation(value)
 
+    def to_representation(self, instance: Product) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if data.get('image_url'):
+            data['image_url'] = normalize_media_url(data['image_url'])
+        return data
+
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         product_type = attrs.get('product_type', getattr(self.instance, 'product_type', Product.PRODUCT_TYPE_STANDARD))
         if product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
@@ -179,13 +227,35 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         is_digital = attrs.get('is_digital', getattr(self.instance, 'is_digital', False))
         file_url = attrs.get('digital_file_url', getattr(self.instance, 'digital_file_url', ''))
         if is_digital:
+            raw_data = getattr(self, 'initial_data', {}) or {}
+            errors: dict[str, str] = {}
+            if 'weight' in raw_data and raw_data['weight'] is not None and str(raw_data['weight']).strip() != '':
+                try:
+                    if Decimal(str(raw_data['weight'])) > Decimal('0.00'):
+                        errors['weight'] = 'Digital products cannot have a shipping weight.'
+                except Exception:
+                    pass
+            for dim_field in ('height', 'width', 'length'):
+                if dim_field in raw_data and raw_data[dim_field] is not None and str(raw_data[dim_field]).strip() != '':
+                    errors[dim_field] = f'Digital products cannot have physical {dim_field}.'
+            if errors:
+                raise serializers.ValidationError(errors)
+
             attrs['weight'] = Decimal('0.00')
+            attrs['length'] = None
+            attrs['width'] = None
+            attrs['height'] = None
             attrs['available'] = 0
             attrs['variants'] = []
             if not file_url:
                 raise serializers.ValidationError({
                     'digital_file_url': 'Add a download URL for a digital product.',
                 })
+            image_exts = ('.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.avif', '.bmp', '.tiff')
+            clean_path = (file_url or '').split('?')[0].split('#')[0].lower()
+            is_image_asset = clean_path.endswith(image_exts)
+            if not is_image_asset:
+                attrs['digital_preview_watermark'] = False
         else:
             price = attrs.get('price', getattr(self.instance, 'price', Decimal('0')))
             discount = attrs.get('discount', getattr(self.instance, 'discount', 0))
@@ -193,6 +263,7 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
                 if price * (100 - discount) / 100 + Decimal(str(option.get('price_delta') or '0')) <= 0:
                     raise serializers.ValidationError({'variants': 'Each option must have a positive price.'})
             attrs['digital_file_url'] = ''
+            attrs['digital_preview_watermark'] = False
             if 'weight' not in attrs and not getattr(self.instance, 'weight', None):
                 attrs['weight'] = Decimal('1.00')
             weight = attrs.get('weight', getattr(self.instance, 'weight', None))

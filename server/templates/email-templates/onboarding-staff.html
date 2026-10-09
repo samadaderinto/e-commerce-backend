@@ -91,8 +91,15 @@
                   <tr>
                     <td align="left" style="padding: 20px; border-radius: 15px; background-color: #44cf9c;" bgcolor="#44cf9c">
                       <div style="height: 20px; line-height: 20px; font-size: 8px;">&nbsp;</div>
-                      <div class="NunitoSans400" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 17px; line-height: 21px;">Dear {{firstname}}, we're excited to have you on board and look forward to working together towards our shared goals.
+                      <div class="NunitoSans400" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 17px; line-height: 21px;">Hello{% if firstname %} {{ firstname }}{% endif %}, we're excited to have you on board and look forward to working together towards our shared goals.
                         <br><br>Here are a few key points to help you get started:<br></div>
+                      {% if absolute_url %}
+                      <div style="padding: 15px 0; text-align: center;">
+                        <a href="{{ absolute_url }}" target="_blank" style="display: inline-block; padding: 12px 24px; background-color: #17251b; color: #ffffff; text-decoration: none; font-weight: bold; border-radius: 8px; font-size: 15px;">
+                          Activate Staff Account
+                        </a>
+                      </div>
+                      {% endif %}
                       <div style="height: 20px; line-height: 20px; font-size: 8px;">&nbsp;</div>
                     </td>
                   </tr>
@@ -243,7 +250,7 @@
                   <tr>
                     <td align="left" style="padding: 20px; border-radius: 15px; background-color: #44cf9c;" bgcolor="#44cf9c">
                       <div style="height: 10px; line-height: 10px; font-size: 8px;">&nbsp;</div>
-                      <div class="NunitoSans400" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 17px; line-height: 21px;">We're thrilled to have you as part of the team, and we can't wait to see your contributions. If you have any immediate questions, feel free to reach out to your manager or the HR team.<br><br>Once again, welcome aboard!<br><br>Best regards,<br><br>{{"Dan"}}<br><br>The Hiring Manager<br><br>Proace International<br></div>
+                      <div class="NunitoSans400" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 17px; line-height: 21px;">We're thrilled to have you as part of the team, and we can't wait to see your contributions. If you have any immediate questions, feel free to reach out to your manager or the HR team.<br><br>Once again, welcome aboard!<br><br>Best regards,<br><br>Proace International<br></div>
                       <div style="height: 20px; line-height: 20px; font-size: 8px;">&nbsp;</div>
                     </td>
                   </tr>

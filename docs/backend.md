@@ -76,11 +76,12 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 - **Official Brand Store**: Dedicated Golden Tick (`#eab308`).
 
 ### Product Variants, Specifications & Flash Sales
-- **Product Specifications (`Product.specifications`)**: Nested technical specifications dictionary exposing dimensions (`height`, `width`, `breadth`, `weight`), `color`, `serial` / part number, and `attributes` string.
+- **Product Specifications (`Product.specifications`)**: Nested technical specifications dictionary exposing dimensions (`height`, `width`, `breadth`, `weight`), `color`, `serial` / part number, and `attributes` string. Specifications and physical dimensions are physical-only; digital downloads and ClickBank partner offers disallow them.
 - **Product Variants (`Product.variants`)**: JSON-based array storing option names (e.g. Size, Color), price deltas (`price_delta`), and dedicated stock allocation (`available`).
 - **Flash Deals (`Product.flash_sale_end`)**: Optional expiration timestamp powering urgency badges and live countdown timers across storefronts.
 - **Store Announcements (`StoreInfo.announcement`)**: Marquee banner text displayed on the public store showcase page.
 - **Verified Buyer Reviews & Moderation**: Restricts review posting to verified purchasers with up to 3 attached photo URLs. Reviews expose `can_moderate` and can be deleted by authors, store owners, and staff via `DELETE /api/v1/products/<pk>/reviews/?review_id=<id>`.
+- **Digital Image Watermarking (`Product.digital_preview_watermark`)**: Digital goods support high-resolution image asset downloads (PNG, JPG, WebP, SVG). The buyer preview watermark overlay (`PROACE PREVIEW`) is guarded and enabled exclusively for digital image assets; non-image digital files (PDF e-books, audio MP3s, software ZIPs) disable the option and normalize `digital_preview_watermark=False` both client-side and server-side.
 
 ### Merchant escrow and payouts
 - **Platform Commission (4%)**: Automatically items and deducts a 4% platform fee (`PLATFORM_FEE_PERCENT = 4.00`) from gross item sales.
@@ -266,6 +267,26 @@ real mail. To enable push, set `FCM_ENABLED=true`, `FIREBASE_PROJECT_ID`, and
 Firebase credentials. Apply migrations before deploying and run the
 `notification-worker` service alongside the API.
 
+### Transactional HTML Email Templates
+
+All transactional email templates reside in `server/templates/email-templates/` and follow a unified, responsive HTML email standard with Outlook table fallbacks, Inter typography, ProAce brand accents (`#44cf9c`), and regulatory disclaimers:
+
+| Template Name | File Path | Event Trigger & Purpose |
+| --- | --- | --- |
+| `order-summary` | `server/templates/email-templates/order-summary.html` | Order placement receipt with recorded items and totals; delivery address appears only for orders containing physical items. |
+| `delivery-confirmation` | `server/templates/email-templates/delivery-confirmation.html` | Recorded delivery confirmation with available carrier and tracking details; no verification code is generated. |
+| `wallet-funded` | `server/templates/email-templates/wallet-funded.html` | Top-up and credit confirmation showing funded amount, updated balance, and marketplace CTA. |
+| `refund-request-acknowledged` | `server/templates/email-templates/refund-request-acknowledged.html` | Customer confirmation when a physical return or refund request is submitted (1–2 business day turnaround). |
+| `refund-response` | `server/templates/email-templates/refund-response.html` | Staff resolution update (approved/declined) with notes, refund destination, and amount. |
+| `onboarding-user` | `server/templates/email-templates/onboarding-user.html` | Customer welcome email with activation and email verification link. |
+| `onboarding-staff` | `server/templates/email-templates/onboarding-staff.html` | Backoffice staff welcome and temporary access credentials guide. |
+| `affiliate` | `server/templates/email-templates/affiliate.html` | Partner welcome detailing referral links, HopLinks, commission rules, and affiliate dashboard. |
+| `password-reset` | `server/templates/email-templates/password-reset.html` | Secure password reset email with signed, expiring token link. |
+| `account-delete-confirmation` | `server/templates/email-templates/account-delete-confirmation.html` | Account closure notice detailing data purge and financial audit archival policies. |
+
+Emails are rendered and enqueued via `server/utils/functions.py:send_mail(file_name, reciever_email, data)` which auto-injects base context (`frontend_url`, `shop_url`, `support_email`) and sets `is_html=True` for multipart delivery.
+
+
 ## Local commands
 
 From the repository root:
@@ -385,3 +406,46 @@ Cancellation, refund creation and approval acquire the same order lock. Claims r
 Apply core migration 0019 and payment migrations 0018–0020 with `python server/manage.py migrate`, then restart the API, Celery workers and Celery Beat to load the new models/tasks. The historical backfill recognizes wallet debit receipts and legacy confirmed Stripe session references. Unverifiable older orders remain unpaid for refund, download and payout eligibility until reconciled. It does not change wallet balances, rewrite immutable tax snapshots, or claw back historical overcredits. Operators must reconcile any previous duplicate refunds or coupon-inflated earnings separately. The canonical seeder explicitly marks its simulated historical payments as wallet settlements.
 
 Generated affiliate links use configured `FRONTEND_URL` and `/api/affiliates/r/<product>/<identifier>/`, matching the same-origin redirect route.
+
+## Transactional HTML Email & Notification Pipeline
+
+The platform dispatches responsive, branded HTML emails through `server/utils/functions.py:send_mail` and `server/notification/delivery.py:queue_email_delivery`. Every template email generates an audited `NotificationDelivery` record (`channel=email`, `is_html=True`) scheduled for asynchronous Celery delivery (`deliver_notification_task`).
+
+### Template Inventory & Canonical Triggers
+
+All email templates reside under `server/templates/email-templates/`:
+
+| Template File | Context / Purpose | Canonical Trigger Point |
+| --- | --- | --- |
+| `onboarding-user.html` | Welcome email for newly registered shoppers & merchants | `POST /api/v1/auth/register/` (`AuthView.post`) |
+| `onboarding-staff.html` | Activation email with secure token link for invited staff | `invite_staff` & `resend_staff_verification` (`core.onboarding`) |
+| `password-reset.html` | Password reset link & instructions | `POST /api/v1/auth/forgot/` (`AuthView.post`) |
+| `account-delete-confirmation.html` | GDPR / account deletion acknowledgment | `DELETE /api/v1/storefront/me/` (`MeView.delete`) |
+| `affiliate.html` | Welcome email for approved affiliate marketers | `POST /api/v1/affiliates/affiliates/register/` (`AffiliatesViewSet.create_marketer`) |
+| `order-summary.html` | Order confirmation with itemized receipt & tax breakdown | `POST /api/v1/storefront/orders/checkout/` (`CheckoutView._complete`) |
+| `order-shipped.html` | Shipping notification with carrier, tracking number & URL | `STATUS_SHIPPED` transition (`ProductOrderTrackingView` & `execute_order_status_transition`) |
+| `delivery-confirmation.html` | Delivery confirmation & receipt | `STATUS_DELIVERED` transition (`execute_order_status_transition`) |
+| `order-cancelled.html` | Cancellation notice with wallet/card refund breakdown | `STATUS_CANCELLED` transition (`execute_order_status_transition`) |
+| `refund-request-acknowledged.html` | Return/refund claim acknowledgment | `POST /api/v1/storefront/orders/refund/` (`OrderRefundView.post`) |
+| `refund-response.html` | Refund decision notice (Approved/Declined with reason) | `process_order_refund` & `decline_order_refund` (`payment.services`) |
+| `wallet-funded.html` | Wallet top-up confirmation receipt | `payment.confirm_wallet_funding_session` (`stripe_webhook`) |
+| `payout-processed.html` | Merchant payout status notice (Approved/Rejected) | `POST /api/v1/staff/payouts/<pk>/process/` (`StaffViewSet.process_payout`) |
+| `store-status.html` | Store verification, blocking reason and restoration | Store review and backoffice moderation |
+| `account-security.html` | Account access changes and password change/reset confirmations | Administrative access endpoints and password flows |
+| `inventory-low.html` | Physical stock threshold and out-of-stock alerts | Inventory signals; owner and authorized operators |
+| `service-notification-base.html` | Shared responsive service notification layout | Inherited by store, security and inventory templates |
+
+### Template Conventions & Safety
+
+- **Default Context Injections**: `send_mail` automatically supplies safe defaults for `frontend_url`, `shop_url`, `dashboard_url`, `order_url`, `support_email`, and `absolute_url`.
+- **Recipient Correlation**: `send_mail` automatically matches the destination email to the corresponding `core.User` foreign key when available, guaranteeing audit traceability in `NotificationDelivery.recipient`.
+- **Typo & Legacy Aliases**: The legacy template path `refund-request-acknowleged` is retained as an alias to `refund-request-acknowledged.html` for backward compatibility.
+
+
+Transactional service emails cover store verification, blocking (including the review reason), and restoration; administrative account suspension/restoration and backoffice permission changes; successful password changes/resets; and low physical stock for the store owner and authorized operators. Store, account-security, and inventory notices use branded HTML templates through the existing delivery outbox. No-op moderation/access requests do not resend notices. When a dedicated receipt is sent for checkout, shipment/delivery, refund decisions, cancellation, wallet top-ups, or payout decisions, the companion inbox notification suppresses its generic email while retaining inbox and push delivery. Delivery requires the configured email provider and notification worker; local console delivery does not send real email.
+
+Inbox notifications and their email/push outbox rows are persisted in one database transaction. Worker dispatch waits until commit, so rollback removes both and broker outages leave persisted deliveries available for recovery.
+
+Invalid, expired, or blacklisted refresh tokens return a structured HTTP 401 (`token_not_valid`) from `/api/v1/auth/refresh/`, allowing the browser proxy to clear revoked sessions and continue public browsing anonymously.
+
+Email receipts display actual order snapshot and recipient data. Missing personal details are omitted; digital-only orders omit delivery address sections and physical-shipment language. Delivery notices report recorded status and never include sample verification codes, names, addresses, phone numbers, carrier values, or product photos.

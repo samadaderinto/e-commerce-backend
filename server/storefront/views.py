@@ -19,6 +19,7 @@ from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from notification.delivery import queue_email_delivery
+from utils.functions import send_mail
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny
@@ -28,6 +29,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.exceptions import TokenError
 try:
     import stripe
 except ImportError:  # Wallet payments remain unavailable until the optional SDK is installed.
@@ -101,7 +103,7 @@ class AuthView(APIView):
             'JWTs plus the user; other actions return a detail message or refreshed token.'
         ),
     )
-    def post(self, request, action):
+    def post(self, request: Request, action: str) -> Response:
         data = request.data
         if action == 'login':
             email = str(data.get('email', '')).strip().lower()
@@ -110,7 +112,10 @@ class AuthView(APIView):
                 raise ValidationError({'detail': 'Invalid email or password.'})
             user = authenticate(request, email=email, password=password)
             if user is None:
-                return Response({'detail': 'Invalid email or password. Verify your email if you just registered.'}, status=401)
+                inactive_user = User.objects.filter(email=email, is_active=False).first()
+                if inactive_user and inactive_user.check_password(password):
+                    return Response({'detail': 'Your account is inactive. Please verify your email before signing in.'}, status=401)
+                return Response({'detail': 'Invalid email or password.'}, status=401)
             from django.contrib.auth.models import update_last_login
             from core.activity import record_activity
             update_last_login(None, user)
@@ -131,20 +136,24 @@ class AuthView(APIView):
                 reward_referral(referral_code, user)
             token = signing.dumps({'user': user.pk}, salt='proace-verify')
             url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
-            queue_email_delivery(
+            send_mail(
+                'onboarding-user',
                 user.email,
-                'Verify your ProAce account',
-                f'Welcome to ProAce. Verify your email: {url}',
-                recipient=user,
+                {
+                    'firstname': user.first_name,
+                    'absolute_url': url,
+                    'subject': 'Verify your ProAce account',
+                },
             )
             return Response({'detail': 'Check your email to activate your account.'}, status=201)
         if action == 'verify':
-            if str(data.get('token', '')).startswith('staff:'):
+            raw_token = str(data.get('token', '')).strip().split('"')[0].split("'")[0].split('<')[0].split('&')[0].split(' ')[0]
+            if raw_token.startswith('staff:'):
                 from core.onboarding import activate_staff
-                activate_staff(str(data['token'])[6:])
+                activate_staff(raw_token[6:])
                 return Response({'detail': 'Email verified. Temporary credentials have been emailed to you.'})
             try:
-                payload = signing.loads(data.get('token', ''), salt='proace-verify', max_age=86400)
+                payload = signing.loads(raw_token, salt='proace-verify', max_age=86400)
                 user = User.objects.get(pk=payload['user'])
             except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError):
                 raise ValidationError({'detail': 'This verification link is invalid or expired.'})
@@ -158,11 +167,15 @@ class AuthView(APIView):
                 uid = urlsafe_base64_encode(force_bytes(user.pk))
                 token = default_token_generator.make_token(user)
                 url = f'{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}'
-                queue_email_delivery(
+                send_mail(
+                    'password-reset',
                     user.email,
-                    'Reset your ProAce password',
-                    f'Reset your password: {url}',
-                    recipient=user,
+                    {
+                        'firstname': user.first_name,
+                        'email': user.email,
+                        'absolute_url': url,
+                        'subject': 'Reset your ProAce password',
+                    },
                 )
             return Response({'detail': 'If an active account exists, a reset link has been sent.'})
         if action == 'reset':
@@ -177,20 +190,30 @@ class AuthView(APIView):
                 validate_password(password, user)
             except DjangoValidationError as error:
                 raise ValidationError({'password': error.messages})
-            user.set_password(password)
-            user.must_change_password = False
-            user.credential_version += 1
-            user.save(update_fields=['password', 'must_change_password', 'credential_version'])
-            from core.auth_sync import sync_technical_admin_credentials, is_technical_super_admin
-            if is_technical_super_admin(user):
-                sync_technical_admin_credentials(user, password)
-            from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
-            for token in OutstandingToken.objects.filter(user=user):
-                BlacklistedToken.objects.get_or_create(token=token)
-            return Response({'detail': 'Password updated. Sign in with your new password.'})
+            with transaction.atomic():
+                user.set_password(password)
+                user.must_change_password = False
+                user.credential_version += 1
+                user.save(update_fields=['password', 'must_change_password', 'credential_version'])
+                from notification.views import password_changed_notification
+
+                password_changed_notification(user)
+                from core.auth_sync import sync_technical_admin_credentials, is_technical_super_admin
+                if is_technical_super_admin(user):
+                    sync_technical_admin_credentials(user, password)
+                from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+                for token in OutstandingToken.objects.filter(user=user):
+                    BlacklistedToken.objects.get_or_create(token=token)
+                return Response({'detail': 'Password updated. Sign in with your new password.'})
         if action == 'refresh':
             serializer = TokenRefreshSerializer(data=data)
-            serializer.is_valid(raise_exception=True)
+            try:
+                serializer.is_valid(raise_exception=True)
+            except TokenError as error:
+                return Response(
+                    {'detail': str(error), 'code': 'token_not_valid'},
+                    status=401,
+                )
             return Response(serializer.validated_data)
         if action == 'logout':
             try:
@@ -212,6 +235,24 @@ class MeView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+    @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    def delete(self, request: Request) -> Response:
+        user = request.user
+        email = str(user.email)
+        first_name = str(user.first_name)
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+        send_mail(
+            "account-delete-confirmation",
+            email,
+            {
+                "firstname": first_name,
+                "email": email,
+                "subject": "ProAce Account Closure Confirmation",
+            },
+        )
+        return Response({"detail": "Your account has been deactivated and scheduled for permanent deletion."})
 
 
 class ProductsView(APIView):
@@ -310,7 +351,7 @@ class ProductDetailView(APIView):
                 raise Http404('No Product matches the given query.')
             user = request.user
             is_authorized = bool(user and user.is_authenticated and (user == raw_product.store.user or user.is_staff or user.is_superuser))
-            if not is_authorized:
+            if not is_authorized or not raw_product.visibility:
                 raise Http404('No Product matches the given query.')
             product = raw_product
         if request.user.is_authenticated:
@@ -337,6 +378,32 @@ class PublicStoreView(APIView):
         if not is_verified and not is_authorized:
             raise Http404('No Store matches the given query.')
         return Response(PublicStoreSerializer(store, context={'request': request, 'is_preview': not is_verified}).data)
+
+
+class PublicStoreImageView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        operation_id='storefront_store_branding_image',
+        responses={(200, 'image/png'): OpenApiTypes.BINARY},
+        description='Public store branding image; unverified stores require owner or backoffice access.',
+    )
+    def get(self, request: Request, pk: int, kind: str) -> FileResponse:
+        store = get_object_or_404(Store, pk=pk)
+        user = request.user
+        public = store.status == Store.STATUS_ACTIVE and store.verified_at is not None
+        authorized = user.is_authenticated and (
+            user == store.user or user.is_staff or user.is_superuser
+        )
+        if not public and not authorized:
+            raise Http404('No Store matches the given query.')
+        if kind not in {'avatar', 'banner'}:
+            raise Http404('No image matches the given query.')
+        profile = StoreInfo.objects.filter(store=store).order_by('pk').first()
+        image = getattr(profile, f'{kind}_image', None)
+        if not image:
+            raise Http404('No image matches the given query.')
+        return FileResponse(image.open('rb'), filename=image.name.rsplit('/', 1)[-1])
 
 
 def check_is_verified_buyer(user, product) -> bool:
@@ -902,6 +969,19 @@ class OrderRefundView(APIView):
             accepted=False,
         )
 
+        send_mail(
+            "refund-request-acknowledged",
+            request.user.email,
+            {
+                "firstname": request.user.first_name,
+                "orderId": order.orderId,
+                "refund_amount": format(refund_amount, ".2f"),
+                "refund_type": refund.get_refund_type_display(),
+                "reason": reason,
+                "subject": f"Refund Request Received for Order #{order.orderId}",
+            },
+        )
+
         stores = {item.get("store") for item in snapshots if item.get("store")}
         for store_id in stores:
             store = Store.objects.filter(pk=store_id).first()
@@ -1450,9 +1530,11 @@ class CheckoutView(APIView):
             record_order_earnings_for_merchant(order)
 
         store_ids = {item.get("store") for item in snapshots if item.get("store")}
+        order._receipt_recipient_ids = {order.user_id} if order.user_id else set()
         for store_id in store_ids:
             store = Store.objects.filter(pk=store_id).first()
             if store and store.user:
+                order._receipt_recipient_ids.add(store.user_id)
                 create_notification(
                     recipient=store.user,
                     verb=f"New order #{order.orderId}",
@@ -1463,6 +1545,60 @@ class CheckoutView(APIView):
                         "event": "new_order",
                     },
                 )
+
+        recipient_email = str(order.buyer_email or getattr(request.user, "email", "") or "").strip()
+        if recipient_email:
+            ordered_items = [
+                {
+                    "title": item.get("title") or item.get("product_title") or "",
+                    "variant": item.get("variant") or "",
+                    "quantity": item.get("quantity"),
+                    "price": str(item["unit_price"]) if item.get("unit_price") is not None else None,
+                }
+                for item in snapshots
+            ]
+            has_physical_items = any(not row.get("is_digital", False) for row in snapshots)
+            address_snapshot = order.address_snapshot if has_physical_items else {}
+            delivery_details = [
+                {"label": label, "value": str(address_snapshot[key]).strip()}
+                for key, label in (
+                    ("address", "Address"),
+                    ("city", "City"),
+                    ("state", "State"),
+                    ("zip", "ZIP code"),
+                    ("country", "Country"),
+                )
+                if address_snapshot.get(key) and str(address_snapshot[key]).strip()
+            ]
+            contact_details = [
+                {"label": label, "value": str(value).strip()}
+                for label, value in (
+                    ("Email", order.buyer_email),
+                    ("Phone number", order.buyer_phone),
+                )
+                if value and str(value).strip()
+            ]
+            send_mail(
+                "order-summary",
+                recipient_email,
+                {
+                    "firstname": getattr(request.user, "first_name", ""),
+                    "orderId": order.orderId,
+                    "ordered_items": ordered_items,
+                    "has_physical_items": has_physical_items,
+                    "delivery_details": delivery_details,
+                    "contact_details": contact_details,
+                    "totals": [
+                        {"label": "Subtotal", "value": str(order.subtotal)},
+                        {"label": "Discount", "value": str(discount)},
+                        {"label": "Shipping", "value": str(shipping)},
+                        {"label": "Tax", "value": str(order.tax)},
+                        {"label": "Total", "value": str(order.total)},
+                    ],
+                    "total": str(order.total),
+                    "subject": f"ProAce Order #{order.orderId} Confirmation",
+                },
+            )
 
         return order
 
@@ -2040,6 +2176,9 @@ class PasswordChangeView(APIView):
         user.must_change_password = False
         user.credential_version += 1
         user.save(update_fields=['password', 'must_change_password', 'credential_version'])
+        from notification.views import password_changed_notification
+
+        password_changed_notification(user)
         from core.auth_sync import sync_technical_admin_credentials, is_technical_super_admin
         if is_technical_super_admin(user):
             sync_technical_admin_credentials(user, password)

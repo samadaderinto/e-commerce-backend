@@ -1,0 +1,7 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  <p>Remaining stock: <strong>{{ available }}</strong>.</p>
+  <p>Review this physical listing and replenish stock as needed. Alerts are sent when stock crosses the low-stock threshold or reaches zero.</p>
+{% endblock %}
+{% block action_url %}{{ dashboard_url }}{% endblock %}
+{% block action_label %}Review inventory{% endblock %}

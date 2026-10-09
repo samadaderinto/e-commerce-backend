@@ -1,1 +1,203 @@
-<!doctype html><html><body style="margin:0;background:#f4f6f1;font-family:Arial,sans-serif;color:#17251b"><div style="max-width:600px;margin:24px auto;background:#fff;padding:32px;border-radius:12px"><h1 style="color:#1f5b3a">Wallet funded successfully</h1><p>Your ProAce Wallet was credited with <strong>${{ amount }}</strong>.</p><p>Your updated balance is <strong>${{ balance }}</strong>.</p><p style="color:#697067">You can use this balance for future ProAce purchases.</p></div></body></html>
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN" "http://www.w3.org/TR/html4/loose.dtd">
+<html>
+
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width">
+    <title>ProAce International - Wallet Funded Successfully</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&amp;display=swap" rel="stylesheet">
+    <style type="text/css">
+      html {
+        -webkit-text-size-adjust: none;
+        -ms-text-size-adjust: none;
+      }
+
+      @media only screen and (max-device-width: 660px), only screen and (max-width: 660px) {
+        .table800 {
+          width: 100% !important;
+        }
+
+        .mob_100 {
+          width: 100% !important;
+          max-width: 100% !important;
+        }
+      }
+
+      .table800 {
+        width: 800px;
+      }
+
+      @media screen {
+        .Inter400 {
+          font-family: 'Inter', Arial, sans-serif !important;
+          font-weight: 400 !important;
+        }
+
+        .Inter500 {
+          font-family: 'Inter', Arial, sans-serif !important;
+          font-weight: 500 !important;
+        }
+
+        .Inter700 {
+          font-family: 'Inter', Arial, sans-serif !important;
+          font-weight: 700 !important;
+        }
+      }
+    </style>
+  </head>
+
+  <body style="margin: 0; padding: 0; background-color: #f4f6f1;">
+    <span style="display: none !important; visibility: hidden; opacity: 0; color: #FFFFFF; height: 0; width: 0; font-size: 1px;">
+      ProAce Wallet credited with ${{amount}} - Available for instant checkout
+    </span>
+    <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background: #f4f6f1; min-width: 360px; font-size: 1px; line-height: normal;">
+      <tr em="group">
+        <td align="center" valign="top">
+          <!--[if (gte mso 9)|(IE)]> <table border="0" cellspacing="0" cellpadding="0"> <tr><td align="center" valign="top" width="800"><![endif]-->
+          <table cellpadding="0" cellspacing="0" border="0" width="800" class="table800" style="width: 100%; max-width: 800px; min-width: 360px; background: #ffffff;">
+            
+            <!-- Header Logo -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #17251b; padding: 24px 0;">
+                <div class="Inter700" style="font-family: Arial, sans-serif; font-size: 26px; line-height: 30px; font-weight: bold; color: #ffffff; letter-spacing: 1px;">
+                  proace<span style="color: #44cf9c;">®</span>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Banner Card -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding-top: 24px;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px; background: #44cf9c; border-radius: 12px;" bgcolor="#44CF9C">
+                  <tr>
+                    <td align="left" style="padding: 24px 20px; border-radius: 12px;">
+                      <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                        <tr>
+                          <td align="center">
+                            <div class="Inter700" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 26px; line-height: 34px; font-weight: bold;">
+                              Wallet Funded Successfully
+                            </div>
+                            <div style="height: 6px; font-size: 1px; line-height: 6px;">&nbsp;</div>
+                            <div class="Inter400" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 20px;">
+                              +${{amount}} added to your ProAce Store Credit balance
+                            </div>
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Greeting & Intro -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding: 24px 0 12px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px;">
+                  <tr>
+                    <td align="left">
+                      <div class="Inter700" style="font-family: Arial, sans-serif; color: #171717; font-size: 18px; line-height: 24px; font-weight: bold;">
+                        Hello{% if firstname %} {{ firstname }}{% endif %},
+                      </div>
+                      <div style="height: 12px; font-size: 1px; line-height: 12px;">&nbsp;</div>
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #333333; font-size: 15px; line-height: 23px;">
+                        Your ProAce Wallet has been credited successfully. Funds are immediately available for single-click checkout or split-tender payments across all storefront listings.
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Balance Card -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding: 0 0 24px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px; background: #f8faf7; border: 1px solid #e1e7df; border-radius: 10px;">
+                  <tr>
+                    <td style="padding: 20px 24px;">
+                      <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                        <tr>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #697067; font-size: 14px; line-height: 24px;" width="50%">
+                            Amount Credited:
+                          </td>
+                          <td class="Inter700" style="font-family: Arial, sans-serif; color: #1f5b3a; font-size: 16px; line-height: 24px; text-align: right;">
+                            +${{amount}}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td class="Inter500" style="font-family: Arial, sans-serif; color: #697067; font-size: 14px; line-height: 24px; border-top: 1px solid #e1e7df; padding-top: 8px;">
+                            Updated Wallet Balance:
+                          </td>
+                          <td class="Inter700" style="font-family: Arial, sans-serif; color: #171717; font-size: 18px; line-height: 24px; text-align: right; border-top: 1px solid #e1e7df; padding-top: 8px;">
+                            ${{balance}}
+                          </td>
+                        </tr>
+                      </table>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Features Summary -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding: 0 0 28px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px;">
+                  <tr>
+                    <td align="left">
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #555555; font-size: 14px; line-height: 21px;">
+                        <strong>Ways to use your wallet balance:</strong><br>
+                        • <strong>1-Click Checkout:</strong> Pay instantly for physical or digital items without entering card details.<br>
+                        • <strong>Split-Tender Payment:</strong> Combine your wallet funds with a debit or credit card at checkout if your cart total exceeds your balance.<br>
+                        • <strong>Instant Refunds:</strong> Cancel an unshipped order within 12 hours for an immediate wallet refund with zero processing wait times.
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- CTA Buttons -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #ffffff; padding-bottom: 36px;">
+                <table cellpadding="0" cellspacing="0" border="0" width="255">
+                  <tr>
+                    <td align="center" valign="middle" height="44" style="height: 44px; background: #44cf9c; border-radius: 10px;" bgcolor="#44CF9C">
+                      <a href="https://proace.local/shop" class="Inter700" target="_blank" style="display: table-cell; width: 255px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
+                        Discover Marketplace
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr em="block">
+              <td align="center" valign="top" style="background: #f4f6f1; padding: 32px 0;">
+                <table cellpadding="0" cellspacing="0" border="0" width="80%" style="width: 80%; min-width: 330px;">
+                  <tr>
+                    <td align="center">
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #697067; font-size: 13px; line-height: 19px;">
+                        <strong>ProAce International Wallet Services</strong><br>
+                        Support &amp; Inquiries: <a href="mailto:support@proace.local" style="color: #1f5b3a; text-decoration: none;">support@proace.local</a><br>
+                        US Physical Delivery · Worldwide Digital Products · USD $
+                      </div>
+                      <div style="height: 14px; font-size: 1px; line-height: 14px;">&nbsp;</div>
+                      <div class="Inter400" style="font-family: Arial, sans-serif; color: #9aa198; font-size: 12px; line-height: 17px;">
+                        © {% now "Y" %} ProAce International. All rights reserved.
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+          </table>
+          <!--[if (gte mso 9)|(IE)]> </td></tr> </table><![endif]-->
+        </td>
+      </tr>
+    </table>
+  </body>
+
+</html>

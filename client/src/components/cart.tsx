@@ -106,7 +106,7 @@ export function CartPage() {
                     <span className="form-error">
                       {row.product.is_own_store
                         ? "You cannot buy from your own store. Remove this item."
-                        : "Unavailable in this quantity"}
+                        : "This listing is currently unavailable."}
                     </span>
                   )}
                   <button
@@ -119,7 +119,14 @@ export function CartPage() {
                   </button>
                 </div>
                 {row.product.is_digital ? (
-                  <span className="quantity" aria-label="Digital entitlement quantity">1</span>
+                  <div
+                    className="quantity quantity-digital"
+                    title="Digital entitlement — limited to 1 per customer"
+                    aria-label="Digital entitlement quantity: 1"
+                  >
+                    <span className="quantity-digital-val">1</span>
+                    <span className="quantity-digital-badge">Digital</span>
+                  </div>
                 ) : (
                   <Quantity
                     value={row.quantity}

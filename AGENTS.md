@@ -42,6 +42,15 @@ This file is the single, canonical source of instructions and operational rules 
   - JWT tokens are stored exclusively in secure, HTTP-only, SameSite cookies managed by the Next.js API proxy. The client JavaScript must never store tokens in `localStorage` or `sessionStorage`.
 - **Ownership Verification**:
   - Never trust client-supplied owner IDs, product prices, discount amounts, or inventory levels. Derive user and store ownership solely from `request.user` on the server.
+- **Dynamic, Accurate & Recipient-Scoped Emails**:
+  - This rule applies to every email template and dispatch path for shoppers, buyers, merchants, store owners, affiliates, staff, business administrators, technical administrators, and any future profile or role.
+  - Build email payloads from authoritative backend records and the actual recipient. Use immutable order, address, tax, and payment snapshots for transaction receipts rather than substituting current profile details or client-supplied values. Resolve ownership and staff/admin access on the server before selecting recipients or including business data.
+  - Never invent or hardcode personal or transaction information. Sample names, addresses, ZIP codes, phone numbers, product photos, tracking numbers, carriers, verification codes, bank details, amounts, and statuses must never appear as production fallbacks. Demo data belongs in explicit development seeds and test fixtures only.
+  - If an optional value is missing, null, empty, or whitespace-only, omit its entire labeled row, section, image, or link. Do not render empty labels, broken links, fake values, or misleading `N/A`/default statuses. Preserve legitimate zero amounts and quantities; zero is not missing data. Without a real recipient name, use a neutral greeting such as `Hello,`.
+  - Match content to the actual event, order composition, and recipient role. Digital-only purchases must omit delivery-address sections and physical-shipment promises even if the customer has a saved address. Physical and mixed orders may show only the recorded delivery details. Show carrier, tracking, bank, refund, payout, and verification details only when they exist and apply to that event.
+  - Send customers their own account/order information, merchants their own store information, and operators only information authorized by their role and store assignments. Never disclose another tenant's customer, store, financial, or administrative details. Keep ordinary status emails free of passwords, tokens, and service secrets; dedicated authentication/credential flows must use actual server-generated credentials or links and their existing recipient-verification rules.
+  - Keep templates and their backend payload producers synchronized. Validate every changed template and each affected dispatch path, including missing/partial data, unnamed recipients, digital-only orders with and without saved addresses, physical/mixed orders, role/ownership isolation, real zero values, and escaped user-controlled content. Do not treat a template-only change or a successful render with fully populated fixtures as sufficient verification.
+  - Persist email/push delivery outbox rows transactionally with their notifications or related business changes; dispatch only after commit. Preserve retry/recovery behavior, prevent duplicate generic and HTML emails for the same event, and do not resend notices for unchanged moderation/access actions. Never claim live inbox delivery was verified solely from rendering or outbox tests.
 - **Canonical Seeding & The Administrative Triad**:
   - `populate_fake_data` is the **authoritative, single command** for local and development database seeding. The legacy `seed_demo` and `seed_fake_data` alias commands are removed.
   - Seeding must **always** provision and guarantee the complete administrative triad:
@@ -100,7 +109,7 @@ These suites require no running servers and **must always be executed and verifi
 npm run typecheck
 npm run test:unit
 
-# Backend Pytest Suite (Full suite: 237 tests)
+# Backend Pytest Suite (Full suite: 294 tests; 286 passed, 8 offline environment skips)
 .venv/bin/pytest server/
 ```
 

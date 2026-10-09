@@ -9,6 +9,7 @@ from django.core import mail, signing
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from cart.models import CartItem
 from core.models import Address, User
@@ -22,6 +23,33 @@ from store.models import StoreAddress, Schedule, Store
 from store.services import publish_due_products
 from storefront.serializers import unit_price
 from storefront.views import order_data
+
+
+class InvalidRefreshTests(TestCase):
+    def test_invalid_refresh_tokens_return_401_instead_of_server_errors(self) -> None:
+        user = User.objects.create_user(
+            email='refresh-test@proace.local',
+            password='ProaceDemo2026!',
+        )
+        expired = RefreshToken.for_user(user)
+        expired.set_exp(lifetime=-timedelta(seconds=1))
+        revoked = RefreshToken.for_user(user)
+        revoked.blacklist()
+        client = APIClient()
+
+        for kind, token in [
+            ('invalid', 'invalid-refresh'),
+            ('expired', str(expired)),
+            ('revoked', str(revoked)),
+        ]:
+            with self.subTest(token_kind=kind):
+                response = client.post(
+                    '/api/v1/auth/refresh/',
+                    {'refresh': token},
+                    format='json',
+                )
+                self.assertEqual(response.status_code, 401)
+                self.assertEqual(response.json()['code'], 'token_not_valid')
 
 
 class UnitPriceTests(SimpleTestCase):
@@ -211,6 +239,12 @@ class StorefrontTests(TestCase):
         self.product.visibility = False
         self.product.save()
         self.assertEqual(self.client.get(f'/api/v1/products/{self.product.pk}/').status_code, 404)
+        self.client.force_authenticate(self.seller)
+        self.assertEqual(self.client.get(f'/api/v1/products/{self.product.pk}/').status_code, 404)
+        staff = User.objects.create_superuser(email='draft.staff@test.com', password='Strong-test-password-123')
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get(f'/api/v1/products/{self.product.pk}/').status_code, 404)
+        self.client.force_authenticate(None)
         self.product.visibility = True
         self.product.save()
         self.store.status = Store.STATUS_BLOCKED
@@ -465,6 +499,12 @@ class StorefrontTests(TestCase):
         with self.captureOnCommitCallbacks(execute=True):
             response = self.checkout(checkout_key=key)
         self.assertEqual(response.status_code, 201, response.data)
+        from notification.models import NotificationDelivery
+
+        buyer_deliveries = NotificationDelivery.objects.filter(recipient=self.buyer)
+        self.assertEqual(buyer_deliveries.count(), 1)
+        self.assertTrue(buyer_deliveries.get().is_html)
+        self.assertEqual(NotificationDelivery.objects.filter(recipient=self.seller).count(), 1)
         self.assertEqual(response.data['total'], '17006.65')
         self.product.refresh_from_db()
         self.assertEqual(self.product.available, 3)
@@ -908,6 +948,68 @@ class StorefrontTests(TestCase):
         self.assertIsNotNone(resp.data['flash_sale_end'])
 
 
+    def test_digital_receipt_omits_address_and_missing_phone(self) -> None:
+        self.address.delete()
+        self.buyer.phone1 = ""
+        self.buyer.first_name = ""
+        self.buyer.save(update_fields=["phone1", "first_name"])
+        self.product.is_digital = True
+        self.product.digital_file_url = "https://downloads.example.com/guide.pdf"
+        self.product.save(update_fields=["is_digital", "digital_file_url"])
+        self.add(1)
+        credit_user_wallet(self.buyer, Decimal("10000"), "Receipt test funds")
+        response = self.client.post(
+            "/api/v1/checkout/",
+            {"payment_type": "user_wallet", "checkout_key": str(uuid4())},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        order = Order.objects.get(pk=response.data["id"])
+        delivery = NotificationDelivery.objects.get(
+            recipient=self.buyer, subject=f"ProAce Order #{order.orderId} Confirmation",
+        )
+        self.assertIn("Your digital purchases", delivery.body)
+        self.assertIn("Hello,", delivery.body)
+        self.assertIn(self.buyer.email, delivery.body)
+        for absent in ["Delivery address", "Shipment details", "ZIP code", "Phone number", "Randolph", "+10000000000"]:
+            self.assertNotIn(absent, delivery.body)
+
+    def test_digital_receipt_omits_even_an_existing_address(self) -> None:
+        self.product.is_digital = True
+        self.product.digital_file_url = "https://downloads.example.com/guide.pdf"
+        self.product.save(update_fields=["is_digital", "digital_file_url"])
+        self.add(1)
+        response = self.checkout()
+        self.assertEqual(response.status_code, 201, response.data)
+        order = Order.objects.get(pk=response.data["id"])
+        delivery = NotificationDelivery.objects.get(
+            recipient=self.buyer, subject=f"ProAce Order #{order.orderId} Confirmation",
+        )
+        self.assertNotIn(self.address.address, delivery.body)
+        self.assertNotIn("Delivery address", delivery.body)
+
+    def test_mixed_receipt_uses_real_address_and_both_product_titles(self) -> None:
+        digital = Product.objects.create(
+            store=self.store, title="Download guide", price="10.00", discount=0,
+            is_digital=True, digital_file_url="https://downloads.example.com/guide.pdf", available=0,
+        )
+        self.add(1)
+        self.client.post("/api/v1/cart/", {"product": digital.pk, "quantity": 1}, format="json")
+        response = self.checkout()
+        self.assertEqual(response.status_code, 201, response.data)
+        order = Order.objects.get(pk=response.data["id"])
+        delivery = NotificationDelivery.objects.get(
+            recipient=self.buyer, subject=f"ProAce Order #{order.orderId} Confirmation",
+        )
+        self.assertIn("Delivery address", delivery.body)
+        self.assertIn(self.address.address, delivery.body)
+        self.assertIn(self.address.zip, delivery.body)
+        self.assertIn(self.product.title, delivery.body)
+        self.assertIn(digital.title, delivery.body)
+        self.assertNotIn("Randolph", delivery.body)
+        self.assertNotIn("cdn.useblocks.io", delivery.body)
+
+
 class UnverifiedStorePreviewTests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user(email='unverified_owner@test.com', password='Strong-password-123')
@@ -1123,7 +1225,6 @@ class ExtendedStorefrontFeatureTests(TestCase):
         del_resp = self.client.delete(f'/api/v1/products/{self.product.pk}/reviews/?review_id={review_id}')
         self.assertEqual(del_resp.status_code, 204)
         self.assertFalse(Review.objects.filter(pk=review_id).exists())
-
 
 
 

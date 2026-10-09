@@ -34,12 +34,13 @@ from store.serializers import (
     MerchantPayoutCreateSerializer, MerchantProductSerializer, MerchantSpecificationSerializer,
     MerchantWalletSerializer, PayoutCreateSerializer, ScheduleSerializer,
     StoreAddressSerializer, StoreEarningsLedgerSerializer, StoreInfoSerializer,
-    StoreOnboardingSerializer, StorePayoutSerializer, StoreSerializer,
+    StoreBrandingImageSerializer, StoreOnboardingSerializer, StorePayoutSerializer, StoreSerializer,
 )
 from store.services import (
     calculate_merchant_financials, calculate_store_financials,
     get_or_create_merchant_wallet, request_merchant_payout,
 )
+from utils.functions import normalize_media_url
 
 
 class MerchantPagination(LimitOffsetPagination):
@@ -66,8 +67,10 @@ class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return stores.filter(status=status_filter).order_by('created', 'pk')
 
     @transaction.atomic
-    def approve(self, request, pk=None):
+    def approve(self, request: Request, pk: str | None = None) -> Response:
         store = get_object_or_404(Store.objects.select_for_update(), pk=pk)
+        if store.status == Store.STATUS_ACTIVE and store.verified_at:
+            return Response(StoreSerializer(store).data)
         store.status = Store.STATUS_ACTIVE
         store.verified_at = timezone.now()
         store.verified_by = request.user
@@ -94,11 +97,13 @@ class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
         return Response(StoreSerializer(store).data)
 
     @transaction.atomic
-    def block(self, request, pk=None):
+    def block(self, request: Request, pk: str | None = None) -> Response:
         reason = serializers.CharField(allow_blank=False, trim_whitespace=True).run_validation(
             request.data.get('reason')
         )
         store = get_object_or_404(Store.objects.select_for_update(), pk=pk)
+        if store.status == Store.STATUS_BLOCKED and store.blocked_reason == reason:
+            return Response(StoreSerializer(store).data)
         store.status = Store.STATUS_BLOCKED
         store.blocked_reason = reason
         store.blocked_at = timezone.now()
@@ -209,6 +214,38 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             serializer.is_valid(raise_exception=True)
             serializer.save(store=store)
         return Response(serializer.data)
+
+    @extend_schema(methods=['POST'], request=StoreBrandingImageSerializer, responses=StoreInfoSerializer)
+    @extend_schema(methods=['DELETE'], request=None, responses=StoreInfoSerializer)
+    @action(
+        detail=True,
+        methods=['post', 'delete'],
+        url_path=r'profile-images/(?P<kind>avatar|banner)',
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def profile_images(
+        self,
+        request: Request,
+        pk: str | None = None,
+        kind: str | None = None,
+    ) -> Response:
+        store = self.get_object()
+        if kind not in {'avatar', 'banner'}:
+            raise ValidationError({'detail': 'Choose an avatar or banner image.'})
+        image = None
+        if request.method == 'POST':
+            serializer = StoreBrandingImageSerializer(data=request.data, context={'kind': kind})
+            serializer.is_valid(raise_exception=True)
+            image = serializer.validated_data['image']
+        with transaction.atomic():
+            self.get_queryset().select_for_update().get(pk=store.pk)
+            profile = StoreInfo.objects.filter(store=store).order_by('pk').first()
+            if profile is None:
+                profile = StoreInfo(store=store)
+            setattr(profile, f'{kind}_image', image or '')
+            setattr(profile, f'{kind}_url', '')
+            profile.save()
+        return Response(StoreInfoSerializer(profile, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], url_path='connect-stripe')
     def connect_stripe(self, request, pk=None):
@@ -431,12 +468,44 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             description=f"Your {store.name} shipment is {fulfillment.status}. Carrier: {fulfillment.carrier}, Tracking #{fulfillment.tracking_number or 'N/A'}",
             data={
                 "event": "order_tracking_update",
+                "email": fulfillment.status not in {"shipped", "delivered"},
                 "order_id": order.pk,
                 "store_id": store.pk,
                 "tracking_number": fulfillment.tracking_number,
                 "status": fulfillment.status,
             },
         )
+
+        recipient_email = str(order.buyer_email or (order.user.email if order.user else "") or "").strip()
+        if recipient_email and fulfillment.status == "shipped":
+            from utils.functions import send_mail
+            send_mail(
+                "order-shipped",
+                recipient_email,
+                {
+                    "firstname": (order.user.first_name if order.user else ""),
+                    "orderId": order.orderId,
+                    "carrier": fulfillment.carrier,
+                    "tracking_number": fulfillment.tracking_number or "",
+                    "tracking_url": order.tracking_url or "",
+                    "store_name": store.name,
+                    "subject": f"Order #{order.orderId} Has Shipped",
+                },
+            )
+        elif recipient_email and fulfillment.status == "delivered":
+            from utils.functions import send_mail
+            send_mail(
+                "delivery-confirmation",
+                recipient_email,
+                {
+                    "firstname": (order.user.first_name if order.user else ""),
+                    "orderId": order.orderId,
+                    "carrier": fulfillment.carrier,
+                    "tracking_number": fulfillment.tracking_number,
+                    "store_name": store.name,
+                    "subject": f"Order #{order.orderId} Delivered",
+                },
+            )
 
         return Response(
             {
@@ -733,6 +802,8 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
             raise ValidationError({'product_type': 'ClickBank partner offers can only be configured for official platform catalog stores.'})
         self.validate_store_publication(serializer)
         product = serializer.save(store=store)
+        if product.is_digital or product.product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
+            Specification.objects.filter(product=product).delete()
         transaction.on_commit(lambda: invalidate_catalog(product))
 
     @transaction.atomic
@@ -742,6 +813,8 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
             raise ValidationError({'product_type': 'ClickBank partner offers can only be configured for official platform catalog stores.'})
         self.validate_store_publication(serializer)
         product = serializer.save()
+        if product.is_digital or product.product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
+            Specification.objects.filter(product=product).delete()
         transaction.on_commit(lambda: invalidate_catalog(product))
 
     def perform_destroy(self, instance):
@@ -770,7 +843,7 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         img_obj = serializer.save(product=product)
         is_cover = request.data.get('is_cover') in {'true', '1', True} or not product.image_url
         if is_cover and img_obj.image:
-            image_url = request.build_absolute_uri(img_obj.image.url) if request else img_obj.image.url
+            image_url = normalize_media_url(request.build_absolute_uri(img_obj.image.url) if request else img_obj.image.url)
             product.image_url = image_url
             product.save(update_fields=['image_url', 'updated'])
         invalidate_catalog(product)
@@ -781,7 +854,7 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         product = self.get_object()
         img = get_object_or_404(ProductImg, pk=image_pk, product=product)
         if img.image:
-            image_url = request.build_absolute_uri(img.image.url) if request else img.image.url
+            image_url = normalize_media_url(request.build_absolute_uri(img.image.url) if request else img.image.url)
             product.image_url = image_url
             product.save(update_fields=['image_url', 'updated'])
             invalidate_catalog(product)
@@ -826,7 +899,13 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         product.is_digital = True
         product.digital_file_url = file_url
         product.weight = Decimal('0.00')
-        product.save(update_fields=['is_digital', 'digital_file_url', 'weight', 'updated'])
+        image_exts = ('.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.avif', '.bmp', '.tiff')
+        clean_name = file_obj.name.lower()
+        update_fields = ['is_digital', 'digital_file_url', 'weight', 'updated']
+        if not clean_name.endswith(image_exts):
+            product.digital_preview_watermark = False
+            update_fields.append('digital_preview_watermark')
+        product.save(update_fields=update_fields)
         invalidate_catalog(product)
 
         return Response({
@@ -846,10 +925,15 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
     def specifications(self, request, store_pk=None, pk=None):
         with transaction.atomic():
             product = get_object_or_404(Product.objects.select_for_update(), pk=pk, store=self.get_store())
+            if product.is_digital or product.product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
+                return Response(
+                    {'error': 'Digital and affiliate partner products cannot have physical specifications.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             specification = Specification.objects.filter(product=product).first()
             if request.method == 'GET':
                 return Response(MerchantSpecificationSerializer(specification).data if specification else {})
-            serializer = MerchantSpecificationSerializer(specification, data=request.data)
+            serializer = MerchantSpecificationSerializer(specification, data=request.data, context={'product': product})
             serializer.is_valid(raise_exception=True)
             serializer.save(product=product)
             transaction.on_commit(lambda: invalidate_catalog(product))

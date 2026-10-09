@@ -15,7 +15,7 @@ from cart.models import Cart, CartItem
 from core.models import Address, User
 from payment.models import DeliveryInfo, Order
 from product.cache import get_cached_landing_products, get_cached_product_data, get_cached_store_product_data
-from product.models import Product, ProductImg
+from product.models import Product, ProductImg, Specification
 from store.models import Schedule, Store, StoreAddress, StoreInfo
 from store.services import publish_due_products
 from utils.cache import invalidate_revision
@@ -345,6 +345,80 @@ class MerchantTests(TestCase):
         self.assertEqual(self.client.put(url, payload, format='json').status_code, 200)
         self.assertEqual(self.client.get(url).data['color'], 'White')
 
+    def test_digital_product_rejects_physical_specifications_endpoint(self) -> None:
+        digital_product = Product.objects.create(
+            store=self.store,
+            title='Digital Audio Guide',
+            description='Downloadable MP3 audio',
+            category='books',
+            price=Decimal('15.00'),
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='https://example.com/audio.mp3',
+        )
+        url = self.products_url + f'{digital_product.pk}/specifications/'
+        payload = {
+            'serial': 'AUD-01',
+            'attributes': 'Audio format',
+            'height': '1.00',
+            'width': '2.00',
+            'breadth': '3.00',
+            'weight': '0.50',
+            'color': 'Black',
+        }
+        response = self.client.put(url, payload, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('physical specifications', str(response.data))
+
+    def test_digital_product_onboarding_rejects_weight_and_physical_dimensions(self) -> None:
+        payload = self.product_payload(
+            is_digital=True,
+            digital_file_url='https://example.com/guide.pdf',
+            weight='2.50',
+            height='5.00',
+            width='4.00',
+            length='8.00',
+        )
+        response = self.client.post(self.products_url, payload, format='json')
+        self.assertEqual(response.status_code, 400)
+        details = response.data['error']['details']
+        self.assertIn('weight', details)
+        self.assertIn('height', details)
+        self.assertIn('width', details)
+        self.assertIn('length', details)
+
+    def test_converting_physical_product_to_digital_clears_dimensions_and_specifications(self) -> None:
+        spec_url = self.products_url + f'{self.product.pk}/specifications/'
+        spec_payload = {
+            'serial': 'SPK-99',
+            'attributes': 'Hi-Fi build',
+            'height': '5.00',
+            'width': '5.00',
+            'breadth': '5.00',
+            'weight': '2.00',
+            'color': 'Silver',
+        }
+        self.assertEqual(self.client.put(spec_url, spec_payload, format='json').status_code, 200)
+        self.assertTrue(Specification.objects.filter(product=self.product).exists())
+
+        response = self.client.patch(
+            self.products_url + f'{self.product.pk}/',
+            {
+                'is_digital': True,
+                'digital_file_url': 'https://example.com/speaker-manual.pdf',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.product.refresh_from_db()
+        self.assertTrue(self.product.is_digital)
+        self.assertEqual(self.product.weight, Decimal('0.00'))
+        self.assertIsNone(self.product.length)
+        self.assertIsNone(self.product.width)
+        self.assertIsNone(self.product.height)
+        self.assertFalse(Specification.objects.filter(product=self.product).exists())
+
     def test_dashboard_counts_only_merchant_items_and_eligible_orders(self):
         self.make_order(mixed=True)
         self.make_order(status='pending', ordered=False, quantity=7)
@@ -488,6 +562,40 @@ class MerchantTests(TestCase):
         product.refresh_from_db()
         self.assertTrue(product.is_digital)
         self.assertIn('guidebook.pdf', product.digital_file_url)
+        self.assertFalse(product.digital_preview_watermark)
+
+    def test_digital_preview_watermark_only_allowed_for_images(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='E-Book & Software Package',
+            description='Comprehensive programming guide in PDF format',
+            category='books',
+            price='29.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='https://downloads.proace.local/files/guide.pdf',
+            digital_preview_watermark=True,
+        )
+        url = f'{self.products_url}{product.id}/'
+
+        # PDF digital product should coerce watermark to False
+        response = self.client.patch(url, {
+            'digital_file_url': 'https://downloads.proace.local/files/guide.pdf',
+            'digital_preview_watermark': True,
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        product.refresh_from_db()
+        self.assertFalse(product.digital_preview_watermark)
+
+        # Image digital product should allow watermark to be True
+        response = self.client.patch(url, {
+            'digital_file_url': 'https://downloads.proace.local/files/digital-artwork.png',
+            'digital_preview_watermark': True,
+        }, format='json')
+        self.assertEqual(response.status_code, 200, response.data)
+        product.refresh_from_db()
+        self.assertTrue(product.digital_preview_watermark)
 
     def test_merchant_upload_image_sets_cover_image(self):
         product = Product.objects.create(

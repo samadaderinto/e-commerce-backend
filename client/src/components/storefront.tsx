@@ -30,8 +30,9 @@ import {
   Store as StoreIcon,
   Trash2,
   X,
+  ShoppingBag,
 } from "lucide-react";
-import { api, categories, money } from "@/lib/api";
+import { api, ApiError, categories, money } from "@/lib/api";
 import type { Page, Product, PublicStore, Review } from "@/lib/types";
 import {
   Empty,
@@ -690,13 +691,25 @@ export function ProductPage({ id }: { id: string }) {
   const [selectedVariantIdx, setSelectedVariantIdx] = useState<number>(0);
   const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   if (productQuery.isLoading) return <Loading />;
-  if (productQuery.error)
+  if (productQuery.error) {
+    if ((productQuery.error as ApiError).status === 404) {
+      return (
+        <Empty
+          title="Listing not found"
+          text="This product listing is not visible to the public or does not exist."
+          href="/shop"
+          label="Explore available products"
+          icon={<ShoppingBag size={36} />}
+        />
+      );
+    }
     return (
       <ErrorState
         error={productQuery.error}
         retry={() => productQuery.refetch()}
       />
     );
+  }
   const product = productQuery.data!;
   const activeVariant = product.variants && product.variants.length > 0 ? product.variants[selectedVariantIdx] : null;
   const effectiveStock = product.is_digital ? 99 : activeVariant && typeof activeVariant.available === 'number' ? activeVariant.available : product.available;
@@ -774,18 +787,38 @@ export function ProductPage({ id }: { id: string }) {
         </div>
       )}
       <div className="product-detail">
-        <ProductGallery
-          key={product.id}
-          images={[
-            ...product.images,
-            product.image,
-            ...(product.variants || []).map((variant) => variant.image_url || ""),
-          ]}
-          title={product.title}
-          discount={product.discount}
-          activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? product.image}
-          onImageChange={setSelectedGalleryImage}
-        />
+        <div style={{ position: "relative" }}>
+          <ProductGallery
+            key={product.id}
+            images={[
+              ...product.images,
+              product.image,
+              ...(product.variants || []).map((variant) => variant.image_url || ""),
+            ]}
+            title={product.title}
+            discount={product.discount}
+            activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? product.image}
+            onImageChange={setSelectedGalleryImage}
+          />
+          {product.digital_preview_watermark && (
+            <span
+              style={{
+                position: "absolute",
+                inset: 0,
+                display: "grid",
+                placeItems: "center",
+                color: "rgba(255,255,255,.55)",
+                fontSize: "clamp(18px, 4vw, 42px)",
+                fontWeight: 700,
+                transform: "rotate(-24deg)",
+                pointerEvents: "none",
+                textAlign: "center",
+              }}
+            >
+              PROACE PREVIEW
+            </span>
+          )}
+        </div>
         <div className="product-information">
           {product.product_type === "affiliate_clickbank" ? (
             <span
@@ -1121,7 +1154,7 @@ export function ProductPage({ id }: { id: string }) {
                   </dd>
                 </div>
               </dl>
-              {(product.specifications || product.weight || product.length || product.width || product.height) && (
+              {!product.is_digital && product.product_type !== 'affiliate_clickbank' && (product.specifications || (product.weight && Number(product.weight) > 0) || product.length || product.width || product.height) && (
                 <div style={{ marginTop: "24px" }}>
                   <h3 style={{ fontSize: "15px", fontWeight: 700, marginBottom: "12px", color: "var(--ink)" }}>
                     Technical Specifications & Dimensions
@@ -1141,10 +1174,10 @@ export function ProductPage({ id }: { id: string }) {
                             <td>{product.specifications.color}</td>
                           </tr>
                         )}
-                        {(product.specifications?.weight || product.weight) && (
+                        {((product.specifications?.weight && Number(product.specifications.weight) > 0) || (product.weight && Number(product.weight) > 0)) && (
                           <tr>
                             <td style={{ fontWeight: 600, color: "var(--muted)" }}>Weight</td>
-                            <td>{product.specifications?.weight || `${product.weight} lbs`}</td>
+                            <td>{product.specifications?.weight ? `${product.specifications.weight} lbs` : `${product.weight} lbs`}</td>
                           </tr>
                         )}
                         {(product.specifications?.height || product.height) && (

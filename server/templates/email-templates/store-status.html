@@ -1,0 +1,12 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  {% if event == "store_blocked" %}
+    <p>Your store is unavailable to shoppers. Contact support to discuss the review and any steps needed to restore access.</p>
+  {% elif event == "store_verified" %}
+    <p>Your store has passed verification and is now public. Open your merchant dashboard to manage your catalog and orders.</p>
+  {% else %}
+    <p>Open your merchant dashboard to review your store status and manage your catalog.</p>
+  {% endif %}
+{% endblock %}
+{% block action_url %}{{ dashboard_url }}{% endblock %}
+{% block action_label %}View merchant dashboard{% endblock %}

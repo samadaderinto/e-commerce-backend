@@ -1,0 +1,8 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  <p>Items from your order <strong>#{{ orderId }}</strong>{% if store_name %} from {{ store_name }}{% endif %} have been marked as shipped.</p>
+  {% if carrier %}<p>Carrier: {{ carrier }}</p>{% endif %}
+  {% if tracking_number %}<p>Tracking number: {{ tracking_number }}</p>{% endif %}
+{% endblock %}
+{% block action_url %}{% if tracking_url %}{{ tracking_url }}{% else %}{{ order_url }}{% endif %}{% endblock %}
+{% block action_label %}View shipment{% endblock %}

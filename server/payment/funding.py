@@ -92,38 +92,45 @@ def create_funding_session(user: User, amount: Decimal) -> Any:
     return session
 
 
+@transaction.atomic
 def notify_funding(user: User, amount: Decimal) -> None:
     from core.services import get_or_create_user_wallet
     from notification.views import create_notification
     from utils.functions import send_mail
 
-    try:
-        wallet = get_or_create_user_wallet(user)
-        send_mail(
-            "wallet-funded",
-            user.email,
-            {"amount": str(amount), "balance": str(wallet.balance)},
-        )
+    wallet = get_or_create_user_wallet(user)
+    send_mail(
+        "wallet-funded",
+        user.email,
+        {
+            "firstname": user.first_name,
+            "amount": str(amount),
+            "balance": str(wallet.balance),
+        },
+    )
+    create_notification(
+        recipient=user,
+        verb=f"Wallet funded: ${amount:.2f}",
+        description="Your ProAce Wallet has been credited and is ready to use.",
+        data={
+            "category": "wallet",
+            "event": "wallet_topup",
+            "amount": str(amount),
+            "email": False,
+        },
+    )
+    if amount >= Decimal("10000.00"):
         create_notification(
             recipient=user,
-            verb=f"Wallet funded: ${amount:.2f}",
-            description="Your ProAce Wallet has been credited and is ready to use.",
-            data={"category": "wallet", "event": "wallet_topup", "amount": str(amount)},
+            verb="Large wallet deposit recorded",
+            description="This deposit may receive an additional review.",
+            data={
+                "category": "wallet",
+                "event": "wallet_topup_review",
+                "amount": str(amount),
+            },
+            level="warning",
         )
-        if amount >= Decimal("10000.00"):
-            create_notification(
-                recipient=user,
-                verb="Large wallet deposit recorded",
-                description="This deposit may receive an additional review.",
-                data={
-                    "category": "wallet",
-                    "event": "wallet_topup_review",
-                    "amount": str(amount),
-                },
-                level="warning",
-            )
-    except Exception:
-        logger.exception("Funding receipt notification failed for user %s", user.pk)
 
 
 @transaction.atomic
@@ -195,7 +202,7 @@ def confirm_funding(user: User, session_id: str, session: Any) -> WalletFundingA
     )
     attempt.status = "credited"
     attempt.save(update_fields=["status", "updated"])
-    transaction.on_commit(lambda: notify_funding(user, amount))
+    notify_funding(user, amount)
     return attempt
 
 

@@ -1,0 +1,10 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  {% if event == "password_changed" %}
+    <p>We never include your password in an email. Use the password reset page if you need to secure your account.</p>
+  {% else %}
+    <p>If you have questions about this access change, contact support using your registered email address.</p>
+  {% endif %}
+{% endblock %}
+{% block action_url %}{% if event == "password_changed" %}{{ frontend_url }}/forgot-password{% else %}{{ frontend_url }}/login{% endif %}{% endblock %}
+{% block action_label %}{% if event == "password_changed" %}Reset password{% else %}View account{% endif %}{% endblock %}

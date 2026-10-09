@@ -226,29 +226,6 @@ export function AdminDashboardPage() {
           <h1>Admin & Staff Overview</h1>
           <p>Real-time platform commerce insights, store activity, and order fulfillment.</p>
         </div>
-        <div className="admin-dashboard-shortcuts">
-          {user.is_superuser && <a
-            className="button secondary"
-            href={process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}
-            target="_blank"
-            rel="noreferrer"
-            title="Open Grafana Live Telemetry & Metrics (Technical admin sign-in required)"
-          >
-            <Activity size={17} />
-            Live Metrics (Grafana)
-            <ArrowUpRight size={14} />
-          </a>}
-          {(user.is_superuser || user.is_business_admin) && <Link className="button secondary" href="/admin/stores">Manage stores</Link>}
-          {(user.is_superuser || user.is_business_admin) && <Link className="button secondary" href="/admin/commission"><DollarSign size={17} />Commission withdrawals</Link>}
-          {(user.is_superuser || user.is_business_admin) && (
-            <Link className="button secondary" href="/admin/staff">
-              <UsersRound size={17} />
-              Manage staff team
-            </Link>
-          )}
-          <Link className="button secondary" href="/admin/payouts"><DollarSign size={17} />Merchant payouts</Link>
-          <Link className="button secondary" href="/admin/users"><UserRound size={17} />Users directory</Link>
-        </div>
       </div>
 
       <div className="dashboard-period">

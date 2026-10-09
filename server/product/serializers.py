@@ -1,3 +1,6 @@
+from __future__ import annotations
+from typing import Any
+
 from rest_framework import serializers
 
 from product.models import ProductImg, Product, Specification
@@ -5,6 +8,7 @@ from product.models import ProductImg, Product, Specification
 from taggit.serializers import TagListSerializerField, TaggitSerializer
 
 from store.models import Store
+from utils.functions import normalize_media_url
 
 
 
@@ -20,6 +24,12 @@ class ProductImgSerializer(serializers.ModelSerializer):
         model = ProductImg
         fields = ["id", "product", "image",]
 
+    def to_representation(self, instance: ProductImg) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if data.get('image'):
+            data['image'] = normalize_media_url(data['image'])
+        return data
+
 
 class SpecificationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -27,6 +37,12 @@ class SpecificationSerializer(serializers.ModelSerializer):
 
         fields = ["product", "serial", "attributes", "height",
                   "width", "breadth", "weight", "color", "created", "updated",]
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        product = attrs.get("product") or getattr(self.instance, "product", None)
+        if product and (product.is_digital or product.product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK):
+            raise serializers.ValidationError("Digital and affiliate partner products cannot have physical specifications.")
+        return attrs
 
 
 class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
@@ -60,11 +76,15 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "likes_count",
             "is_liked",
             "is_digital",
-            # "uploaded_images",
             "label",
-            # "specifications"
         ]
         read_only_fields = ["sale_price", "average_rating", "likes_count", "is_liked"]
+
+    def to_representation(self, instance: Product) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if data.get('image_url'):
+            data['image_url'] = normalize_media_url(data['image_url'])
+        return data
 
     def get_likes_count(self, product):
         return getattr(product, "likes_count", product.wishlist_set.count())

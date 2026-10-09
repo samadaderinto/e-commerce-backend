@@ -11,15 +11,12 @@ from payment.models import Coupon
 from product.policies import is_own_store
 from store.models import Store, StoreInfo, StoreAddress
 from store.services import calculate_store_tier
+from store.serializers import StoreInfoSerializer
+from utils.functions import normalize_media_url
 
 
-class PublicStoreProfileSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = StoreInfo
-        fields = [
-            'email', 'bio', 'announcement', 'pinned_products', 'avatar_url', 'banner_url', 'website',
-            'instagram', 'twitter', 'facebook', 'whatsapp', 'phone1', 'phone2'
-        ]
+class PublicStoreProfileSerializer(StoreInfoSerializer):
+    pass
 
 
 class PublicStoreAddressSerializer(serializers.ModelSerializer):
@@ -45,7 +42,7 @@ class PublicStoreSerializer(serializers.ModelSerializer):
 
     def get_profile(self, obj):
         info = StoreInfo.objects.filter(store=obj).first()
-        return PublicStoreProfileSerializer(info).data if info else None
+        return PublicStoreProfileSerializer(info, context=self.context).data if info else None
 
     def get_address(self, obj):
         addr = StoreAddress.objects.filter(store=obj, is_default=True).first()
@@ -200,6 +197,8 @@ class CatalogSerializer(serializers.ModelSerializer):
 
     @extend_schema_field(OpenApiTypes.OBJECT)
     def get_specifications(self, obj):
+        if getattr(obj, 'is_digital', False) or getattr(obj, 'product_type', '') == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
+            return None
         spec = getattr(obj, 'specification', None)
         if not spec:
             from product.models import Specification
@@ -238,9 +237,10 @@ class CatalogSerializer(serializers.ModelSerializer):
         for image in obj.images.all():
             if image.image:
                 url = image.image.url
-                images.append(request.build_absolute_uri(url) if request else url)
+                raw = request.build_absolute_uri(url) if request else url
+                images.append(normalize_media_url(raw))
         if obj.image_url:
-            images.append(obj.image_url)
+            images.append(normalize_media_url(obj.image_url))
         return images
 
     @extend_schema_field(OpenApiTypes.STR)

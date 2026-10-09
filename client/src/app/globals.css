@@ -2155,3 +2155,31 @@ select option:disabled {
 }
 
 .carrier-option:has(input:disabled) { opacity: .45; cursor: not-allowed; }
+
+.quantity.quantity-digital {
+  justify-content: center;
+  gap: 7px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  cursor: default;
+  user-select: none;
+  padding: 0 10px;
+}
+
+.quantity.quantity-digital .quantity-digital-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  min-width: unset;
+  line-height: 1;
+}
+
+.quantity.quantity-digital .quantity-digital-badge {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+  min-width: unset;
+  line-height: 1;
+}

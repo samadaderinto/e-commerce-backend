@@ -7,7 +7,7 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, Spec
 from .views import (
     PasswordChangeView, AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView, DigitalDownloadView,
     OrderRefundView, OrderCancelView, OrderTrackingView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
-    OrdersView, ProductDetailView, ProductsView, PublicStoreView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
+    OrdersView, ProductDetailView, ProductsView, PublicStoreView, PublicStoreImageView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
     CouponValidateView, TaxJurisdictionAdminView, TaxJurisdictionDetailAdminView, TaxJurisdictionSeedDefaultsAdminView,
 )
 from store.views import StoreReviewViewSet
@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/v1/products/<int:pk>/', ProductDetailView.as_view()),
     path('api/v1/products/<int:pk>/reviews/', ReviewsView.as_view()),
     path('api/v1/stores/<int:pk>/public/', PublicStoreView.as_view()),
+    path('api/v1/stores/<int:pk>/public/images/<str:kind>/', PublicStoreImageView.as_view()),
     path('api/v1/wishlist/', WishlistView.as_view()),
     path('api/v1/addresses/', AddressesView.as_view()),
     path('api/v1/addresses/<int:pk>/', AddressesView.as_view()),

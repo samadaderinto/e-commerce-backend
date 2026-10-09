@@ -573,3 +573,365 @@ class NotificationApiTests(TestCase):
             self.assertEqual(results["count"], 1)
             self.assertEqual(results["ids"], [42])
 
+
+@override_settings(ROOT_URLCONF="store.test_urls")
+class EmailTemplateRenderingTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="shopper@proace.local",
+            password="Password123!",
+            first_name="Sam",
+            last_name="Shopper",
+            gender="male",
+            phone1="+12125550100",
+        )
+
+    def test_all_email_templates_exist_and_render_valid_html(self):
+        from django.template.loader import get_template
+
+        templates = [
+            "account-delete-confirmation",
+            "affiliate",
+            "delivery-confirmation",
+            "onboarding-staff",
+            "onboarding-user",
+            "order-cancelled",
+            "order-shipped",
+            "order-summary",
+            "password-reset",
+            "payout-processed",
+            "refund-request-acknowledged",
+            "refund-request-acknowleged",
+            "refund-response",
+            "wallet-funded",
+        ]
+
+        sample_context = {
+            "title": "Your ProAce order update",
+            "has_physical_items": True,
+            "delivery_details": [{"label": "Address", "value": "500 5th Ave"}],
+            "contact_details": [{"label": "Email", "value": self.user.email}],
+            "totals": [{"label": "Total", "value": "50.00"}],
+            "firstname": "Sam",
+            "email": self.user.email,
+            "orderId": "ORD-9988",
+            "refund_amount": "50.00",
+            "refund_type": "store_credit",
+            "reason": "Size did not fit",
+            "amount": "25.00",
+            "balance": "125.00",
+            "absolute_url": "https://proace.local/verify",
+            "status": "Approved",
+            "message": "Store credit issued.",
+            "ordered_items": [{"title": "Classic Tee", "variant": "Medium", "quantity": 2, "price": "25.00"}],
+            "user_info": {"zip": "10001", "address": "500 5th Ave", "phone1": "+12125550100", "email": self.user.email},
+            "support_email": "support@proace.local",
+            "frontend_url": "https://proace.local",
+            "shop_url": "https://proace.local/shop",
+            "order_url": "https://proace.local/account/orders/ORD-9988",
+            "carrier": "USPS",
+            "tracking_number": "9400100000000000000000",
+            "tracking_url": "https://tools.usps.com/go/TrackConfirmAction?tLabels=9400100000000000000000",
+            "wallet_refund": "20.00",
+            "card_refund": "30.00",
+            "store_name": "Apex Athletics",
+            "reference": "PO-12345",
+            "notes": "Processed via automated ACH transfer",
+            "dashboard_url": "https://proace.local/merchant/payouts",
+            "bank_name": "Chase Bank",
+            "referral_code": "PRO123",
+            "referral_link": "https://proace.local?ref=PRO123",
+            "refund_destination": "ProAce Wallet",
+            "product_info": [{"title": "Classic Tee", "quantity": 2, "price": "25.00", "total": "50.00"}],
+        }
+
+        for template_name in templates:
+            template = get_template(f"email-templates/{template_name}.html")
+            rendered = template.render(sample_context)
+            self.assertIn("<!DOCTYPE html", rendered, f"{template_name} is missing HTML doctype")
+            self.assertIn("proace", rendered.lower(), f"{template_name} is missing ProAce branding")
+            self.assertGreater(len(rendered), 1000, f"{template_name} is suspiciously short")
+
+    def test_send_mail_utility_queues_html_delivery(self):
+        from utils.functions import send_mail
+
+        send_mail(
+            "wallet-funded",
+            self.user.email,
+            {"amount": "50.00", "balance": "150.00", "firstname": self.user.first_name},
+        )
+
+        delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(delivery.is_html)
+        self.assertIn("Wallet Funded", delivery.subject)
+        self.assertIn("+$50.00", delivery.body)
+        self.assertIn("150.00", delivery.body)
+
+    def test_auth_and_account_lifecycle_html_emails(self):
+        client = APIClient()
+
+        # 1. Register -> onboarding-user
+        reg_resp = client.post(
+            "/api/v1/auth/register/",
+            {
+                "email": "newbie@proace.local",
+                "password": "Password123!",
+                "first_name": "Newbie",
+                "last_name": "User",
+                "gender": "male",
+                "phone1": "+12125550199",
+            },
+            format="json",
+        )
+        self.assertEqual(reg_resp.status_code, 201)
+        reg_delivery = NotificationDelivery.objects.filter(recipient_email="newbie@proace.local").latest("pk")
+        self.assertTrue(reg_delivery.is_html)
+        self.assertIn("Verify your ProAce account", reg_delivery.subject)
+        self.assertIn("verify-email", reg_delivery.body)
+
+        # 2. Forgot password -> password-reset
+        forgot_resp = client.post(
+            "/api/v1/auth/forgot/",
+            {"email": "shopper@proace.local"},
+            format="json",
+        )
+        self.assertEqual(forgot_resp.status_code, 200)
+        reset_delivery = NotificationDelivery.objects.filter(recipient_email="shopper@proace.local").latest("pk")
+        self.assertTrue(reset_delivery.is_html)
+        self.assertIn("Reset your ProAce password", reset_delivery.subject)
+        self.assertIn("reset-password", reset_delivery.body)
+
+        # 3. Account delete -> account-delete-confirmation
+        client.force_authenticate(user=self.user)
+        del_resp = client.delete("/api/v1/me/")
+        self.assertEqual(del_resp.status_code, 200)
+        del_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(del_delivery.is_html)
+        self.assertIn("Account Closure Confirmation", del_delivery.subject)
+        self.assertIn("permanently deleted", del_delivery.body)
+
+    @patch("payment.services.call_stripe_refund", return_value="re_mock123")
+    def test_order_status_transitions_queue_html_emails(self, mock_stripe_refund):
+        from decimal import Decimal
+        from payment.models import Order
+        from payment.services import execute_order_status_transition
+
+        order = Order.objects.create(
+            user=self.user,
+            buyer_email=self.user.email,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("120.00"),
+            paid_total=Decimal("120.00"),
+            wallet_paid=Decimal("20.00"),
+            carrier="USPS",
+            tracking_number="9400100000000000000000",
+        )
+
+        # 1. Shipped -> order-shipped
+        execute_order_status_transition(order, "shipped", self.user, "Dispatched by warehouse")
+        ship_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(ship_delivery.is_html)
+        self.assertIn("Has Shipped", ship_delivery.subject)
+        self.assertIn("9400100000000000000000", ship_delivery.body)
+
+        # 2. Delivered -> delivery-confirmation
+        execute_order_status_transition(order, "delivered", self.user, "Delivered to porch")
+        deliv_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(deliv_delivery.is_html)
+        self.assertIn("Delivered", deliv_delivery.subject)
+
+        # 3. Cancelled -> order-cancelled
+        order.status = "confirmed"
+        order.save(update_fields=["status"])
+        execute_order_status_transition(order, "cancelled", self.user, "Customer request")
+        cancel_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(cancel_delivery.is_html)
+        self.assertIn("Cancelled", cancel_delivery.subject)
+        self.assertIn("$20.00", cancel_delivery.body)
+        self.assertIn("$100.00", cancel_delivery.body)
+
+    def test_refund_actions_queue_html_emails(self):
+        from decimal import Decimal
+        from core.models import Refund
+        from payment.models import Order
+        from payment.services import process_order_refund, decline_order_refund
+
+        order = Order.objects.create(
+            user=self.user,
+            buyer_email=self.user.email,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("80.00"),
+            paid_total=Decimal("80.00"),
+            wallet_paid=Decimal("0.00"),
+        )
+        refund1 = Refund.objects.create(
+            email=self.user.email,
+            order=order,
+            refund_amount=Decimal("80.00"),
+            refund_type=Refund.REFUND_TYPE_STORE_CREDIT,
+            status=Refund.STATUS_PENDING,
+            accepted=False,
+        )
+
+        # Approve refund -> refund-response
+        process_order_refund(refund1, actor=self.user)
+        appr_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(appr_delivery.is_html)
+        self.assertIn("Refund Update", appr_delivery.subject)
+        self.assertIn("Approved", appr_delivery.body)
+        self.assertIn("ProAce Wallet", appr_delivery.body)
+
+        # Decline refund -> refund-response
+        refund2 = Refund.objects.create(
+            email=self.user.email,
+            order=order,
+            refund_amount=Decimal("20.00"),
+            refund_type=Refund.REFUND_TYPE_ORIGINAL_PAYMENT,
+            status=Refund.STATUS_PENDING,
+            accepted=False,
+        )
+        decline_order_refund(refund2, actor=self.user, reason="Item was altered after delivery")
+        dec_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(dec_delivery.is_html)
+        self.assertIn("Refund Update", dec_delivery.subject)
+        self.assertIn("Declined", dec_delivery.body)
+        self.assertIn("Item was altered after delivery", dec_delivery.body)
+
+    def test_staff_onboarding_and_payout_html_emails(self):
+        from decimal import Decimal
+        from core.onboarding import invite_staff
+        from store.models import Store, StorePayout
+
+        # 1. Staff invitation -> onboarding-staff
+        staff_user = invite_staff({
+            "email": "newstaff@proace.local",
+            "first_name": "Alex",
+            "last_name": "Staff",
+        })
+        staff_delivery = NotificationDelivery.objects.filter(recipient_email="newstaff@proace.local").latest("pk")
+        self.assertTrue(staff_delivery.is_html)
+        self.assertIn("Verify your staff account", staff_delivery.subject)
+        self.assertIn("verify-email?token=staff:", staff_delivery.body)
+
+        # 2. Payout processing -> payout-processed
+        store = Store.objects.create(
+            user=self.user,
+            name="Apex Athletics",
+        )
+        payout = StorePayout.objects.create(
+            store=store,
+            amount=Decimal("450.00"),
+            status=StorePayout.STATUS_PENDING,
+            reference="PO-998877",
+            account_details={"bank_name": "Chase Bank"},
+        )
+
+        admin_user = User.objects.create_superuser(
+            email="admin_payout@proace.local",
+            password="Password123!",
+        )
+        client = APIClient()
+        client.force_authenticate(user=admin_user)
+        payout_resp = client.post(
+            f"/api/v1/admin/staff/payouts/{payout.pk}/process/",
+            {"action": "approve"},
+            format="json",
+        )
+        self.assertEqual(payout_resp.status_code, 200)
+        payout_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(payout_delivery.is_html)
+        self.assertIn("Merchant Payout Completed - PO-998877", payout_delivery.subject)
+        self.assertIn("450.00", payout_delivery.body)
+        self.assertIn("Chase Bank", payout_delivery.body)
+
+    def test_storefront_and_affiliate_html_emails(self):
+        from decimal import Decimal
+        from store.models import Store
+        from payment.models import Order
+
+        # 1. Affiliate registration -> affiliate
+        client = APIClient()
+        client.force_authenticate(user=self.user)
+        aff_resp = client.post(
+            "/api/v1/affiliates/register/",
+            {"name": "Sam Partner"},
+            format="json",
+        )
+        self.assertEqual(aff_resp.status_code, 201)
+        aff_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(aff_delivery.is_html)
+        self.assertIn("Welcome to the ProAce Affiliate Partner Program", aff_delivery.subject)
+        self.assertIn("Monetize traffic", aff_delivery.body)
+
+        # 2. Merchant shipment tracking update -> order-shipped
+        merchant_user = User.objects.create_user(
+            email="merchant_ship@proace.local",
+            password="Password123!",
+            first_name="Merchant",
+            last_name="Vendor",
+            gender="female",
+            phone1="+12125550188",
+        )
+        store = Store.objects.create(
+            user=merchant_user,
+            name="Volt Velocity",
+        )
+        order = Order.objects.create(
+            user=self.user,
+            buyer_email=self.user.email,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("75.00"),
+            paid_total=Decimal("75.00"),
+            wallet_paid=Decimal("75.00"),
+            items_snapshot=[{
+                "product": 1,
+                "product_title": "Sneakers",
+                "store": store.pk,
+                "quantity": 1,
+                "unit_price": "75.00",
+                "price": "75.00",
+                "net_total": "75.00",
+                "line_total": "75.00",
+                "is_digital": False,
+            }],
+        )
+
+        client.force_authenticate(user=merchant_user)
+        track_resp = client.post(
+            f"/stores/{store.pk}/orders/{order.pk}/tracking/",
+            {
+                "status": "shipped",
+                "carrier": "FedEx",
+                "tracking_number": "999888777666",
+            },
+            format="json",
+        )
+        self.assertEqual(track_resp.status_code, 200)
+        track_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(track_delivery.is_html)
+        self.assertIn("Has Shipped", track_delivery.subject)
+        self.assertIn("999888777666", track_delivery.body)
+        self.assertIn("Volt Velocity", track_delivery.body)
+
+        # 3. Order Refund Request -> refund-request-acknowledged
+        client.force_authenticate(user=self.user)
+        ref_req_resp = client.post(
+            f"/api/v1/orders/{order.pk}/refund/",
+            {
+                "reason": "item_damaged",
+                "refund_type": "store_credit",
+                "product_ids": [1],
+            },
+            format="json",
+        )
+        self.assertEqual(ref_req_resp.status_code, 201)
+        ref_req_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
+        self.assertTrue(ref_req_delivery.is_html)
+        self.assertIn("Refund Request Received", ref_req_delivery.subject)
+        self.assertIn(order.orderId, ref_req_delivery.subject)
+        self.assertIn("Item damaged", ref_req_delivery.body)
+
+

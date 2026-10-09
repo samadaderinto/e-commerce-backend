@@ -1,3 +1,5 @@
+from typing import Any
+
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.utils import timezone
@@ -12,6 +14,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 
 from core.models import User
+from store.models import Store
 from notification.models import Notification
 from notification.models import PushDevice
 from notification.serializers import NotificationCountSerializer, NotificationSerializer
@@ -29,20 +32,46 @@ def _content_type_for(obj):
     return ContentType.objects.get_for_model(obj, for_concrete_model=False)
 
 
-def _send_external_notification(notification):
+def _send_external_notification(notification: Notification) -> None:
     """Persist external notification deliveries in the recovery outbox."""
     recipient = notification.recipient
     data = notification.data or {}
     if getattr(recipient, "email", None) and data.get("email") is not False:
         from notification.delivery import queue_email_delivery
 
-        queue_email_delivery(
-            recipient.email,
-            f"Proace: {notification.verb.capitalize()}",
-            notification.description or notification.verb.capitalize(),
-            notification=notification,
-            recipient=recipient,
-        )
+        event = data.get("event", "")
+        template = {
+            "store_verified": "store-status",
+            "store_blocked": "store-status",
+            "store_unblocked": "store-status",
+            "account_access_changed": "account-security",
+            "password_changed": "account-security",
+            "inventory_low": "inventory-low",
+        }.get(event)
+        if template:
+            from utils.functions import send_mail
+
+            send_mail(
+                template,
+                recipient.email,
+                {
+                    **data,
+                    "firstname": recipient.first_name,
+                    "subject": f"ProAce: {notification.verb.capitalize()}",
+                    "title": notification.verb.capitalize(),
+                    "message": notification.description or notification.verb.capitalize(),
+                },
+                recipient=recipient,
+                notification=notification,
+            )
+        else:
+            queue_email_delivery(
+                recipient.email,
+                f"Proace: {notification.verb.capitalize()}",
+                notification.description or notification.verb.capitalize(),
+                notification=notification,
+                recipient=recipient,
+            )
     if (
         getattr(settings, "FCM_ENABLED", False)
         and PushDevice.objects.filter(user=recipient).exists()
@@ -50,8 +79,18 @@ def _send_external_notification(notification):
         _queue_push_notification(notification)
 
 
-def create_notification(recipient, verb, actor=None, target=None, action_object=None,
-                        description="", level="info", data=None, public=True):
+@transaction.atomic
+def create_notification(
+    recipient: User,
+    verb: str,
+    actor: models.Model | None = None,
+    target: models.Model | None = None,
+    action_object: models.Model | None = None,
+    description: str = "",
+    level: str = "info",
+    data: dict[str, Any] | None = None,
+    public: bool = True,
+) -> Notification:
     actor = actor or recipient
     notification = Notification.objects.create(
         recipient=recipient,
@@ -67,7 +106,7 @@ def create_notification(recipient, verb, actor=None, target=None, action_object=
         data=data or {},
         public=public,
     )
-    transaction.on_commit(lambda: _send_external_notification(notification))
+    _send_external_notification(notification)
     from notification.search import schedule_index_notification
     schedule_index_notification(notification.pk)
     return notification
@@ -157,11 +196,15 @@ def store_withdrawed_cash_nofication(store, amount=None, actor=None):
     return [*staff_notifications, owner_notification]
 
 
-def store_moderation_notification(store, actor=None, blocked=True):
+def store_moderation_notification(
+    store: Store,
+    actor: User | None = None,
+    blocked: bool = True,
+) -> Notification:
     verb = "store blocked" if blocked else "store unblocked"
     level = "warning" if blocked else "success"
     description = (
-        f"{store.name} has been blocked."
+        f"{store.name} has been blocked. Reason: {store.blocked_reason or 'Contact support for details.'}"
         if blocked else f"{store.name} has been unblocked."
     )
     return create_notification(
@@ -173,6 +216,47 @@ def store_moderation_notification(store, actor=None, blocked=True):
         level=level,
         data={"event": "store_blocked" if blocked else "store_unblocked", "store_id": store.pk},
     )
+
+
+def account_access_notification(
+    user: User,
+    previous_active: bool,
+    previous_staff: bool,
+) -> None:
+    if (user.is_active, user.is_staff) == (previous_active, previous_staff):
+        return
+    messages: list[str] = []
+    if user.is_active != previous_active:
+        messages.append(
+            "Your account access has been restored. You can sign in again."
+            if user.is_active else
+            "Your account access has been suspended. Contact support for details."
+        )
+    if user.is_staff != previous_staff:
+        messages.append(
+            "Backoffice access has been granted to your account."
+            if user.is_staff else "Backoffice access has been removed from your account."
+        )
+    create_notification(
+        recipient=user,
+        verb="account access updated",
+        description=" ".join(messages),
+        data={"event": "account_access_changed"},
+    )
+
+
+def password_changed_notification(user: User) -> None:
+    create_notification(
+        recipient=user,
+        verb="password changed",
+        description=(
+            "Your ProAce password has been changed. If you did not make this change, "
+            "reset your password immediately and contact support."
+        ),
+        data={"event": "password_changed"},
+    )
+
+
 def _filter_notifications_by_store(queryset, store_param):
     if not store_param or store_param == "all":
         return queryset

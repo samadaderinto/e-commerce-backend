@@ -84,6 +84,8 @@ class StoreInfo(DatesMixin):
     pinned_products = models.JSONField(default=list, blank=True)
     avatar_url = models.URLField(max_length=1000, null=True, blank=True)
     banner_url = models.URLField(max_length=1000, null=True, blank=True)
+    avatar_image = models.ImageField(upload_to='store-branding/avatars/', blank=True, default='')
+    banner_image = models.ImageField(upload_to='store-branding/banners/', blank=True, default='')
     website = models.URLField(max_length=500, null=True, blank=True)
     instagram = models.URLField(blank=True, default='')
     twitter = models.URLField(blank=True, default='')
@@ -258,4 +260,3 @@ class StorePayout(DatesMixin):
 
     class Meta:
         ordering = ["-created"]
-

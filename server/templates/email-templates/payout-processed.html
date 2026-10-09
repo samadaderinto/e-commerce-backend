@@ -1,0 +1,11 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  {% if store_name %}<p>Store: {{ store_name }}</p>{% endif %}
+  {% if amount != None %}<p>Amount: ${{ amount }} USD</p>{% endif %}
+  {% if reference %}<p>Reference ID: {{ reference }}</p>{% endif %}
+  {% if status %}<p>Status: {{ status }}</p>{% endif %}
+  {% if bank_name %}<p>Destination bank: {{ bank_name }}</p>{% endif %}
+  {% if notes %}<p>Notes: {{ notes }}</p>{% endif %}
+{% endblock %}
+{% block action_url %}{{ dashboard_url }}{% endblock %}
+{% block action_label %}View payouts{% endblock %}

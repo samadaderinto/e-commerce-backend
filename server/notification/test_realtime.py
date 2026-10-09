@@ -35,7 +35,7 @@ class RealtimeTests(TestCase):
                 product.available = 4
                 product.save()
         recipients = set(Notification.objects.filter(data__event='inventory_low').values_list('recipient_id', flat=True))
-        self.assertEqual(recipients, {self.staff.pk, self.admin.pk})
+        self.assertEqual(recipients, {self.owner.pk, self.staff.pk, self.admin.pk})
         self.assertNotIn(self.unassigned.pk, set(operators(self.store).values_list('pk', flat=True)))
 
     def test_stream_requires_authentication_and_ignores_requested_rooms(self):

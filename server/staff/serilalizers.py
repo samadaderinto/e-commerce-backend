@@ -143,7 +143,8 @@ class StaffPermissionSerializer(serializers.Serializer):
             raise serializers.ValidationError("Provide is_active or is_staff.")
         return attrs
 
-    def update(self, user):
+    def update(self, user: User) -> User:
+        previous_active, previous_staff = user.is_active, user.is_staff
         if user.is_superuser or user.is_business_admin:
             raise serializers.ValidationError("Administrator accounts cannot be changed by peers.")
         if self.validated_data.get("is_active") and user.is_staff and not user.staff_email_verified:
@@ -154,6 +155,9 @@ class StaffPermissionSerializer(serializers.Serializer):
             user.is_staff = self.validated_data["is_staff"]
         user.credential_version += 1
         user.save(update_fields=["is_active", "is_staff", "credential_version"])
+        from notification.views import account_access_notification
+
+        account_access_notification(user, previous_active, previous_staff)
         return user
 
 

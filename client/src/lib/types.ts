@@ -43,6 +43,7 @@ export type Product = LifecycleTimestamps & {
   store_verified?: boolean;
   seller_tier?: SellerTier;
   is_digital: boolean;
+  digital_preview_watermark?: boolean;
   id: number;
   title: string;
   description: string;

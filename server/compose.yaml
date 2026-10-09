@@ -180,7 +180,8 @@ services:
         mc admin user add local "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}" 2>/dev/null || true;
         mc admin policy attach local readwrite --user "$${MINIO_ACCESS_KEY}";
         mc admin policy attach local consoleAdmin --user "$${MINIO_ROOT_USER}" 2>/dev/null || true;
-        mc anonymous set download "local/$${MINIO_BUCKET_NAME}/static" || true
+        mc anonymous set download "local/$${MINIO_BUCKET_NAME}/static" || true;
+        mc anonymous set download "local/$${MINIO_BUCKET_NAME}/media" || true
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.5
     restart: unless-stopped

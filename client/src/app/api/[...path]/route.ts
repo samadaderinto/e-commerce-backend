@@ -35,6 +35,12 @@ async function handler(
   }
 
   const route = path.join('/');
+  const publicRead = request.method === 'GET' && (
+    route === 'products' ||
+    /^products\/\d+$/.test(route) ||
+    /^stores\/\d+\/public$/.test(route) ||
+    /^stores\/\d+\/public\/images\/(avatar|banner)$/.test(route)
+  );
   const access = request.cookies.get('proace_access')?.value;
   const refresh = request.cookies.get('proace_refresh')?.value;
   const headers: Record<string, string> = {};
@@ -116,7 +122,7 @@ async function handler(
       });
 
       invalidRefresh = renewed.status === 400 || renewed.status === 401;
-      if (renewed.status >= 500) {
+      if (renewed.status >= 500 && !publicRead) {
         return NextResponse.json(
           { detail: 'Authentication is temporarily unavailable. Please retry.' },
           { status: 503 }
@@ -144,6 +150,24 @@ async function handler(
           redirect: 'manual',
           signal: retryTimeoutSignal,
         });
+      }
+    }
+
+    // Public browsing remains available when a saved session is no longer valid.
+    // Django still applies its anonymous visibility rules to the retry.
+    if (upstream.status === 401 && publicRead && access) {
+      delete headers.Authorization;
+      upstream = await fetch(`${activeApi}/${route}/${request.nextUrl.search}`, {
+        method: 'GET',
+        headers,
+        cache: 'no-store',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!refresh || invalidRefresh || newAccess) {
+        invalidRefresh = true;
+        newAccess = undefined;
+        newRefresh = undefined;
       }
     }
 
@@ -202,6 +226,10 @@ async function handler(
           ...options,
           maxAge: accessCookieMaxAge(newAccess),
         });
+      }
+      if (invalidRefresh) {
+        response.cookies.delete('proace_access');
+        response.cookies.delete('proace_refresh');
       }
       return response;
     }

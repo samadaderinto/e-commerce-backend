@@ -351,3 +351,19 @@ class PaymentRefundAndTransitionServiceTests(TestCase):
                 reason="Attempting reactivation.",
             )
         self.assertIn("Cancelled orders cannot be modified", str(ctx.exception))
+
+
+    def test_refund_decision_sends_one_html_email_to_buyer(self) -> None:
+        from notification.models import NotificationDelivery
+
+        order = self._create_order(payment_type="card")
+        refund = Refund.objects.create(
+            email=self.customer.email, order=order, reason="Return",
+            refund_type=Refund.REFUND_TYPE_STORE_CREDIT,
+        )
+        with patch("notification.delivery._dispatch_delivery"), patch("notification.realtime.broker"), patch("notification.search.schedule_index_notification"):
+            with self.captureOnCommitCallbacks(execute=True):
+                process_order_refund(refund, self.staff)
+        delivery = NotificationDelivery.objects.get(recipient=self.customer)
+        self.assertTrue(delivery.is_html)
+        self.assertIn("Approved", delivery.body)

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, FormEvent, ReactNode } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, CheckCheck, ChevronDown, Heart, Inbox, Landmark, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
+import { Activity, Archive, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, CheckCheck, ChevronDown, DollarSign, Heart, Inbox, Landmark, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
 import { api, categories } from '@/lib/api';
 import type { NotificationCounts, NotificationItem, Page, Store, User } from '@/lib/types';
 import { getFirebaseMessaging, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
@@ -40,6 +40,11 @@ export function Shell({ children }: { children: ReactNode }) {
       { href: '/admin/refunds', label: 'Refunds', icon: RotateCcw },
       { href: '/admin/stores', label: 'Store directory', icon: StoreIcon },
       { href: '/merchant', label: 'Stores & products', icon: ShoppingBag },
+      { href: '/admin/payouts', label: 'Merchant payouts', icon: DollarSign },
+      { href: '/admin/users', label: 'Users directory', icon: UserRound },
+      ...((user?.is_superuser || user?.is_business_admin)
+        ? [{ href: '/admin/commission', label: 'Commission withdrawals', icon: DollarSign }]
+        : []),
       ...((user?.is_superuser || user?.is_business_admin) ? [{ href: '/admin/staff', label: 'Staff team', icon: UsersRound }] : []),
     ];
     return (
@@ -70,6 +75,18 @@ export function Shell({ children }: { children: ReactNode }) {
                 </Link>
               );
             })}
+            {user?.is_superuser && (
+              <a
+                href={process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}
+                target="_blank"
+                rel="noreferrer"
+                title="Open Grafana Live Telemetry & Metrics (Technical admin sign-in required)"
+              >
+                <Activity size={17} />
+                <span>Live Metrics (Grafana)</span>
+                <ArrowUpRight size={14} />
+              </a>
+            )}
           </nav>
         </header>
         <main id="main">

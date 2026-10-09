@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+  </head>
+  <body style="margin: 0; padding: 0; background: #f4f6f1; font-family: Inter, Arial, sans-serif; color: #17251b;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+      <tr>
+        <td align="center" style="padding: 24px 12px;">
+          <!--[if mso]><table role="presentation" width="600"><tr><td><![endif]-->
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; background: #ffffff;">
+            <tr>
+              <td style="padding: 24px; background: #17251b; color: #ffffff; font-size: 26px; font-weight: bold;">
+                proace<span style="color: #44cf9c;">®</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 28px 24px; line-height: 1.6;">
+                <h1 style="font-size: 24px; margin: 0 0 20px;">{{ title }}</h1>
+                <p>Hello{% if firstname %} {{ firstname }}{% endif %},</p>
+                {% if message %}<p>{{ message }}</p>{% endif %}
+                {% block details %}{% endblock %}
+                <p style="margin-top: 28px;">
+                  <a href="{% block action_url %}{{ frontend_url }}/login{% endblock %}" style="display: inline-block; padding: 12px 20px; background: #44cf9c; color: #17251b; text-decoration: none; font-weight: bold;">
+                    {% block action_label %}Sign in to ProAce{% endblock %}
+                  </a>
+                </p>
+                <p>Need help? Contact <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding: 20px 24px; background: #f4f6f1; color: #526158; font-size: 12px;">
+                This is a service notification about your ProAce account. Never share your password or verification codes.
+              </td>
+            </tr>
+          </table>
+          <!--[if mso]></td></tr></table><![endif]-->
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

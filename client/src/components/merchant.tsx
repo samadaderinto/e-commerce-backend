@@ -3,16 +3,17 @@
 import { browserTimeZone, calendarDateLabel, toLocalDateTimeInput } from '@/lib/datetime';
 
 import { activityDate } from './activity';
+import { StoreBranding } from './store-branding';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { FormEvent, useState, useEffect, useRef } from 'react';
+import { FormEvent, useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
-import type { Dashboard, MerchantProduct, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent } from '@/lib/types';
+import type { Dashboard, MerchantProduct, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent, StoreProfile } from '@/lib/types';
 import { useShop } from './providers';
 import { Gate } from './account';
-import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, ProductImage, ProductGallery, FlashCountdown, Status, VerifiedBadge } from './ui';
+import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, ProductImage, ProductGallery, FlashCountdown, Status, VerifiedBadge, normalizeImageUrl } from './ui';
 
 type MerchantOrder = {
   id: number;
@@ -1247,6 +1248,23 @@ function parseCsvRows(text: string): string[][] {
   );
 }
 
+const DIGITAL_IMAGE_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'webp', 'svg', 'gif', 'avif', 'bmp', 'tiff']);
+
+function isDigitalImage(file: File | null, url: string | null | undefined): boolean {
+  if (file) {
+    if (file.type && file.type.startsWith('image/')) return true;
+    const clean = (file.name || '').split('?')[0].split('#')[0];
+    const ext = clean.split('.').pop()?.toLowerCase();
+    return ext ? DIGITAL_IMAGE_EXTENSIONS.has(ext) : false;
+  }
+  if (url) {
+    const clean = url.split('?')[0].split('#')[0];
+    const ext = clean.split('.').pop()?.toLowerCase();
+    return ext ? DIGITAL_IMAGE_EXTENSIONS.has(ext) : false;
+  }
+  return false;
+}
+
 function ProductEditor({ store, id }: { store: Store; id: string }) {
   const [savedProductId, setSavedProductId] = useState<number | null>(null);
   const persistedId = useRef<number | null>(id === 'new' ? null : Number(id));
@@ -1270,6 +1288,8 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
 
   const [digitalFile, setDigitalFile] = useState<File | null>(null);
   const [digitalPreviewUrl, setDigitalPreviewUrl] = useState<string | null>(null);
+  const [digitalUrlInput, setDigitalUrlInput] = useState<string | null>(null);
+  const [digitalWatermark, setDigitalWatermark] = useState<boolean | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const [showDigitalUrlInput, setShowDigitalUrlInput] = useState(false);
 
@@ -1310,47 +1330,130 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       return;
     }
     setDigitalFile(file);
+    if (!isDigitalImage(file, null)) {
+      setDigitalWatermark(false);
+    }
     if (digitalPreviewUrl) URL.revokeObjectURL(digitalPreviewUrl);
     setDigitalPreviewUrl(URL.createObjectURL(file));
   }
 
-  function openPreview() {
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const getPreviewData = useCallback((): PreviewProduct | null => {
     const form = formRef.current;
-    if (!form) return;
+    if (!form) return null;
     const values = Object.fromEntries(new FormData(form)) as Record<string, string>;
-    const affiliate = values.product_type === 'affiliate_clickbank';
-    const digital = !affiliate && values.is_digital === 'on';
+    const affiliate = values.product_type === 'affiliate_clickbank' || effectiveProductType === 'affiliate_clickbank';
+    const digital = !affiliate && (values.is_digital === 'on' || effectiveIsDigital);
     const price = Number(values.price);
-    const preview: PreviewProduct = {
-      title: values.title?.trim() || 'Untitled product', description: values.description?.trim() || 'Product description coming soon.',
-      brand: values.brand?.trim() || store.name, category: values.category || 'General', is_digital: digital,
-      price: Number.isFinite(price) && price > 0 ? price : 0,
-      sale_price: Number.isFinite(price) && price > 0 ? price * (100 - Number(values.discount || 0)) / 100 : 0,
-      discount: Number(values.discount || 0), available: affiliate ? 999 : (digital ? 0 : Number(values.available || 0)),
-      image: effectiveCoverImage || 'https://placehold.co/900x900/1b2921/9bd7b5?text=Product+Preview',
-      images: [...new Set([effectiveCoverImage, ...effectiveVariants.map(v => v.image_url || '')].filter(Boolean))],
-      flash_sale_end: values.flash_sale_end ? new Date(values.flash_sale_end).toISOString() : null,
-      digital_preview_watermark: digital && values.digital_preview_watermark === 'on',
-      variants: (digital || affiliate) ? [] : effectiveVariants.filter(v => v.name.trim()).map(v => ({ ...v, price_delta: v.price_delta || '0.00', available: Number(v.available || 0) })),
-      digital_file_name: digitalFile?.name || (values.digital_file_url ? 'Digital download' : undefined), digital_file_url: digitalPreviewUrl || values.digital_file_url || undefined,
+    const activeFileUrl = values.digital_file_url || digitalPreviewUrl || product.data?.digital_file_url || '';
+    const isImage = isDigitalImage(digitalFile, activeFileUrl);
+    const galleryUrls = (product.data?.images || []).map((img) => img.image);
+    const fallbackCover = effectiveCoverImage || product.data?.image_url || 'https://placehold.co/900x900/1b2921/9bd7b5?text=Product+Preview';
+    return {
+      title: values.title?.trim() || product.data?.title || 'Untitled product',
+      description: values.description?.trim() || product.data?.description || 'Product description coming soon.',
+      brand: values.brand?.trim() || store.name,
+      category: values.category || product.data?.category || 'General',
+      is_digital: digital,
+      price: Number.isFinite(price) && price > 0 ? price : Number(product.data?.price || 0),
+      sale_price: Number.isFinite(price) && price > 0
+        ? (price * (100 - Number(values.discount || 0))) / 100
+        : (Number(product.data?.price || 0) * (100 - Number(product.data?.discount || 0))) / 100,
+      discount: Number(values.discount ?? product.data?.discount ?? 0),
+      available: affiliate ? 999 : digital ? 0 : Number(values.available ?? product.data?.available ?? 0),
+      image: fallbackCover,
+      images: Array.from(
+        new Set([
+          fallbackCover,
+          product.data?.image_url,
+          ...galleryUrls,
+          ...effectiveVariants.map((v) => v.image_url || ''),
+        ])
+      ).filter((x): x is string => Boolean(x)),
+      flash_sale_end: values.flash_sale_end ? new Date(values.flash_sale_end).toISOString() : (product.data?.flash_sale_end || null),
+      digital_preview_watermark: digital && isImage && (digitalWatermark ?? (values.digital_preview_watermark === 'on')),
+      variants: digital || affiliate
+        ? []
+        : effectiveVariants
+            .filter((v) => v.name && v.name.trim())
+            .map((v) => ({
+              ...v,
+              price_delta: v.price_delta || '0.00',
+              available: Number(v.available || 0),
+            })),
+      digital_file_name: digitalFile?.name || (values.digital_file_url ? 'Digital download' : undefined),
+      digital_file_url: digitalPreviewUrl || values.digital_file_url || product.data?.digital_file_url || undefined,
       product_type: affiliate ? 'affiliate_clickbank' : 'standard',
       affiliate_hoplink: values.affiliate_hoplink?.trim() || '',
       affiliate_vendor_nickname: values.affiliate_vendor_nickname?.trim() || '',
       affiliate_button_text: values.affiliate_button_text?.trim() || 'Buy on Partner Site',
     };
-    const tab: Window | null = window.open('about:blank', '_blank');
+  }, [
+    effectiveProductType,
+    effectiveIsDigital,
+    digitalFile,
+    digitalPreviewUrl,
+    product.data,
+    effectiveCoverImage,
+    effectiveVariants,
+    digitalWatermark,
+    store.name,
+  ]);
+
+  const syncPreviewStorage = useCallback((previewData?: PreviewProduct | null) => {
+    const data = previewData ?? getPreviewData();
+    if (!data) return;
+    try {
+      const serialized = JSON.stringify(data);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('proace-product-preview', serialized);
+        sessionStorage.setItem('proace-product-preview', serialized);
+        if (typeof BroadcastChannel !== 'undefined') {
+          const channel = new BroadcastChannel('proace-product-preview');
+          channel.postMessage(data);
+          channel.close();
+        }
+      }
+    } catch {
+      /* ignore storage quota or serialization errors */
+    }
+  }, [getPreviewData]);
+
+  const scheduleSync = useCallback(() => {
+    if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    syncTimeoutRef.current = setTimeout(() => {
+      syncPreviewStorage();
+    }, 150);
+  }, [syncPreviewStorage]);
+
+  useEffect(() => {
+    syncPreviewStorage();
+    return () => {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+    };
+  }, [syncPreviewStorage]);
+
+  function openPreview() {
+    const preview = getPreviewData();
+    if (!preview) return;
+    syncPreviewStorage(preview);
+    const tab: Window | null = window.open('/merchant/products/preview', 'proace-product-preview');
     if (!tab) {
       setError('Allow pop-ups to open the product preview. Your draft is still here.');
       return;
     }
     try {
       tab.sessionStorage.setItem('proace-product-preview', JSON.stringify(preview));
-      tab.opener = null;
-      tab.location.replace('/merchant/products/preview');
+      tab.focus();
       setError('');
     } catch {
-      tab.close();
-      setError('Could not open the preview. Please try again.');
+      try {
+        tab.focus();
+      } catch {
+        /* ignore */
+      }
+      setError('');
     }
   }
 
@@ -1390,6 +1493,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       // Use a temporary valid placeholder while we upload the digital file to MinIO
       fileUrl = `https://minio.local/pending-asset-${Date.now()}`;
     }
+    const isImage = isDigitalImage(digitalFile, fileUrl);
 
     const payload = {
       ...form,
@@ -1403,13 +1507,13 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       flash_sale_end: flashEnd,
       variants: validVariants,
       weight: (affiliate || digital) ? '0.00' : (form.weight || '1.00'),
-      length: (affiliate || digital) ? null : Number(form.length),
-      width: (affiliate || digital) ? null : Number(form.width),
-      height: (affiliate || digital) ? null : Number(form.height),
+      length: (affiliate || digital) ? null : (form.length ? Number(form.length) : null),
+      width: (affiliate || digital) ? null : (form.width ? Number(form.width) : null),
+      height: (affiliate || digital) ? null : (form.height ? Number(form.height) : null),
       visibility: form.visibility === 'on',
       is_digital: digital,
       digital_file_url: digital ? fileUrl : '',
-      digital_preview_watermark: digital ? form.digital_preview_watermark === 'on' : false,
+      digital_preview_watermark: digital && isImage ? (digitalWatermark ?? (form.digital_preview_watermark === 'on')) : false,
       tags: form.tags ? form.tags.split(',').map(value => value.trim()).filter(Boolean) : [],
     };
     try {
@@ -1458,6 +1562,10 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   if (product.error) return <ErrorState error={product.error} />;
 
   const data = product.data;
+  const activeDigitalUrl = digitalUrlInput ?? data?.digital_file_url ?? '';
+  const isImageDigitalAsset = isDigitalImage(digitalFile, activeDigitalUrl);
+  const hasDigitalAsset = Boolean(digitalFile || (activeDigitalUrl && activeDigitalUrl.trim().length > 0));
+  const effectiveWatermark = isImageDigitalAsset ? (digitalWatermark ?? data?.digital_preview_watermark ?? false) : false;
 
   return (
     <>
@@ -1470,15 +1578,21 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           <h1>{isNew ? 'Something new to discover.' : 'The details make it yours.'}</h1>
           <p>{isNew ? 'Give your next best-seller a good start.' : `Editing ${data?.title}`}</p>
         </div>
-        {data?.visibility && (
-          <Link className="button secondary" href={`/products/${productId}?preview=1`}>
+        {Boolean(data?.visibility && store.status === 'active' && store.verified_at) && (
+          <Link className="button secondary" href={`/products/${productId}`}>
             <Eye size={16} />
             View listing
           </Link>
         )}
       </div>
 
-      <form ref={formRef} className="product-editor" onSubmit={save}>
+      <form
+        ref={formRef}
+        className="product-editor"
+        onSubmit={save}
+        onInput={scheduleSync}
+        onChange={scheduleSync}
+      >
         <section className="form-stack">
           <h2>Product information</h2>
           {store.is_official || isAffiliate ? (
@@ -1629,7 +1743,23 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
             <span>{(digitalFile.size / (1024 * 1024)).toFixed(2)} MB · Uploads to MinIO storage</span>
             <span className="upload-preview-badge">Ready to upload</span>
           </div>
-          <button type="button" className="icon-button" aria-label="Remove digital file" onClick={() => setDigitalFile(null)}><X size={16} /></button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Remove digital file"
+            onClick={() => {
+              setDigitalFile(null);
+              if (!isDigitalImage(null, activeDigitalUrl)) {
+                setDigitalWatermark(false);
+              }
+              if (digitalPreviewUrl) {
+                URL.revokeObjectURL(digitalPreviewUrl);
+                setDigitalPreviewUrl(null);
+              }
+            }}
+          >
+            <X size={16} />
+          </button>
         </div>
       ) : data?.digital_file_url ? (
         <div className="upload-preview-card">
@@ -1645,7 +1775,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
             </a>
             <label className="button secondary" style={{ fontSize: '11px', padding: '6px 10px', cursor: 'pointer' }}>
               <Upload size={13} /> Replace
-              <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx" style={{ display: 'none' }} onChange={handleDigitalFileChange} />
+              <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx,.png,.jpg,.jpeg,.webp,.svg,.avif" style={{ display: 'none' }} onChange={handleDigitalFileChange} />
             </label>
           </div>
         </div>
@@ -1653,8 +1783,8 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         <label className="upload-dropzone">
           <div className="upload-dropzone-icon"><FileText size={20} /></div>
           <span className="upload-dropzone-text">Click or drag digital file to upload</span>
-          <span className="upload-dropzone-sub">PDF, ZIP, EPUB, MP3, MP4 up to 50 MB · Saved directly to MinIO storage</span>
-          <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx" style={{ display: 'none' }} onChange={handleDigitalFileChange} />
+          <span className="upload-dropzone-sub">PDF, ZIP, EPUB, MP3, MP4, PNG, JPG up to 50 MB · Saved directly to MinIO storage</span>
+          <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx,.png,.jpg,.jpeg,.webp,.svg,.avif" style={{ display: 'none' }} onChange={handleDigitalFileChange} />
         </label>
       )}
       <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-end' }}>
@@ -1662,13 +1792,31 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           {showDigitalUrlInput ? 'Hide download URL field' : 'Or enter external download link'}
         </button>
       </div>
-      <label className="check-row">
+      <label
+        className={`check-row ${!isImageDigitalAsset ? 'disabled' : ''}`}
+        style={!isImageDigitalAsset ? { opacity: 0.65, cursor: 'not-allowed' } : undefined}
+      >
         <input
           type="checkbox"
           name="digital_preview_watermark"
-          defaultChecked={data?.digital_preview_watermark || false}
+          checked={effectiveWatermark}
+          disabled={!isImageDigitalAsset}
+          onChange={(event) => {
+            if (isImageDigitalAsset) {
+              setDigitalWatermark(event.target.checked);
+            }
+          }}
         />
-        Protect image previews with a buyer watermark
+        <span>
+          Protect image previews with a buyer watermark
+          <span style={{ display: 'block', fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
+            {hasDigitalAsset
+              ? isImageDigitalAsset
+                ? 'Overlays a PROACE PREVIEW watermark on storefront image gallery to protect your digital artwork before purchase.'
+                : 'Not applicable — buyer watermarking only applies to digital image and artwork files, not PDF, audio, or software downloads.'
+              : 'Upload a digital image file (PNG, JPG, WebP, SVG) to enable preview watermarking.'}
+          </span>
+        </span>
       </label>
       {showDigitalUrlInput && (
         <Field label="Download URL">
@@ -1678,6 +1826,12 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
             maxLength={1000}
             defaultValue={data?.digital_file_url}
             placeholder="https://…"
+            onChange={(e) => {
+              setDigitalUrlInput(e.target.value);
+              if (!isDigitalImage(digitalFile, e.target.value)) {
+                setDigitalWatermark(false);
+              }
+            }}
           />
         </Field>
       )}
@@ -1910,7 +2064,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       <div className="upload-preview-meta">
         <strong>Cover photo</strong>
         <span style={{ fontSize: '11px', color: 'var(--muted)', wordBreak: 'break-all' }}>
-          {effectiveCoverImage}
+          {normalizeImageUrl(effectiveCoverImage)}
         </span>
         <span className="upload-preview-badge">Active cover</span>
       </div>
@@ -2061,7 +2215,11 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
   const { notify } = useShop(); const client = useQueryClient(); const [uploading, setUploading] = useState(false);
   const [digitalUploading, setDigitalUploading] = useState(false);
   const base = `stores/${store.id}/products/${product.id}`;
-  const specs = useQuery({ queryKey: ['specs', product.id], queryFn: () => api<Record<string, string>>(`${base}/specifications`) });
+  const specs = useQuery({
+    queryKey: ['specs', product.id],
+    queryFn: () => api<Record<string, string>>(`${base}/specifications`),
+    enabled: !product.is_digital && product.product_type !== 'affiliate_clickbank',
+  });
   async function uploadImages(event: React.ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget;
     const files = Array.from(input.files || []);
@@ -2210,36 +2368,38 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
         </div>
       )}
 
-      <details className="spec-editor">
-        <summary>Product specifications</summary>
-        {specs.isLoading ? <Loading /> : specs.error ? <ErrorState error={specs.error} /> : (
-          <form className="form-stack" onSubmit={async event => {
-            event.preventDefault();
-            const payload = Object.fromEntries(new FormData(event.currentTarget));
-            try {
-              await api(`${base}/specifications`, 'PUT', payload);
-              notify('Specifications saved');
-              await specs.refetch();
-            } catch (error) {
-              notify((error as Error).message, true);
-            }
-          }}>
-            <div className="form-row">
-              <Field label="SKU / serial number"><input name="serial" maxLength={25} required defaultValue={specs.data?.serial} /></Field>
-              <Field label="Colour"><input name="color" maxLength={25} required defaultValue={specs.data?.color} /></Field>
-            </div>
-            <Field label="Attributes"><input name="attributes" maxLength={250} required defaultValue={specs.data?.attributes} /></Field>
-            <div className="form-row">
-              {['height', 'width', 'breadth', 'weight'].map(field => (
-                <Field label={field.charAt(0).toUpperCase() + field.slice(1)} key={field}>
-                  <input type="number" name={field} min="0.01" max="99.99" step="0.01" required defaultValue={specs.data?.[field]} />
-                </Field>
-              ))}
-            </div>
-            <button className="button">Save specifications</button>
-          </form>
-        )}
-      </details>
+      {!product.is_digital && product.product_type !== 'affiliate_clickbank' && (
+        <details className="spec-editor">
+          <summary>Product specifications</summary>
+          {specs.isLoading ? <Loading /> : specs.error ? <ErrorState error={specs.error} /> : (
+            <form className="form-stack" onSubmit={async event => {
+              event.preventDefault();
+              const payload = Object.fromEntries(new FormData(event.currentTarget));
+              try {
+                await api(`${base}/specifications`, 'PUT', payload);
+                notify('Specifications saved');
+                await specs.refetch();
+              } catch (error) {
+                notify((error as Error).message, true);
+              }
+            }}>
+              <div className="form-row">
+                <Field label="SKU / serial number"><input name="serial" maxLength={25} required defaultValue={specs.data?.serial} /></Field>
+                <Field label="Colour"><input name="color" maxLength={25} required defaultValue={specs.data?.color} /></Field>
+              </div>
+              <Field label="Attributes"><input name="attributes" maxLength={250} required defaultValue={specs.data?.attributes} /></Field>
+              <div className="form-row">
+                {['height', 'width', 'breadth', 'weight'].map(field => (
+                  <Field label={field.charAt(0).toUpperCase() + field.slice(1)} key={field}>
+                    <input type="number" name={field} min="0.01" max="99.99" step="0.01" required defaultValue={specs.data?.[field]} />
+                  </Field>
+                ))}
+              </div>
+              <button className="button">Save specifications</button>
+            </form>
+          )}
+        </details>
+      )}
     </section>
   );
 }
@@ -3251,13 +3411,12 @@ function MerchantNotifications({ store }: { store: Store }) {
 
 function MerchantSettings({ store }: { store: Store }) {
   const { notify } = useShop(); const client = useQueryClient(); const [busy, setBusy] = useState(false);
-  const profile = useQuery({ queryKey: ['store-profile', store.id], queryFn: () => api<Record<string, string>>(`stores/${store.id}/profile`) });
+  const profile = useQuery({ queryKey: ['store-profile', store.id], queryFn: () => api<StoreProfile>(`stores/${store.id}/profile`) });
   const address = useQuery({ queryKey: ['store-address', store.id], queryFn: () => api<Record<string, string>>(`stores/${store.id}/pickup-address`) });
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
-
-  const effectiveAvatar = avatarUrl ?? profile.data?.avatar_url ?? '';
-  const effectiveBanner = bannerUrl ?? profile.data?.banner_url ?? '';
+  async function brandingSaved(updatedProfile: StoreProfile): Promise<void> {
+    client.setQueryData<StoreProfile>(['store-profile', store.id], updatedProfile);
+    await client.invalidateQueries({ queryKey: ['public-store'] });
+  }
 
   async function connectStripe() {
     try {
@@ -3275,8 +3434,6 @@ function MerchantSettings({ store }: { store: Store }) {
         email: data.email,
         bio: data.bio,
         announcement: data.announcement,
-        avatar_url: data.avatar_url,
-        banner_url: data.banner_url,
         website: data.website,
         phone1: data.phone1,
         whatsapp: data.whatsapp,
@@ -3318,28 +3475,13 @@ function MerchantSettings({ store }: { store: Store }) {
         <ErrorState error={(profile.error || address.error)!} />
       ) : (
         <form className="form-stack settings-form" onSubmit={submit}>
-          <h2>Store branding (X.com style)</h2>
-          <div className="form-row">
-            <Field label="Profile picture / Logo URL (Circular avatar)">
-              <input
-                name="avatar_url"
-                type="url"
-                placeholder="https://…/logo.png"
-                defaultValue={profile.data?.avatar_url}
-                onChange={e => setAvatarUrl(e.target.value)}
-              />
-            </Field>
-            <Field label="Header / Cover banner URL (Wide banner)">
-              <input
-                name="banner_url"
-                type="url"
-                placeholder="https://…/banner.jpg"
-                defaultValue={profile.data?.banner_url}
-                onChange={e => setBannerUrl(e.target.value)}
-              />
-            </Field>
-          </div>
-          <Field label="Store Announcement Bar (Promotional Banner)">
+          <h2>Store branding</h2>
+          <StoreBranding
+            store={store}
+            profile={profile.data}
+            onSaved={brandingSaved}
+          />
+          <Field label="Store announcement">
             <input
               name="announcement"
               defaultValue={profile.data?.announcement || ''}
@@ -3347,28 +3489,6 @@ function MerchantSettings({ store }: { store: Store }) {
               maxLength={255}
             />
           </Field>
-
-          {(effectiveAvatar || effectiveBanner) && (
-            <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--line)', background: 'var(--soft)', marginBottom: '15px' }}>
-              <div style={{ height: '110px', background: effectiveBanner ? `url(${effectiveBanner}) center/cover no-repeat` : 'linear-gradient(135deg, #1d9bf0, #173d2c)', position: 'relative' }} />
-              <div style={{ padding: '0 20px 16px', display: 'flex', alignItems: 'flex-end', gap: '15px', marginTop: '-35px' }}>
-                <div style={{ width: '70px', height: '70px', borderRadius: '50%', border: '3px solid var(--paper)', overflow: 'hidden', background: 'var(--soft)', display: 'grid', placeItems: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}>
-                  {effectiveAvatar ? <img src={effectiveAvatar} alt={store.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : <span style={{ fontSize: '24px', fontWeight: 'bold', color: 'var(--green)' }}>{store.name?.[0]}</span>}
-                </div>
-                <div style={{ paddingBottom: '4px' }}>
-                  <strong style={{ fontSize: '15px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    {store.name}
-                    <VerifiedBadge
-                      tier={store.is_official ? 'official' : 'starter'}
-                      tierData={store.seller_tier}
-                      size={17}
-                    />
-                  </strong>
-                  <small className="muted">@{store.username || 'store'}</small>
-                </div>
-              </div>
-            </div>
-          )}
 
           <h2>Store profile</h2>
           <div className="form-row">
@@ -3426,16 +3546,66 @@ function MerchantSettings({ store }: { store: Store }) {
 
 export function ProductPreviewPage(): React.JSX.Element {
   const [selectedVariant, setSelectedVariant] = useState<number>(0);
+  const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
   const [preview, setPreview] = useState<PreviewProduct | null>(null);
   const [ready, setReady] = useState<boolean>(false);
-  useEffect(() => {
+
+  const loadPreview = useCallback((): boolean => {
     try {
-      const saved: string | null = sessionStorage.getItem('proace-product-preview');
-      if (saved) setPreview(JSON.parse(saved) as PreviewProduct);
-    } catch { /* Show an empty state when tab storage is unavailable. */ }
-    setReady(true);
+      const local = typeof window !== 'undefined' ? localStorage.getItem('proace-product-preview') : null;
+      if (local) {
+        setPreview(JSON.parse(local) as PreviewProduct);
+        return true;
+      }
+      const session = typeof window !== 'undefined' ? sessionStorage.getItem('proace-product-preview') : null;
+      if (session) {
+        setPreview(JSON.parse(session) as PreviewProduct);
+        return true;
+      }
+    } catch {
+      /* Show an empty state when storage is unavailable. */
+    }
+    return false;
   }, []);
+
+  useEffect(() => {
+    loadPreview();
+    setReady(true);
+
+    function handleStorage(e: StorageEvent) {
+      if (e.key === 'proace-product-preview' && e.newValue) {
+        try {
+          setPreview(JSON.parse(e.newValue) as PreviewProduct);
+        } catch {
+          /* ignore malformed payloads */
+        }
+      }
+    }
+    window.addEventListener('storage', handleStorage);
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel('proace-product-preview');
+        channel.onmessage = (event: MessageEvent<PreviewProduct>) => {
+          if (event.data && typeof event.data === 'object') {
+            setPreview(event.data);
+          }
+        };
+      }
+    } catch {
+      /* BroadcastChannel not available */
+    }
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      if (channel) {
+        channel.close();
+      }
+    };
+  }, [loadPreview]);
+
   if (!ready) return <Loading />;
   if (!preview) return <Empty title="No product preview available" text="Open Preview from your product editor to see your unsaved listing here." href="/merchant/products" label="Back to products" />;
   const activeVariant: ProductVariant | undefined = preview.variants[selectedVariant];
@@ -3455,12 +3625,38 @@ export function ProductPreviewPage(): React.JSX.Element {
               <div className="storefront-preview-desc">Preview only. Nothing has been saved, and purchase actions are disabled.</div>
             </div>
           </div>
-          <button type="button" className="button secondary storefront-preview-button" onClick={() => window.close()}>Close preview</button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="button secondary storefront-preview-button"
+              onClick={() => {
+                loadPreview();
+              }}
+              title="Sync latest changes made in your product editor"
+            >
+              <RotateCcw size={14} />
+              Sync changes
+            </button>
+            <button
+              type="button"
+              className="button secondary storefront-preview-button"
+              onClick={() => window.close()}
+            >
+              Close preview
+            </button>
+          </div>
         </div>
         <div className="product-detail">
           <div>
             <div style={{ position: 'relative' }}>
-              <ProductGallery images={previewImages} title={preview.title} discount={preview.discount} activeImage={activeVariant?.image_url || preview.image} />
+              <ProductGallery
+                key={preview.title + previewImages.join(',')}
+                images={previewImages}
+                title={preview.title}
+                discount={preview.discount}
+                activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? preview.image}
+                onImageChange={setSelectedGalleryImage}
+              />
               {preview.digital_preview_watermark && <span style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.55)', fontSize: 'clamp(18px, 4vw, 42px)', fontWeight: 700, transform: 'rotate(-24deg)', pointerEvents: 'none', textAlign: 'center' }}>PROACE PREVIEW</span>}
             </div>
           </div>
@@ -3497,7 +3693,10 @@ export function ProductPreviewPage(): React.JSX.Element {
                       type="button"
                       key={index}
                       aria-pressed={selectedVariant === index}
-                      onClick={() => setSelectedVariant(index)}
+                      onClick={() => {
+                        setSelectedVariant(index);
+                        setSelectedGalleryImage(variant.image_url || preview.image);
+                      }}
                       style={{
                         padding: '6px 14px',
                         borderRadius: '8px',

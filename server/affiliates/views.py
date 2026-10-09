@@ -42,6 +42,20 @@ class AffiliatesViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         marketer = serializer.save(user=request.user)
         AffiliateWallet.objects.get_or_create(user=request.user)
+        if created:
+            from utils.functions import send_mail
+            frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
+            referral_link = f"{frontend_url}/?ref={marketer.marketer_id}"
+            send_mail(
+                "affiliate",
+                request.user.email,
+                {
+                    "firstname": request.user.first_name,
+                    "referral_code": marketer.marketer_id,
+                    "referral_link": referral_link,
+                    "subject": "Welcome to the ProAce Affiliate Partner Program",
+                },
+            )
         return Response(
             MarketerSerializer(marketer).data,
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,

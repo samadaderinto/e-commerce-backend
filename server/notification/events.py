@@ -76,7 +76,9 @@ def inventory_changed(sender, instance, created, raw=False, **kwargs):
         for user_id in {product.store.user_id, *[user.pk for user in recipients]}:
             publish(user_id, {'event': 'inventory.changed', 'data': {'store_id': product.store_id, 'product_id': product.pk}})
         if low:
-            send(recipients, 'inventory_low', f'Low inventory: {product.title}', product,
+            recipients = {user.pk: user for user in recipients}
+            recipients[product.store.user_id] = product.store.user
+            send(recipients.values(), 'inventory_low', f'Low inventory: {product.title}', product,
                  {'store_id': product.store_id, 'product_id': product.pk, 'available': product.available})
     transaction.on_commit(committed)
 
@@ -101,7 +103,17 @@ def order_changed(sender, instance, created, raw=False, **kwargs):
         event = 'order_placed' if created else 'order_paid' if old and old['status'] == 'pending' and order.status == 'confirmed' else 'shipping_updated'
         if event in {'order_placed', 'order_paid'} and order.user_id and order.user:
             recipients[order.user_id] = order.user
-        send(recipients.values(), event, title, order, {'order_id': order.pk, 'store_ids': list(ids), 'status': order.status})
+        receipt_recipient_ids = getattr(instance, '_receipt_recipient_ids', set())
+        for recipient in recipients.values():
+            send(
+                [recipient], event, title, order,
+                {
+                    'order_id': order.pk,
+                    'store_ids': list(ids),
+                    'status': order.status,
+                    'email': not (event == 'order_placed' and recipient.pk in receipt_recipient_ids),
+                },
+            )
         # Customer tracking/payment screens also refresh without exposing another tenant's order.
         if order.user_id:
             publish(order.user_id, {'event': 'order.changed', 'data': {'order_id': order.pk}})

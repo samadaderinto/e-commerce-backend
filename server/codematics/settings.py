@@ -232,18 +232,27 @@ if OBJECT_STORAGE_ENABLED:
         'default_acl': None,
         'file_overwrite': False,
     }
+    custom_domain = f"{_media_endpoint.netloc}/{MINIO_BUCKET_NAME}" if _media_endpoint.netloc else None
+    url_protocol = f"{_media_endpoint.scheme}:" if _media_endpoint.scheme else 'http:'
     STORAGES['default'] = {
         'BACKEND': 'storages.backends.s3.S3Storage',
         'OPTIONS': {
             **s3_options,
-            'querystring_auth': True,
-            'querystring_expire': int(os.environ.get('MINIO_SIGNED_URL_TTL', '900')),
+            'custom_domain': custom_domain,
+            'url_protocol': url_protocol,
+            'querystring_auth': False,
             'location': 'media',
         },
     }
     STORAGES['staticfiles'] = {
         'BACKEND': 'storages.backends.s3.S3Storage',
-        'OPTIONS': {**s3_options, 'querystring_auth': False, 'location': 'static'},
+        'OPTIONS': {
+            **s3_options,
+            'custom_domain': custom_domain,
+            'url_protocol': url_protocol,
+            'querystring_auth': False,
+            'location': 'static',
+        },
     }
     MEDIA_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/media/'
     STATIC_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/static/'

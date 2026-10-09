@@ -56,6 +56,7 @@ The proxy is responsible for:
 - forwarding authenticated requests to the Django API;
 - refreshing expired access tokens;
 - clearing auth cookies during sign-out;
+- retrying public catalog, product-detail, and public-store GET requests anonymously after rejected authentication, clearing invalid cookies while preserving sessions during temporary refresh outages;
 - hiding raw token values from browser-visible JSON responses;
 - enforcing same-origin behavior for browser mutations;
 - transparently handling HTTP 3xx redirects via `redirect: 'manual'` and `NextResponse.redirect`, enabling secure outbound partner tracking for ClickBank HopLinks.
@@ -200,7 +201,7 @@ Admin user profiles use a dedicated responsive two-column layout for the wallet 
 
 The API proxy expires authentication cookies on authenticated 401 responses only. Anonymous 401 responses do not clear a session created by a concurrent login.
 
-Backoffice navigation uses a dedicated responsive icon navigation row with active-page highlighting, separate from account controls. Dashboard shortcuts use a responsive grid. Required admin and staff password changes use a focused security card with password confirmation and a visibility toggle.
+Backoffice navigation uses a dedicated responsive icon navigation row with active-page highlighting, separate from account controls. Overview destinations appear once in the same horizontally scrollable navigation row, including merchant payouts, users, administrator commission withdrawals, and technical-admin Grafana metrics. Required admin and staff password changes use a focused security card with password confirmation and a visibility toggle.
 
 Store onboarding requires a complete business address (street, city, state/region, country and postal code). Products may be saved as drafts, but manual and scheduled publication require that address for both digital and physical listings.
 
@@ -220,3 +221,5 @@ Cart mutations submit a `variant` option name alongside product and quantity, an
 ## October commerce audit fixes
 
 Checkout shipping/tax previews include the applied coupon in their query and cache key. Account refund actions require remaining settled funds; cancellation requires every store shipment to remain unfulfilled. Order DTOs expose paid/refunded totals, allocated line amounts, and store fulfillments. Generated affiliate URLs enter the same-origin `/api/affiliates/r/` proxy.
+
+Store settings use plain customer-facing labels for store branding, the logo URL, cover image URL, and store announcement. Design references are kept out of the settings interface.

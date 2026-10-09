@@ -283,25 +283,35 @@ class StaffViewSet(viewsets.GenericViewSet):
         return Response(StaffUserSerializer(self.get_managed_staff(staff_pk)).data)
 
     @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/block")
-    def block_staff(self, request, staff_pk=None):
+    @transaction.atomic
+    def block_staff(self, request: Request, staff_pk: str | None = None) -> Response:
         staff_user = self.get_managed_staff(staff_pk)
+        previous_active, previous_staff = staff_user.is_active, staff_user.is_staff
         if staff_user.is_active or staff_user.staff_invitation_secret:
             staff_user.is_active = False
             staff_user.staff_invitation_secret = ""
             staff_user.staff_blocked_at = timezone.now()
             staff_user.credential_version += 1
             staff_user.save(update_fields=["is_active", "credential_version", "staff_invitation_secret", "staff_blocked_at"])
+        from notification.views import account_access_notification
+
+        account_access_notification(staff_user, previous_active, previous_staff)
         return Response(StaffUserSerializer(staff_user).data)
 
     @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/unblock")
-    def unblock_staff(self, request, staff_pk=None):
+    @transaction.atomic
+    def unblock_staff(self, request: Request, staff_pk: str | None = None) -> Response:
         staff_user = self.get_managed_staff(staff_pk)
+        previous_active, previous_staff = staff_user.is_active, staff_user.is_staff
         if not staff_user.staff_email_verified:
             return Response({"detail": "Email verification is required before activation."}, status=400)
         if not staff_user.is_active:
             staff_user.is_active = True
             staff_user.staff_blocked_at = None
             staff_user.save(update_fields=["is_active", "staff_blocked_at"])
+        from notification.views import account_access_notification
+
+        account_access_notification(staff_user, previous_active, previous_staff)
         return Response(StaffUserSerializer(staff_user).data)
 
     @action(detail=False, methods=["post"], url_path=r"staffs/(?P<staff_pk>\d+)/resend-verification")
@@ -313,6 +323,7 @@ class StaffViewSet(viewsets.GenericViewSet):
     @extend_schema(request=StaffPermissionSerializer, responses=StaffUserSerializer, methods=["PATCH"])
     @extend_schema(responses=StaffUserDetailSerializer, methods=["GET"])
     @action(detail=False, methods=["get", "patch"], url_path=r"users/(?P<user_pk>\d+)")
+    @transaction.atomic
     def user_detail(self, request: Request, user_pk: str | None = None) -> Response:
         user = get_object_or_404(User, pk=user_pk)
         if request.method == "GET":
@@ -423,10 +434,13 @@ class StaffViewSet(viewsets.GenericViewSet):
         return stream_digital_asset(product)
 
     @action(detail=False, methods=["post"], url_path=r"stores/(?P<store_pk>\d+)/block")
-    def block_store(self, request, store_pk=None):
-        store = get_object_or_404(Store, pk=store_pk)
+    @transaction.atomic
+    def block_store(self, request: Request, store_pk: str | None = None) -> Response:
+        store = get_object_or_404(Store.objects.select_for_update(), pk=store_pk)
         serializer = StoreModerationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if store.status == Store.STATUS_BLOCKED and store.blocked_reason == serializer.validated_data.get("reason", ""):
+            return Response(BackofficeStoreSerializer(store).data)
         store = serializer.block(store, request.user)
         for product in Product.objects.filter(store=store).only("id", "store_id"):
             invalidate_product_cache(product)
@@ -434,10 +448,13 @@ class StaffViewSet(viewsets.GenericViewSet):
         return Response(BackofficeStoreSerializer(store).data)
 
     @action(detail=False, methods=["post"], url_path=r"stores/(?P<store_pk>\d+)/unblock")
-    def unblock_store(self, request, store_pk=None):
-        store = get_object_or_404(Store, pk=store_pk)
+    @transaction.atomic
+    def unblock_store(self, request: Request, store_pk: str | None = None) -> Response:
+        store = get_object_or_404(Store.objects.select_for_update(), pk=store_pk)
         serializer = StoreModerationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        if store.status == Store.STATUS_ACTIVE:
+            return Response(BackofficeStoreSerializer(store).data)
         store = serializer.unblock(store)
         for product in Product.objects.filter(store=store).only("id", "store_id"):
             invalidate_product_cache(product)
@@ -642,7 +659,22 @@ class StaffViewSet(viewsets.GenericViewSet):
                     recipient=recipient_user,
                     verb=f"Payout Completed: ${payout.amount}",
                     description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) has been disbursed.",
-                    data={"payout_id": payout.pk, "amount": str(payout.amount)},
+                    data={"payout_id": payout.pk, "amount": str(payout.amount), "email": False},
+                )
+                from utils.functions import send_mail
+                bank_name = (payout.account_details or {}).get("bank_name", "")
+                send_mail(
+                    "payout-processed",
+                    recipient_user.email,
+                    {
+                        "firstname": recipient_user.first_name,
+                        "store_name": payout.store.name if payout.store else "",
+                        "amount": str(payout.amount),
+                        "reference": payout.reference,
+                        "status": "Completed",
+                        "bank_name": bank_name,
+                        "subject": f"Merchant Payout Completed - {payout.reference}",
+                    },
                 )
             return Response({"detail": "Payout marked as completed.", "payout": StorePayoutSerializer(payout).data})
         else:
@@ -654,7 +686,23 @@ class StaffViewSet(viewsets.GenericViewSet):
                     recipient=recipient_user,
                     verb=f"Payout Declined: ${payout.amount}",
                     description=f"Your payout request of ${payout.amount} (Ref: {payout.reference}) was declined. Reason: {reason}",
-                    data={"payout_id": payout.pk, "amount": str(payout.amount)},
+                    data={"payout_id": payout.pk, "amount": str(payout.amount), "email": False},
+                )
+                from utils.functions import send_mail
+                bank_name = (payout.account_details or {}).get("bank_name", "")
+                send_mail(
+                    "payout-processed",
+                    recipient_user.email,
+                    {
+                        "firstname": recipient_user.first_name,
+                        "store_name": payout.store.name if payout.store else "",
+                        "amount": str(payout.amount),
+                        "reference": payout.reference,
+                        "status": "Declined",
+                        "bank_name": bank_name,
+                        "notes": reason,
+                        "subject": f"Merchant Payout Declined - {payout.reference}",
+                    },
                 )
             return Response({"detail": "Payout marked as rejected.", "payout": StorePayoutSerializer(payout).data})
 
