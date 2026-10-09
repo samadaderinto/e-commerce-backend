@@ -24,7 +24,11 @@ export function Shell({ children }: { children: ReactNode }) {
   function submit(event: FormEvent) { event.preventDefault(); router.push(`/shop${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''}`); setMenu(false); }
   const backoffice = !!(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const previewMode = backoffice && (params.get('preview') === '1' || (path === '/shop' && Boolean(params.get('store')))) && (path === '/shop' || path.startsWith('/products/'));
-  const consumerRoute = !previewMode && (path === '/' || /^\/(account|cart|checkout|saved|orders|shop|products|stores|login)(\/|$)/.test(path));
+  const consumerRoute = !previewMode && (
+    path === '/' ||
+    /^\/(cart|checkout|saved|orders|shop|products|stores|login)(\/|$)/.test(path) ||
+    /^\/account\/(orders|wallet|addresses)(\/|$)/.test(path)
+  );
   useEffect(() => {
     if (user?.must_change_password && path !== '/change-password') router.replace('/change-password');
     else if (backoffice && consumerRoute && !user?.must_change_password) router.replace('/admin');
@@ -38,14 +42,15 @@ export function Shell({ children }: { children: ReactNode }) {
       { href: '/admin/coupons', label: 'Coupons', icon: Archive },
       { href: '/admin/taxes', label: 'Taxes', icon: Landmark },
       { href: '/admin/refunds', label: 'Refunds', icon: RotateCcw },
-      { href: '/admin/stores', label: 'Store directory', icon: StoreIcon },
-      { href: '/merchant', label: 'Stores & products', icon: ShoppingBag },
-      { href: '/admin/payouts', label: 'Merchant payouts', icon: DollarSign },
-      { href: '/admin/users', label: 'Users directory', icon: UserRound },
+      { href: '/admin/stores', label: 'Stores', icon: StoreIcon },
+      { href: '/admin/payouts', label: 'Payouts', icon: DollarSign },
+      { href: '/admin/users', label: 'Users', icon: UserRound },
       ...((user?.is_superuser || user?.is_business_admin)
-        ? [{ href: '/admin/commission', label: 'Commission withdrawals', icon: DollarSign }]
+        ? [{ href: '/admin/commission', label: 'Commission', icon: DollarSign }]
         : []),
-      ...((user?.is_superuser || user?.is_business_admin) ? [{ href: '/admin/staff', label: 'Staff team', icon: UsersRound }] : []),
+      ...((user?.is_superuser || user?.is_business_admin)
+        ? [{ href: '/admin/staff', label: 'Staff', icon: UsersRound }]
+        : []),
     ];
     return (
       <>
@@ -83,7 +88,7 @@ export function Shell({ children }: { children: ReactNode }) {
                 title="Open Grafana Live Telemetry & Metrics (Technical admin sign-in required)"
               >
                 <Activity size={17} />
-                <span>Live Metrics (Grafana)</span>
+                <span>Live Metrics</span>
                 <ArrowUpRight size={14} />
               </a>
             )}
@@ -688,7 +693,15 @@ function AccountMenu() {
         aria-expanded={open}
         onClick={() => setOpen(value => !value)}
       >
-        <UserRound size={21} />
+        {user.avatar_url ? (
+          <img
+            src={user.avatar_url}
+            alt={user.first_name}
+            style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }}
+          />
+        ) : (
+          <UserRound size={21} />
+        )}
         <span>Hi, {user.first_name}</span>
         <ChevronDown size={14} className={`account-chevron ${open ? 'open' : ''}`} />
       </button>
@@ -697,7 +710,15 @@ function AccountMenu() {
         <section className="account-dropdown-panel" aria-label="Account and store switcher">
           <div className="account-dropdown-header">
             <div className="account-dropdown-avatar">
-              {user.first_name?.[0]?.toUpperCase() || <UserRound size={18} />}
+              {user.avatar_url ? (
+                <img
+                  src={user.avatar_url}
+                  alt={user.first_name}
+                  style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }}
+                />
+              ) : (
+                user.first_name?.[0]?.toUpperCase() || <UserRound size={18} />
+              )}
             </div>
             <div className="account-dropdown-user-info">
               <strong>{user.first_name} {user.last_name || ''}</strong>
@@ -866,29 +887,37 @@ function AccountMenu() {
             )}
 
             {/* PERSONAL ACCOUNT */}
-            {!user.is_staff && !user.is_superuser && !user.is_business_admin && <div className="account-dropdown-section">
+            <div className="account-dropdown-section">
               <div className="account-dropdown-section-title">
                 <span>Account & Settings</span>
               </div>
               <div className="account-dropdown-links">
-                <Link href="/account" className="account-dropdown-nav-link" onClick={() => setOpen(false)}>
+                <Link
+                  href={user.is_staff || user.is_superuser || user.is_business_admin ? '/account/profile' : '/account'}
+                  className="account-dropdown-nav-link"
+                  onClick={() => setOpen(false)}
+                >
                   <UserRound size={16} />
                   <span>My Account</span>
                 </Link>
-                <Link href="/account/orders" className="account-dropdown-nav-link" onClick={() => setOpen(false)}>
-                  <ShoppingBag size={16} />
-                  <span>My Orders</span>
-                </Link>
-                <Link href="/saved" className="account-dropdown-nav-link" onClick={() => setOpen(false)}>
-                  <Heart size={16} />
-                  <span>Saved Items</span>
-                </Link>
+                {!user.is_staff && !user.is_superuser && !user.is_business_admin && (
+                  <Link href="/account/orders" className="account-dropdown-nav-link" onClick={() => setOpen(false)}>
+                    <ShoppingBag size={16} />
+                    <span>My Orders</span>
+                  </Link>
+                )}
+                {!user.is_staff && !user.is_superuser && !user.is_business_admin && (
+                  <Link href="/saved" className="account-dropdown-nav-link" onClick={() => setOpen(false)}>
+                    <Heart size={16} />
+                    <span>Saved Items</span>
+                  </Link>
+                )}
                 <Link href="/settings" className="account-dropdown-nav-link" onClick={() => setOpen(false)}>
                   <Settings size={16} />
                   <span>App Settings</span>
                 </Link>
               </div>
-            </div>}
+            </div>
           </div>
 
           {/* FOOTER */}

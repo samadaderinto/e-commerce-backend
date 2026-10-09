@@ -2,6 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from django.contrib.auth.password_validation import validate_password
+from django.core.files.uploadedfile import UploadedFile
 from rest_framework import serializers
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
@@ -92,6 +93,7 @@ class UserSerializer(serializers.ModelSerializer):
             'updated',
             'last_login',
             'last_active_at',
+            'avatar_url',
         ]
         read_only_fields = [
             'id',
@@ -105,7 +107,36 @@ class UserSerializer(serializers.ModelSerializer):
             'updated',
             'last_login',
             'last_active_at',
+            'avatar_url',
         ]
+
+    def to_representation(self, instance: User) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if getattr(instance, 'avatar_image', None):
+            updated_str = instance.updated.strftime("%Y%m%d%H%M%S%f") if instance.updated else "0"
+            data['avatar_url'] = f'/api/users/{instance.pk}/public/images/avatar?v={updated_str}'
+        elif getattr(instance, 'avatar_url', None):
+            data['avatar_url'] = instance.avatar_url
+        else:
+            data['avatar_url'] = None
+        return data
+
+
+class UserAvatarImageSerializer(serializers.Serializer):
+    image = serializers.ImageField(allow_empty_file=False)
+
+    def validate_image(self, value: UploadedFile) -> UploadedFile:
+        if value.size > 5 * 1024 * 1024:
+            raise serializers.ValidationError('Images must be at most 5 MB.')
+        image = getattr(value, 'image')
+        if image.format not in {'JPEG', 'PNG', 'WEBP'}:
+            raise serializers.ValidationError('Use a JPEG, PNG or WebP image.')
+        dimensions = (512, 512)
+        if image.size != dimensions:
+            raise serializers.ValidationError(
+                f'Crop this image to {dimensions[0]} × {dimensions[1]} pixels.'
+            )
+        return value
 
 
 class RegisterSerializer(UserSerializer):
@@ -382,11 +413,31 @@ class WalletCheckoutSerializer(serializers.Serializer):
 
 class CouponAdminSerializer(serializers.ModelSerializer):
     last_used_at = serializers.DateTimeField(read_only=True)
+    created_by = serializers.SerializerMethodField()
+
     class Meta:
         model = Coupon
         fields = ['id', 'code', 'valid_from', 'valid_to', 'discount', 'num_available', 'num_used', 'active',
-                  'type', 'product', 'category', 'minimum_quantity', 'last_used_at']
-        read_only_fields = ['id', 'valid_from', 'num_used']
+                  'type', 'product', 'category', 'minimum_quantity', 'last_used_at', 'created_by']
+        read_only_fields = ['id', 'valid_from', 'num_used', 'created_by']
+
+    def get_created_by(self, obj: Coupon) -> str:
+        user = obj.created_by
+        if user:
+            name = f"{user.first_name} {user.last_name}".strip()
+            role = (
+                "Super Admin"
+                if getattr(user, "is_superuser", False)
+                else (
+                    "Business Admin"
+                    if getattr(user, "is_business_admin", False)
+                    else "Staff"
+                )
+            )
+            if name:
+                return f"{name} ({user.email}) · {role}"
+            return f"{user.email} · {role}"
+        return ""
 
     def validate(self, attrs):
         coupon_type = attrs.get('type', getattr(self.instance, 'type', Coupon.ORDER_TOTAL))
@@ -453,7 +504,7 @@ class OrderSerializer(serializers.Serializer):
     items = OrderItemSnapshotSerializer(many=True)
     address = OrderAddressSnapshotSerializer()
     tax_snapshot = serializers.JSONField(required=False, default=dict)
-
+    active_refund = serializers.JSONField(required=False, allow_null=True)
 
 
 class ProductIdRequestSerializer(serializers.Serializer):
@@ -467,9 +518,9 @@ class CartMutationRequestSerializer(ProductIdRequestSerializer):
 
 class RefundRequestSerializer(serializers.Serializer):
     REASONS = ['item_damaged', 'wrong_item_received', 'item_missing', 'other']
-    reason = serializers.ChoiceField(choices=REASONS)
+    reason = serializers.ChoiceField(choices=REASONS, required=False)
     other_reason = serializers.CharField(max_length=500, required=False, allow_blank=True)
-    product_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False)
+    product_ids = serializers.ListField(child=serializers.IntegerField(min_value=1), allow_empty=False, required=False)
     refund_type = serializers.ChoiceField(
         choices=['store_credit', 'original_payment'],
         default='store_credit',
@@ -477,7 +528,7 @@ class RefundRequestSerializer(serializers.Serializer):
     )
 
     def validate(self, attrs):
-        if attrs['reason'] == 'other' and not attrs.get('other_reason', '').strip():
+        if attrs.get('reason') == 'other' and not attrs.get('other_reason', '').strip():
             raise serializers.ValidationError({'other_reason': 'Describe the reason for this return.'})
         return attrs
 

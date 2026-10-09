@@ -89,6 +89,7 @@ class StaffUserSerializer(UserSerializer):
             "phone1",
             "phone2",
             "gender",
+            "avatar_url",
             "is_staff",
             "is_superuser",
             "is_business_admin",
@@ -178,12 +179,30 @@ class CouponRedemptionSerializer(serializers.ModelSerializer):
 
 
 class BackofficeCouponSerializer(CouponSerializer):
-    created_by = serializers.EmailField(source="created_by.email", read_only=True, default=None)
+    created_by = serializers.SerializerMethodField()
     redemptions = CouponRedemptionSerializer(many=True, read_only=True)
 
     class Meta(CouponSerializer.Meta):
         model = Coupon
         fields = [*CouponSerializer.Meta.fields, "created_by", "redemptions"]
+
+    def get_created_by(self, obj: Coupon) -> str:
+        user = obj.created_by
+        if user:
+            name = f"{user.first_name} {user.last_name}".strip()
+            role = (
+                "Super Admin"
+                if getattr(user, "is_superuser", False)
+                else (
+                    "Business Admin"
+                    if getattr(user, "is_business_admin", False)
+                    else "Staff"
+                )
+            )
+            if name:
+                return f"{name} ({user.email}) · {role}"
+            return f"{user.email} · {role}"
+        return ""
 
 
 class CouponUpdateSerializer(serializers.ModelSerializer):

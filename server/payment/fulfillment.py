@@ -9,7 +9,8 @@ from payment.models import Order, OrderFulfillment
 from store.models import Store
 
 TRANSITIONS: dict[str, set[str]] = {
-    "confirmed": {"confirmed", "shipped", "picked up"},
+    "pending": {"pending", "confirmed", "shipped", "delivered", "picked up"},
+    "confirmed": {"confirmed", "shipped", "delivered", "picked up"},
     "shipped": {"shipped", "delivered"},
     "delivered": {"delivered"},
     "picked up": {"picked up"},
@@ -54,7 +55,7 @@ def update_fulfillment(
         raise ValidationError({"order": "This store has no physical items to fulfill."})
     target = next_status or (
         "shipped"
-        if tracking_number and fulfillment.status == "confirmed"
+        if tracking_number and fulfillment.status in {"pending", "confirmed"}
         else fulfillment.status
     )
     if target not in TRANSITIONS.get(fulfillment.status, set()):
@@ -81,7 +82,9 @@ def update_fulfillment(
             else "delivered"
         )
         order.delivered_at = now
-    elif any(value != "confirmed" for value in statuses):
+        if not order.shipped_at:
+            order.shipped_at = now
+    elif any(value in {"shipped", "delivered", "picked up"} for value in statuses):
         order.status = "shipped"
         if not order.shipped_at:
             order.shipped_at = now

@@ -603,6 +603,7 @@ class EmailTemplateRenderingTests(TestCase):
             "refund-request-acknowledged",
             "refund-request-acknowleged",
             "refund-response",
+            "store-status",
             "wallet-funded",
         ]
 
@@ -933,5 +934,60 @@ class EmailTemplateRenderingTests(TestCase):
         self.assertIn("Refund Request Received", ref_req_delivery.subject)
         self.assertIn(order.orderId, ref_req_delivery.subject)
         self.assertIn("Item damaged", ref_req_delivery.body)
+
+    def test_store_verification_and_moderation_emails(self):
+        from store.models import Store
+
+        merchant = User.objects.create_user(
+            email="merchant_mod@proace.local",
+            password="Password123!",
+            first_name="Jordan",
+            last_name="Merchant",
+            gender="male",
+            phone1="+12125550199",
+        )
+        store = Store.objects.create(
+            user=merchant,
+            name="Quantum Gear",
+            status="pending",
+        )
+
+        admin_user = User.objects.create_superuser(
+            email="superadmin_store@proace.local",
+            password="Password123!",
+        )
+        client = APIClient()
+        client.force_authenticate(user=admin_user)
+
+        # 1. Staff approves store -> store-verified email
+        approve_resp = client.post(f"/api/v1/admin/stores/{store.pk}/approve/")
+        self.assertEqual(approve_resp.status_code, 200)
+        verify_delivery = NotificationDelivery.objects.filter(recipient_email=merchant.email).latest("pk")
+        self.assertTrue(verify_delivery.is_html)
+        self.assertIn("Store verified", verify_delivery.subject)
+        self.assertIn("now public", verify_delivery.body)
+
+        # 2. Staff blocks store -> store-blocked email
+        block_resp = client.post(
+            f"/api/v1/admin/staff/stores/{store.pk}/block/",
+            {"reason": "Policy violation regarding copyright"},
+            format="json",
+        )
+        self.assertEqual(block_resp.status_code, 200)
+        block_delivery = NotificationDelivery.objects.filter(recipient_email=merchant.email).latest("pk")
+        self.assertTrue(block_delivery.is_html)
+        self.assertIn("Store blocked", block_delivery.subject)
+        self.assertIn("Policy violation regarding copyright", block_delivery.body)
+
+        # 3. Staff unblocks store -> store-unblocked email
+        unblock_resp = client.post(
+            f"/api/v1/admin/staff/stores/{store.pk}/unblock/",
+            format="json",
+        )
+        self.assertEqual(unblock_resp.status_code, 200)
+        unblock_delivery = NotificationDelivery.objects.filter(recipient_email=merchant.email).latest("pk")
+        self.assertTrue(unblock_delivery.is_html)
+        self.assertIn("Store unblocked", unblock_delivery.subject)
+        self.assertIn("unblocked", unblock_delivery.body)
 
 

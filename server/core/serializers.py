@@ -1,3 +1,5 @@
+from typing import Any
+
 from rest_framework import serializers
 
 from core.models import Refund, Review, User, UserWallet, UserWalletTransaction
@@ -45,12 +47,24 @@ class UserSerializer(serializers.ModelSerializer):
             "phone1",
             "phone2",
             "gender",
+            "avatar_url",
             "created",
             "updated",
             "last_login",
             "last_active_at",
         ]
-        read_only_fields = ['created', 'updated', 'last_login', 'last_active_at']
+        read_only_fields = ['created', 'updated', 'last_login', 'last_active_at', 'avatar_url']
+
+    def to_representation(self, instance: User) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if getattr(instance, 'avatar_image', None):
+            updated_str = instance.updated.strftime("%Y%m%d%H%M%S%f") if instance.updated else "0"
+            data['avatar_url'] = f'/api/users/{instance.pk}/public/images/avatar?v={updated_str}'
+        elif getattr(instance, 'avatar_url', None):
+            data['avatar_url'] = instance.avatar_url
+        else:
+            data['avatar_url'] = None
+        return data
 
 class StaffSerializer(serializers.ModelSerializer):
 
@@ -64,14 +78,27 @@ class StaffSerializer(serializers.ModelSerializer):
             "phone1",
             "phone2",
             "gender",
+            "avatar_url",
             "is_staff",
             "password",
             "created",
             "updated",
         ]
+        read_only_fields = ['avatar_url']
         extra_kwargs = {
             "password": {"write_only": True},
         }
+
+    def to_representation(self, instance: User) -> dict[str, Any]:
+        data = super().to_representation(instance)
+        if getattr(instance, 'avatar_image', None):
+            updated_str = instance.updated.strftime("%Y%m%d%H%M%S%f") if instance.updated else "0"
+            data['avatar_url'] = f'/api/users/{instance.pk}/public/images/avatar?v={updated_str}'
+        elif getattr(instance, 'avatar_url', None):
+            data['avatar_url'] = instance.avatar_url
+        else:
+            data['avatar_url'] = None
+        return data
 
         def create(self, validated_data):
             user = User.objects.create_staffuser(**validated_data)

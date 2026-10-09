@@ -502,7 +502,7 @@ class StaffViewSet(viewsets.GenericViewSet):
             ordering = request.query_params.get("ordering", "-created")
             if ordering not in ("-created", "created", "-discount", "discount", "-num_used", "num_used"):
                 ordering = "-created"
-            coupons = Coupon.objects.all().order_by(ordering, "-pk")
+            coupons = Coupon.objects.select_related("created_by").all().order_by(ordering, "-pk")
             active = request.query_params.get("active")
             if active in ("true", "1"):
                 coupons = coupons.filter(active=True)
@@ -528,11 +528,11 @@ class StaffViewSet(viewsets.GenericViewSet):
             return Response(BackofficeCouponSerializer(coupon).data)
         if coupon.num_used or coupon.redemptions.exists():
             return Response(
-                {"detail": "Used coupons must be deactivated to preserve redemption history."},
+                {
+                    "detail": "Coupons with recorded redemption history cannot be deleted to preserve order records and financial audit trails. Keep the coupon deactivated instead."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        if coupon.active:
-            return Response({"detail": "Deactivate this coupon before deleting it."}, status=status.HTTP_400_BAD_REQUEST)
         coupon.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -623,6 +623,10 @@ class StaffViewSet(viewsets.GenericViewSet):
         amount = Decimal(str(request.data.get('amount', '0')))
         if amount <= 0:
             return Response({'amount': 'Enter an amount greater than zero.'}, status=400)
+        # Serialize platform withdrawals to prevent concurrent double-withdrawals
+        official_store = Store.objects.select_for_update().filter(is_official=True).first()
+        if not official_store:
+            User.objects.select_for_update().get(pk=request.user.pk)
         commission_earned = StoreEarningsLedger.objects.filter(
             status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
             store__is_official=False,

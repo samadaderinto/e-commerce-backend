@@ -161,7 +161,15 @@ export function MerchantPage({ segments }: { segments: string[] }) {
               Back to marketplace
             </Link>
             <div className="merchant-person">
-              <span>{user?.first_name?.[0]}</span>
+              {user?.avatar_url ? (
+                <img
+                  src={user.avatar_url}
+                  alt={user.first_name || 'User'}
+                  style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                />
+              ) : (
+                <span>{user?.first_name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}</span>
+              )}
               <div>
                 <strong>
                   {user?.first_name} {user?.last_name}
@@ -1271,7 +1279,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   const saving = useRef<boolean>(false);
   const productId: string = savedProductId !== null ? String(savedProductId) : id;
   const isNew: boolean = productId === 'new';
-  const client = useQueryClient(); const router = useRouter(); const { notify } = useShop(); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  const client = useQueryClient(); const router = useRouter(); const { notify, user } = useShop(); const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const product = useQuery({ queryKey: ['merchant-product', store.id, productId], queryFn: () => api<MerchantProduct>(`stores/${store.id}/products/${productId}`), enabled: !isNew });
   const [productType, setProductType] = useState<string | null>(null);
   const effectiveProductType = productType ?? product.data?.product_type ?? 'standard';
@@ -1578,8 +1586,20 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           <h1>{isNew ? 'Something new to discover.' : 'The details make it yours.'}</h1>
           <p>{isNew ? 'Give your next best-seller a good start.' : `Editing ${data?.title}`}</p>
         </div>
-        {Boolean(data?.visibility && store.status === 'active' && store.verified_at) && (
-          <Link className="button secondary" href={`/products/${productId}`}>
+        {Boolean(
+          data?.visibility &&
+          ((store.status === 'active' && store.verified_at) ||
+            store.is_official ||
+            Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin))
+        ) && (
+          <Link
+            className="button secondary"
+            href={`/products/${productId}${
+              Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin)
+                ? '?preview=1'
+                : ''
+            }`}
+          >
             <Eye size={16} />
             View listing
           </Link>

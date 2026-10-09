@@ -27,6 +27,7 @@ from core.access import IsCustomer, IsBackoffice, IsBusinessAdmin as IsAdminUser
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.exceptions import TokenError
@@ -56,7 +57,7 @@ from product.models import Product
 from product.search import search_product_ids
 from product.policies import is_own_store, validate_purchase
 from store.views import invalidate_catalog
-from store.models import Store, StoreAddress
+from store.models import Store, StoreAddress, StoreInfo
 from store.services import record_order_earnings_for_merchant
 from .serializers import (
     WalletTopupRequestSerializer, PaymentSessionRequestSerializer,
@@ -64,7 +65,7 @@ from .serializers import (
     CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
     CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
     OrderSerializer, ProductIdRequestSerializer, PublicStoreSerializer, RefundRequestSerializer, RegisterSerializer,
-    ReviewSerializer, ShippingRateSerializer, UserSerializer, WalletCheckoutSerializer, unit_price,
+    ReviewSerializer, ShippingRateSerializer, UserSerializer, UserAvatarImageSerializer, WalletCheckoutSerializer, unit_price,
 )
 
 
@@ -255,6 +256,37 @@ class MeView(APIView):
         return Response({"detail": "Your account has been deactivated and scheduled for permanent deletion."})
 
 
+class MeAvatarView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        methods=['POST'],
+        request=UserAvatarImageSerializer,
+        responses=UserSerializer,
+        description='Upload a 512x512 profile avatar image for the authenticated user.',
+    )
+    def post(self, request: Request) -> Response:
+        serializer = UserAvatarImageSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = request.user
+        user.avatar_image = serializer.validated_data['image']
+        user.avatar_url = ''
+        user.save(update_fields=['avatar_image', 'avatar_url', 'updated'])
+        return Response(UserSerializer(user, context={'request': request}).data)
+
+    @extend_schema(
+        methods=['DELETE'],
+        responses=UserSerializer,
+        description='Remove the profile avatar image for the authenticated user.',
+    )
+    def delete(self, request: Request) -> Response:
+        user = request.user
+        user.avatar_image = ''
+        user.avatar_url = ''
+        user.save(update_fields=['avatar_image', 'avatar_url', 'updated'])
+        return Response(UserSerializer(user, context={'request': request}).data)
+
+
 class ProductsView(APIView):
     permission_classes = [AllowAny]
 
@@ -350,7 +382,14 @@ class ProductDetailView(APIView):
             if not raw_product:
                 raise Http404('No Product matches the given query.')
             user = request.user
-            is_authorized = bool(user and user.is_authenticated and (user == raw_product.store.user or user.is_staff or user.is_superuser))
+            is_authorized = bool(
+                user and user.is_authenticated and (
+                    user == raw_product.store.user
+                    or getattr(user, 'is_staff', False)
+                    or getattr(user, 'is_superuser', False)
+                    or getattr(user, 'is_business_admin', False)
+                )
+            )
             if not is_authorized or not raw_product.visibility:
                 raise Http404('No Product matches the given query.')
             product = raw_product
@@ -403,7 +442,29 @@ class PublicStoreImageView(APIView):
         image = getattr(profile, f'{kind}_image', None)
         if not image:
             raise Http404('No image matches the given query.')
-        return FileResponse(image.open('rb'), filename=image.name.rsplit('/', 1)[-1])
+        try:
+            return FileResponse(image.open('rb'), filename=image.name.rsplit('/', 1)[-1])
+        except (FileNotFoundError, OSError):
+            raise Http404('No image matches the given query.')
+
+
+class PublicUserImageView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        operation_id='public_user_avatar_image',
+        responses={(200, 'image/png'): OpenApiTypes.BINARY},
+        description='Public avatar image for a user profile.',
+    )
+    def get(self, request: Request, pk: int) -> FileResponse:
+        user = get_object_or_404(User, pk=pk)
+        image = getattr(user, 'avatar_image', None)
+        if not image:
+            raise Http404('No image matches the given query.')
+        try:
+            return FileResponse(image.open('rb'), filename=image.name.rsplit('/', 1)[-1])
+        except (FileNotFoundError, OSError):
+            raise Http404('No image matches the given query.')
 
 
 def check_is_verified_buyer(user, product) -> bool:
@@ -716,6 +777,27 @@ def order_data(order):
         'address': order.address_snapshot,
         'buyer_email': getattr(order, 'buyer_email', '') or (order.user.email if order.user else ''),
         'buyer_phone': getattr(order, 'buyer_phone', '') or (str(getattr(order.user, 'phone1', '')) if order.user else ''),
+        'active_refund': (
+            {
+                'id': refund.pk,
+                'status': refund.status,
+                'is_pending': refund.status == Refund.STATUS_PENDING,
+                'reason': refund.reason,
+                'refund_type': refund.refund_type,
+                'refund_amount': str(refund.refund_amount),
+                'product_ids': [
+                    item.get('product')
+                    for item in (refund.selected_items or [])
+                    if item.get('product')
+                ],
+                'failure_reason': refund.failure_reason,
+                'processing_reason': refund.processing_reason,
+                'created': _iso(refund.created),
+                'updated': _iso(refund.updated),
+            }
+            if (refund := Refund.objects.filter(order=order).order_by('-created').first())
+            else None
+        ),
     }
 
 
@@ -860,6 +942,50 @@ class OrderRefundView(APIView):
     permission_classes = [IsCustomer]
 
     @extend_schema(
+        responses={200: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+        description="Retrieve active refund request details for an order.",
+    )
+    def get(self, request: Request, pk: int) -> Response:
+        order = get_object_or_404(Order.objects.filter(user=request.user), pk=pk)
+        refund = Refund.objects.filter(order=order).order_by("-created").first()
+        if not refund:
+            return Response(
+                {"detail": "No refund request found for this order.", "refund": None},
+                status=404,
+            )
+        reason_code = "other"
+        for code, label in [
+            ("item_damaged", "Item damaged"),
+            ("wrong_item_received", "Wrong item received"),
+            ("item_missing", "Item missing"),
+        ]:
+            if refund.reason == label:
+                reason_code = code
+                break
+        other_reason = refund.reason if reason_code == "other" else ""
+        return Response({
+            "id": refund.pk,
+            "order": order.pk,
+            "status": refund.status,
+            "is_pending": refund.status == Refund.STATUS_PENDING,
+            "reason": reason_code,
+            "other_reason": other_reason,
+            "reason_display": refund.reason,
+            "refund_type": refund.refund_type,
+            "refund_type_display": refund.get_refund_type_display(),
+            "refund_amount": format(refund.refund_amount, ".2f"),
+            "product_ids": [
+                item.get("product")
+                for item in (refund.selected_items or [])
+                if item.get("product")
+            ],
+            "failure_reason": refund.failure_reason,
+            "processing_reason": refund.processing_reason,
+            "created": _iso(refund.created),
+            "updated": _iso(refund.updated),
+        })
+
+    @extend_schema(
         request=RefundRequestSerializer,
         responses={
             201: OpenApiTypes.OBJECT,
@@ -876,9 +1002,16 @@ class OrderRefundView(APIView):
         if order.status in ("refunded", "cancelled"):
             raise ValidationError({"detail": "This order can no longer be refunded."})
 
-        if order.paid_total <= 0:
+        if order.paid_total <= 0 or (order.paid_total - order.refunded_total) <= Decimal("0.00"):
             raise ValidationError(
-                {"detail": "This order has no settled payment to refund."}
+                {"detail": "This order has no remaining refundable payment."}
+            )
+
+        if Refund.objects.filter(order=order, status=Refund.STATUS_PENDING).exists():
+            raise ValidationError(
+                {
+                    "detail": "A refund request is already pending review for this order. You can edit your existing request."
+                }
             )
 
         snapshots = order_paid_lines(order)
@@ -903,6 +1036,11 @@ class OrderRefundView(APIView):
                     "detail": f"The {refund_window}-day return window for this order has expired."
                 }
             )
+
+        if not request.data.get("reason"):
+            raise ValidationError({"reason": "A reason is required to request a refund."})
+        if not request.data.get("product_ids"):
+            raise ValidationError({"product_ids": "Select at least one product to refund."})
 
         serializer = RefundRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -1008,6 +1146,133 @@ class OrderRefundView(APIView):
             },
             status=201,
         )
+
+    @extend_schema(
+        request=RefundRequestSerializer,
+        responses={200: OpenApiTypes.OBJECT, 400: OpenApiTypes.OBJECT, 404: OpenApiTypes.OBJECT},
+        description="Edit an existing pending refund request for an order.",
+    )
+    @transaction.atomic
+    def patch(self, request: Request, pk: int) -> Response:
+        order = get_object_or_404(
+            Order.objects.select_for_update().filter(user=request.user), pk=pk
+        )
+        if order.status in ("refunded", "cancelled"):
+            raise ValidationError({"detail": "This order can no longer be refunded."})
+
+        refund = (
+            Refund.objects.select_for_update()
+            .filter(order=order, status=Refund.STATUS_PENDING)
+            .first()
+        )
+        if not refund:
+            raise ValidationError(
+                {
+                    "detail": "There is no pending refund request to edit for this order. Only pending requests can be modified."
+                }
+            )
+
+        refund_window = getattr(settings, "REFUND_WINDOW_DAYS", 7)
+        from datetime import timedelta
+
+        deadline = order.created + timedelta(days=refund_window)
+        if timezone.now() > deadline:
+            raise ValidationError(
+                {
+                    "detail": f"The {refund_window}-day return window for this order has expired."
+                }
+            )
+
+        serializer = RefundRequestSerializer(data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+
+        snapshots = order_paid_lines(order)
+        if "reason" in serializer.validated_data:
+            reason_code = serializer.validated_data["reason"]
+            reason_labels = {
+                "item_damaged": "Item damaged",
+                "wrong_item_received": "Wrong item received",
+                "item_missing": "Item missing",
+                "other": serializer.validated_data.get(
+                    "other_reason", refund.reason if reason_code == "other" else ""
+                ).strip(),
+            }
+            refund.reason = reason_labels[reason_code]
+        elif (
+            "other_reason" in serializer.validated_data
+            and serializer.validated_data["other_reason"].strip()
+        ):
+            refund.reason = serializer.validated_data["other_reason"].strip()
+
+        if "refund_type" in serializer.validated_data:
+            refund.refund_type = serializer.validated_data["refund_type"]
+
+        if "product_ids" in serializer.validated_data:
+            selected_ids = set(serializer.validated_data["product_ids"])
+            selected = [item for item in snapshots if item.get("product") in selected_ids]
+            if len({item.get("product") for item in selected}) != len(selected_ids):
+                raise ValidationError({"product_ids": "Choose products from this order only."})
+            if any(item.get("is_digital", False) for item in selected):
+                raise ValidationError({
+                    "product_ids": "Digital products are non-refundable. If you are experiencing issues, please contact support via email."
+                })
+            claimed = set()
+            for previous in Refund.objects.filter(
+                order=order,
+                status__in=[
+                    Refund.STATUS_PENDING,
+                    Refund.STATUS_APPROVED,
+                    Refund.STATUS_FAILED,
+                ],
+            ).exclude(pk=refund.pk):
+                claimed.update(
+                    item.get("product") for item in (previous.selected_items or snapshots)
+                )
+            if selected_ids & claimed:
+                raise ValidationError({
+                    "product_ids": "A refund already exists for one or more selected products."
+                })
+            new_amount = sum(
+                (Decimal(str(item["line_total"])) for item in selected), Decimal("0")
+            ).quantize(Decimal(".01"))
+            if new_amount <= 0 or new_amount > (order.paid_total - order.refunded_total):
+                raise ValidationError({
+                    "detail": "The selected items exceed the remaining refundable payment."
+                })
+            refund.selected_items = selected
+            refund.refund_amount = new_amount
+
+        refund.save(update_fields=["reason", "refund_type", "selected_items", "refund_amount", "updated"])
+
+        stores = {item.get("store") for item in (refund.selected_items or snapshots) if item.get("store")}
+        for store_id in stores:
+            store = Store.objects.filter(pk=store_id).first()
+            if store and store.user:
+                create_notification(
+                    recipient=store.user,
+                    verb=f"Refund Request Updated for Order #{order.orderId}",
+                    description=f"Customer updated their refund request ({refund.get_refund_type_display()}) for Order #{order.orderId}. Reason: {refund.reason}",
+                    data={
+                        "order_id": order.pk,
+                        "refund_id": refund.pk,
+                        "store_id": store.pk,
+                        "event": "refund_updated",
+                    },
+                )
+
+        return Response(
+            {
+                "detail": "Your refund request has been updated. Physical returns are reviewed and processed within 1–2 business days.",
+                "status": refund.status,
+                "refund_id": refund.pk,
+                "refund_type": refund.refund_type,
+                "refund_amount": format(refund.refund_amount, ".2f"),
+            },
+            status=200,
+        )
+
+    def put(self, request: Request, pk: int) -> Response:
+        return self.patch(request, pk)
 
 
 class OrderCancelView(APIView):
@@ -1515,6 +1780,8 @@ class CheckoutView(APIView):
             )
         cart.ordered = True
         cart.save(update_fields=["ordered", "updated"])
+        from cart.cache import invalidate_cart_cache
+        transaction.on_commit(lambda: invalidate_cart_cache(cart))
 
         OrderFulfillment.objects.bulk_create(
             [
@@ -1608,6 +1875,7 @@ class CheckoutView(APIView):
     )
     @transaction.atomic
     def post(self, request: Request) -> Response:
+        User.objects.select_for_update().get(pk=request.user.pk)
         key = serializers.UUIDField().run_validation(request.data.get("checkout_key"))
         existing = Order.objects.filter(checkout_key=key).first()
         if existing:
@@ -1939,6 +2207,11 @@ class WalletCheckoutConfirmView(CheckoutView):
         try:
             with transaction.atomic():
                 User.objects.select_for_update().get(pk=request.user.pk)
+                existing = Order.objects.filter(checkout_key=key).first()
+                if existing:
+                    if existing.user_id != request.user.pk:
+                        raise ValidationError({"detail": "Invalid checkout reference."})
+                    return Response(order_data(existing), status=200)
                 address_raw = session.get("metadata", {}).get("address")
                 address = None
                 if address_raw:
@@ -2011,14 +2284,15 @@ class CouponAdminView(APIView):
 
     @extend_schema(responses=CouponAdminSerializer(many=True))
     def get(self, request):
-        coupons = Coupon.objects.select_related("product").order_by("-created", "-pk")
+        coupons = Coupon.objects.select_related("product", "created_by").order_by("-created", "-pk")
         return Response(CouponAdminSerializer(coupons, many=True).data)
 
     @extend_schema(request=CouponAdminSerializer, responses=CouponAdminSerializer)
     def post(self, request):
         serializer = CouponAdminSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        return Response(CouponAdminSerializer(serializer.save()).data, status=201)
+        coupon = serializer.save(created_by=request.user if request.user.is_authenticated else None)
+        return Response(CouponAdminSerializer(coupon).data, status=201)
 
 
 class TaxJurisdictionAdminView(APIView):

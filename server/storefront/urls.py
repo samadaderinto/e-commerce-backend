@@ -5,9 +5,9 @@ from django.urls import include, path
 from rest_framework.permissions import AllowAny
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 from .views import (
-    PasswordChangeView, AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, OrderDetailView, DigitalDownloadView,
+    PasswordChangeView, AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, MeAvatarView, OrderDetailView, DigitalDownloadView,
     OrderRefundView, OrderCancelView, OrderTrackingView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
-    OrdersView, ProductDetailView, ProductsView, PublicStoreView, PublicStoreImageView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
+    OrdersView, ProductDetailView, ProductsView, PublicStoreView, PublicStoreImageView, PublicUserImageView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
     CouponValidateView, TaxJurisdictionAdminView, TaxJurisdictionDetailAdminView, TaxJurisdictionSeedDefaultsAdminView,
 )
 from store.views import StoreReviewViewSet
@@ -22,6 +22,7 @@ urlpatterns = [
     path('api/v1/auth/<str:action>/', AuthView.as_view()),
     path('api/v1/password/change/', PasswordChangeView.as_view()),
     path('api/v1/me/', MeView.as_view()),
+    path('api/v1/me/avatar/', MeAvatarView.as_view()),
     path('api/v1/wallet/', UserWalletView.as_view()),
     path('api/v1/wallet/topup-session/', WalletTopupSessionView.as_view()),
     path('api/v1/wallet/topup-confirm/', WalletTopupConfirmView.as_view()),
@@ -30,6 +31,7 @@ urlpatterns = [
     path('api/v1/products/<int:pk>/reviews/', ReviewsView.as_view()),
     path('api/v1/stores/<int:pk>/public/', PublicStoreView.as_view()),
     path('api/v1/stores/<int:pk>/public/images/<str:kind>/', PublicStoreImageView.as_view()),
+    path('api/v1/users/<int:pk>/public/images/avatar/', PublicUserImageView.as_view()),
     path('api/v1/wishlist/', WishlistView.as_view()),
     path('api/v1/addresses/', AddressesView.as_view()),
     path('api/v1/addresses/<int:pk>/', AddressesView.as_view()),

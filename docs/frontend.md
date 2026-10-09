@@ -223,3 +223,10 @@ Cart mutations submit a `variant` option name alongside product and quantity, an
 Checkout shipping/tax previews include the applied coupon in their query and cache key. Account refund actions require remaining settled funds; cancellation requires every store shipment to remain unfulfilled. Order DTOs expose paid/refunded totals, allocated line amounts, and store fulfillments. Generated affiliate URLs enter the same-origin `/api/affiliates/r/` proxy.
 
 Store settings use plain customer-facing labels for store branding, the logo URL, cover image URL, and store announcement. Design references are kept out of the settings interface.
+
+## User Profile Photo & Avatar Management
+
+- **Universal User Avatar Support**: User avatars are rendered across all customer, merchant, and administrative views: header account dropdown trigger, account menu, personal details page (`/account?section=profile`), application settings (`/settings`), merchant workspace sidebar footer, and staff/admin audit tables.
+- **Interactive Avatar Cropper (`UserAvatarUpload` & `UserAvatarCropDialog`)**: Provides client-side circular crop preview with zoom, pan, and real-time canvas rendering to guarantee standard 512x512 JPEG export conforming to server constraints.
+- **App Settings & Account Profile Routes**: Users and backoffice operators can manage their profile pictures from both the global `/settings` interface and the `/account` profile tab.
+- **Backoffice Profile Isolation**: When administrative users (staff, superadmins, business admins) access `/account` or `/account/profile`, consumer-specific widgets (orders, wallets, addresses, and saved items) and queries are completely excluded. Backoffice users are presented with their personal details (name, email, phone, password management, avatar studio) and quick links to backoffice tools, while shopper-only routes (`/account/orders`, `/account/wallet`, `/account/addresses`) redirect them safely.

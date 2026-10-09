@@ -41,6 +41,7 @@ class StaffAdministrationTests(TestCase):
         self.assertEqual(payload['activity'][0]['id'], activity.pk)
         self.assertEqual(payload['activity'][0]['created'], activity.timestamp.isoformat())
         self.assertEqual(payload['user']['id'], self.staff.pk)
+        self.assertIn('avatar_url', payload['user'])
         self.assertIn('wallet', payload)
         self.assertIn('orders', payload)
 
@@ -386,6 +387,26 @@ class StaffEmergencyOperationsTests(TestCase):
         res = self.client.get("/staffs/coupons/?ordering=-discount")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["results"][0]["code"], "BETA20")
+
+    def test_staff_created_coupon_persists_and_shows_staff_creator(self):
+        self.client.force_authenticate(self.staff)
+        payload = {
+            "code": "STAFFPROMO",
+            "discount": 15,
+            "num_available": 50,
+            "valid_to": (timezone.now() + timedelta(days=10)).isoformat(),
+            "active": True,
+        }
+        create_res = self.client.post("/staffs/coupons/", payload, format="json")
+        self.assertEqual(create_res.status_code, 201)
+        self.assertIn(self.staff.email, create_res.data["created_by"])
+        self.assertIn("Staff", create_res.data["created_by"])
+
+        # Listing coupons also shows the staff creator
+        list_res = self.client.get("/staffs/coupons/?search=STAFFPROMO")
+        self.assertEqual(list_res.status_code, 200)
+        self.assertEqual(list_res.data["count"], 1)
+        self.assertIn(self.staff.email, list_res.data["results"][0]["created_by"])
 
     def test_staff_refunds_list_search_and_filtering(self):
         r1 = Refund.objects.create(email="user1@example.com", order=self.order, status=Refund.STATUS_PENDING, refund_type=Refund.REFUND_TYPE_STORE_CREDIT, reason="Wrong item")

@@ -50,7 +50,6 @@ class StoreBrandingTests(TestCase):
                 self.assertEqual(image_response['Content-Type'], 'image/png')
                 with Image.open(BytesIO(b''.join(image_response.streaming_content))) as saved:
                     self.assertEqual(saved.size, size)
-                image_response.close()
 
     def test_wrong_dimensions_invalid_files_and_oversized_uploads_are_rejected(self) -> None:
         oversized = self.image((512, 512)).read() + b'\0' * (5 * 1024 * 1024)
@@ -121,7 +120,6 @@ class StoreBrandingTests(TestCase):
         self.assertEqual(APIClient().get(url).status_code, 404)
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        response.close()
         self.client.force_authenticate(self.other)
         self.assertEqual(self.client.get(url).status_code, 404)
 

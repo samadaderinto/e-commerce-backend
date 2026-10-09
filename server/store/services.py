@@ -380,10 +380,10 @@ def request_merchant_payout(
     """
     from rest_framework.exceptions import ValidationError
 
+    wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=user)
     settle_pending_merchant_earnings()
     calculate_merchant_financials(user)
-
-    wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=user)
+    wallet.refresh_from_db()
 
     if amount > wallet.available_balance:
         raise ValidationError({
@@ -673,3 +673,4 @@ def calculate_merchant_financials(user: Any) -> dict:
         'stores_count': stores.count(),
         'stores': stores_breakdown,
     }
+

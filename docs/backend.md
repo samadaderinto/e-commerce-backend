@@ -97,6 +97,18 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 - **Split-Tender Payments**: Customers can combine available wallet balances with Stripe payments during checkout, deducting the wallet credit from the card charge.
 - **Order Cancellation (`/api/v1/orders/<id>/cancel/`)**: Customers can cancel orders in `pending` or `confirmed` status. Cancellation locks the order, restocks remaining physical product/variant quantities once, closes pending refund claims, reverses merchant earnings, and refunds only the remaining settled funds. Wallet tender returns as `SOURCE_REFUND`; Stripe tender returns to its original payment method. Unpaid COD orders receive no credit. Cancellation is blocked after any store starts fulfillment.
 - **7-Day Refund Policy (`/api/v1/orders/<id>/refund/`)**: Customers can request refunds for physical items within 7 days of order placement. Refund destinations can be selected as ProAce Store Credit (instant wallet credit upon admin approval) or original payment method. Digital goods are non-refundable once delivered.
+  - **Duplicate Prevention & Pending Edits**: Duplicate refund requests for the same order are strictly rejected while an active refund is pending review or after full payment settlement. Customers can retrieve (`GET`) and edit (`PATCH`/`PUT`) their existing pending request (reasons, refund destination, selected items) before staff moderation.
+  - **Order Serialization Integration**: `GET /api/v1/orders/<id>/` exposes `active_refund` metadata (`id`, `status`, `is_pending`, `reason`, `refund_type`, `refund_amount`, `product_ids`, `failure_reason`, timestamps) directly to the customer storefront.
+- **Coupon Lifecycle & Audit Preservation (`/api/v1/admin/staff/coupons/<id>/`)**: Unused coupons (`num_used == 0` and zero redemptions) can be permanently deleted by backoffice staff. Coupons with recorded customer redemption history (`num_used > 0` or redemptions present) cannot be deleted to preserve order records, receipts, and financial audit trails; they must remain deactivated.
+
+### User Profile Avatar & Media Storage
+- **Avatar Storage (`User.avatar_image`, `User.avatar_url`)**: Authenticated users across all roles (customers, merchants, staff, superadmins) can upload a personal avatar. Media files are uploaded to `user-profiles/avatars/` in MinIO/media storage.
+- **Image Specifications & Validation**: Uploads are validated server-side by `UserAvatarImageSerializer` for exact 512x512 resolution, JPEG/PNG/WebP formats, and a 5MB maximum file size.
+- **Endpoints**:
+  - `POST /api/v1/me/avatar/`: Authenticated user uploads an avatar image via multipart form data (`avatar_image`).
+  - `DELETE /api/v1/me/avatar/`: Authenticated user deletes their avatar, cleaning up the storage file and setting `avatar_image` and `avatar_url` to null.
+  - `GET /api/v1/users/<pk>/public/images/avatar/`: Public proxy endpoint serving the user avatar with Cache-Control headers and 404 fallback.
+- **Serializer Integration**: `UserSerializer` and `StaffSerializer` dynamically generate the proxy URL `/api/users/<pk>/public/images/avatar?v=<timestamp>` to prevent stale browser cache while isolating backend origins.
 
 ## Technical Super Admin Credential Synchronization
 

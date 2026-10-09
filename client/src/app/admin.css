@@ -17,9 +17,11 @@
 .button.danger { color: var(--red); border-color: #e7c6c3; }
 .button.danger:hover:not(:disabled) { background: #fff5f3; }
 .admin-staff-person { display: flex; align-items: center; gap: 12px; }
-.admin-staff-person > span { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--green-light); color: var(--green); font-weight: 700; text-transform: uppercase; }
+.admin-staff-person > span { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--green-light); color: var(--green); font-weight: 700; text-transform: uppercase; flex-shrink: 0; }
 .admin-staff-person strong, .admin-staff-person small { display: block; }
 .admin-staff-person small { font-size: 10px; color: var(--muted); }
+.admin-user-profile-avatar { width: 68px; height: 68px; border-radius: 50%; object-fit: cover; flex-shrink: 0; border: 2px solid var(--border, var(--line)); }
+.admin-user-profile-avatar-fallback { width: 68px; height: 68px; border-radius: 50%; display: grid; place-items: center; background: var(--green-light); color: var(--green); font-size: 26px; font-weight: 700; text-transform: uppercase; flex-shrink: 0; border: 2px solid var(--border, var(--line)); }
 .admin-staff-empty { min-height: 310px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 9px; }
 .admin-staff-empty > svg { color: var(--green); }
 .admin-staff-empty h2, .admin-staff-empty p { margin: 0; }

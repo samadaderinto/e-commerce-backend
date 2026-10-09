@@ -39,7 +39,8 @@ async function handler(
     route === 'products' ||
     /^products\/\d+$/.test(route) ||
     /^stores\/\d+\/public$/.test(route) ||
-    /^stores\/\d+\/public\/images\/(avatar|banner)$/.test(route)
+    /^stores\/\d+\/public\/images\/(avatar|banner)$/.test(route) ||
+    /^users\/\d+\/public\/images\/avatar$/.test(route)
   );
   const access = request.cookies.get('proace_access')?.value;
   const refresh = request.cookies.get('proace_refresh')?.value;

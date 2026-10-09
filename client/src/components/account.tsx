@@ -7,10 +7,11 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, Check, ChevronRight, ExternalLink, Eye, EyeOff, FileText, Printer, Heart, LockKeyhole, LogOut, MapPin, Package, Pencil, Plus, RotateCcw, ShoppingBag, Settings, Store, Trash2, Truck, UserRound, WalletCards, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, ChartNoAxesCombined, Check, ChevronRight, ExternalLink, Eye, EyeOff, FileText, Printer, Heart, LockKeyhole, LogOut, MapPin, Package, Pencil, Plus, RotateCcw, ShoppingBag, Settings, Store, Trash2, Truck, UserRound, UsersRound, WalletCards, X } from 'lucide-react';
 
 import { api, money } from '@/lib/api';
 import type { Address, Order, User, UserWallet } from '@/lib/types';
+import { UserAvatarUpload } from './user-avatar';
 import {
   COUNTRIES,
   DEFAULT_COUNTRY_NAME,
@@ -849,26 +850,36 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
   const [adding, setAdding] = useState(false); const [editingAddress, setEditingAddress] = useState<Address | null>(null); const [busy, setBusy] = useState(false);
   const [showTopupModal, setShowTopupModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const orders = useQuery({ queryKey: ['orders', user?.id], queryFn: () => api<Order[]>('orders'), enabled: !!user });
-  const addresses = useQuery({ queryKey: ['addresses', user?.id], queryFn: () => api<Address[]>('addresses'), enabled: !!user });
-  const wallet = useQuery({ queryKey: ['wallet', user?.id], queryFn: () => api<UserWallet>('wallet'), enabled: !!user });
+  const isBackoffice = Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
+  const orders = useQuery({ queryKey: ['orders', user?.id], queryFn: () => api<Order[]>('orders'), enabled: !!user && !isBackoffice });
+  const addresses = useQuery({ queryKey: ['addresses', user?.id], queryFn: () => api<Address[]>('addresses'), enabled: !!user && !isBackoffice });
+  const wallet = useQuery({ queryKey: ['wallet', user?.id], queryFn: () => api<UserWallet>('wallet'), enabled: !!user && !isBackoffice });
   function fundWallet() {
     setShowTopupModal(true);
   }
   useEffect(() => {
+    if (isBackoffice && (section === 'overview' || ['orders', 'wallet', 'addresses'].includes(section))) {
+      router.replace('/account/profile');
+    }
+  }, [isBackoffice, section, router]);
+  useEffect(() => {
     const sessionId = params.get('topup_session_id');
-    if (!sessionId || !user) return;
+    if (!sessionId || !user || isBackoffice) return;
     void api<{ detail: string; balance: string }>('wallet/topup-confirm', 'POST', { session_id: sessionId })
       .then(result => { notify(result.detail); void client.invalidateQueries({ queryKey: ['wallet', user.id] }); router.replace('/account/wallet'); })
       .catch(error => notify((error as Error).message, true));
-  }, [params, user?.id]);
-  const links = [
-    ['overview', 'Overview', UserRound],
-    ['orders', 'My orders', Package],
-    ['wallet', 'ProAce Wallet', WalletCards],
-    ['addresses', 'Address book', MapPin],
-    ['profile', 'Personal details', UserRound],
-  ] as const;
+  }, [params, user?.id, isBackoffice]);
+  const links = isBackoffice
+    ? [
+        ['profile', 'Personal details', UserRound],
+      ] as const
+    : [
+        ['overview', 'Overview', UserRound],
+        ['orders', 'My orders', Package],
+        ['wallet', 'ProAce Wallet', WalletCards],
+        ['addresses', 'Address book', MapPin],
+        ['profile', 'Personal details', UserRound],
+      ] as const;
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -888,19 +899,51 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
     <Gate>
       <div className="container account-page">
         <div className="breadcrumb">
-          <Link href="/">Home</Link>
+          <Link href={isBackoffice ? '/admin' : '/'}>{isBackoffice ? 'Platform dashboard' : 'Home'}</Link>
           <ChevronRight size={12} />
           <span>My account</span>
         </div>
         <div className="account-layout">
           <aside className="account-sidebar">
-            <div className="account-avatar">{user?.first_name?.[0] || 'P'}</div>
+            <div className="account-avatar">
+              {user?.avatar_url ? (
+                <img
+                  src={user.avatar_url}
+                  alt={user.first_name}
+                  style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }}
+                />
+              ) : (
+                user?.first_name?.[0] || 'P'
+              )}
+            </div>
             <h2>{user?.first_name} {user?.last_name}</h2>
             <p>{user?.email}</p>
+            {isBackoffice && (
+              <div style={{ marginTop: '0.25rem' }}>
+                <span
+                  className="account-badge admin"
+                  style={{
+                    display: 'inline-block',
+                    fontSize: '11px',
+                    padding: '2px 8px',
+                    borderRadius: '4px',
+                    fontWeight: 600,
+                    background: 'var(--green-light, #ecfdf5)',
+                    color: 'var(--green, #047857)',
+                  }}
+                >
+                  {user?.is_superuser
+                    ? 'Root Administrator'
+                    : user?.is_business_admin
+                    ? 'Business Administrator'
+                    : 'Staff Member'}
+                </span>
+              </div>
+            )}
             <nav>
               {links.map(([key, name, Icon]) => (
                 <Link
-                  className={section === key ? 'active' : ''}
+                  className={section === key || (isBackoffice && section === 'overview') ? 'active' : ''}
                   key={key}
                   href={key === 'overview' ? '/account' : `/account/${key}`}
                 >
@@ -916,15 +959,39 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                 <Settings size={19} />
                 App settings
               </Link>
-              <Link href="/saved">
-                <Heart size={19} />
-                Saved items
-              </Link>
-              <Link href="/merchant">
-                <Store size={19} />
-                Seller workspace
-                <ArrowRight size={15} />
-              </Link>
+              {isBackoffice ? (
+                <>
+                  <Link href="/admin">
+                    <ChartNoAxesCombined size={19} />
+                    Platform dashboard
+                    <ArrowRight size={15} />
+                  </Link>
+                  {(user?.is_superuser || user?.is_business_admin) && (
+                    <Link href="/admin/staff">
+                      <UsersRound size={19} />
+                      Manage staff
+                      <ArrowRight size={15} />
+                    </Link>
+                  )}
+                  <Link href="/merchant">
+                    <Store size={19} />
+                    Store operations
+                    <ArrowRight size={15} />
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <Link href="/saved">
+                    <Heart size={19} />
+                    Saved items
+                  </Link>
+                  <Link href="/merchant">
+                    <Store size={19} />
+                    Seller workspace
+                    <ArrowRight size={15} />
+                  </Link>
+                </>
+              )}
               <button
                 onClick={async () => {
                   try {
@@ -941,7 +1008,51 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
             </nav>
           </aside>
           <div className="account-content">
-            {section === 'overview' ? (
+            {isBackoffice || section === 'profile' ? (
+              <>
+                <h1>Personal details</h1>
+                <ActivityDetails {...user} />
+                <UserAvatarUpload user={user} />
+                <p className="muted">A little about you.</p>
+                <form className="form-stack profile-form" onSubmit={save}>
+                  <div className="form-row">
+                    <Field label="First name">
+                      <input name="first_name" defaultValue={user?.first_name} required maxLength={30} />
+                    </Field>
+                    <Field label="Last name">
+                      <input name="last_name" defaultValue={user?.last_name} required maxLength={30} />
+                    </Field>
+                  </div>
+                  <Field label="Email address">
+                    <input value={user?.email || ''} disabled />
+                  </Field>
+                  <Field label="Phone number">
+                    <input type="tel" name="phone1" defaultValue={user?.phone1} required />
+                  </Field>
+                  <button className="button" disabled={busy}>
+                    {busy ? 'Saving…' : 'Save changes'}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-link"
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    onClick={() => setShowPasswordModal(true)}
+                  >
+                    <span>Change your password</span>
+                    <ArrowRight size={16} />
+                  </button>
+                </form>
+              </>
+            ) : section === 'overview' ? (
               <>
                 <span className="eyebrow green">YOUR LITTLE CORNER OF PROACE</span>
                 <h1>Hello, {user?.first_name}.</h1>
@@ -1163,50 +1274,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                   </div>
                 )}
               </>
-            ) : (
-              <>
-                <h1>Personal details</h1>
-                <ActivityDetails {...user} />
-                <p className="muted">A little about you.</p>
-                <form className="form-stack profile-form" onSubmit={save}>
-                  <div className="form-row">
-                    <Field label="First name">
-                      <input name="first_name" defaultValue={user?.first_name} required maxLength={30} />
-                    </Field>
-                    <Field label="Last name">
-                      <input name="last_name" defaultValue={user?.last_name} required maxLength={30} />
-                    </Field>
-                  </div>
-                  <Field label="Email address">
-                    <input value={user?.email || ''} disabled />
-                  </Field>
-                  <Field label="Phone number">
-                    <input type="tel" name="phone1" defaultValue={user?.phone1} required />
-                  </Field>
-                  <button className="button" disabled={busy}>
-                    {busy ? 'Saving…' : 'Save changes'}
-                  </button>
-                  <button
-                    type="button"
-                    className="text-link"
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                    onClick={() => setShowPasswordModal(true)}
-                  >
-                    <span>Change your password</span>
-                    <ArrowRight size={16} />
-                  </button>
-                </form>
-              </>
-            )}
+            ) : null}
             {showTopupModal && (
               <WalletTopupModal
                 onClose={() => setShowTopupModal(false)}
@@ -1270,6 +1338,7 @@ export function OrderPage({ id }: { id: string }) {
   const { user, notify } = useShop(); const params = useSearchParams(); const client = useQueryClient();
   const order = useQuery({ queryKey: ['order', id, user?.id], queryFn: () => api<Order>(`orders/${id}`), enabled: !!user });
   const [requestingRefund, setRequestingRefund] = useState(false);
+  const [editingRefund, setEditingRefund] = useState(false);
   const [reason, setReason] = useState('item_damaged');
   const [otherReason, setOtherReason] = useState('');
   const [refundProducts, setRefundProducts] = useState<number[]>([]);
@@ -1289,17 +1358,61 @@ export function OrderPage({ id }: { id: string }) {
   const createdTime = data ? new Date(data.created).getTime() : 0;
   const daysElapsed = (Date.now() - createdTime) / (1000 * 60 * 60 * 24);
   const isWithin7Days = daysElapsed <= 7;
-  const canRequestRefund: boolean = hasPhysical && isWithin7Days && Number(data?.paid_total || 0) > Number(data?.refunded_total || 0) && !['refunded', 'refund_requested', 'cancelled'].includes(data?.status || '');
+  const activeRefund = data?.active_refund;
+  const isRefundPending = Boolean(activeRefund?.is_pending);
+  const canRequestRefund: boolean = !isRefundPending
+    && hasPhysical
+    && isWithin7Days
+    && Number(data?.paid_total || 0) > Number(data?.refunded_total || 0)
+    && !['refunded', 'cancelled'].includes(data?.status || '');
+
+  function openEditRefund() {
+    if (!activeRefund) return;
+    setEditingRefund(true);
+    const knownReasons: Record<string, string> = {
+      'Item damaged': 'item_damaged',
+      'Wrong item received': 'wrong_item_received',
+      'Item missing': 'item_missing',
+    };
+    const mappedReason = knownReasons[activeRefund.reason];
+    if (mappedReason) {
+      setReason(mappedReason);
+      setOtherReason('');
+    } else {
+      setReason('other');
+      setOtherReason(activeRefund.reason);
+    }
+    setRefundType(activeRefund.refund_type || 'store_credit');
+    setRefundProducts(activeRefund.product_ids || []);
+    setRequestingRefund(true);
+  }
 
   async function submitRefund(event: FormEvent) {
-    event.preventDefault(); setBusy(true);
+    event.preventDefault();
+    setBusy(true);
     try {
-      await api(`orders/${id}/refund`, 'POST', { reason, other_reason: reason === 'other' ? otherReason : '', product_ids: refundProducts, refund_type: refundType });
+      if (editingRefund) {
+        await api(`orders/${id}/refund`, 'PATCH', {
+          reason,
+          other_reason: reason === 'other' ? otherReason : '',
+          product_ids: refundProducts,
+          refund_type: refundType,
+        });
+        notify('Refund request updated. We will review your return within 1–2 business days.');
+      } else {
+        await api(`orders/${id}/refund`, 'POST', {
+          reason,
+          other_reason: reason === 'other' ? otherReason : '',
+          product_ids: refundProducts,
+          refund_type: refundType,
+        });
+        notify('Refund request submitted. We will review your return within 1–2 business days.');
+      }
       await client.invalidateQueries({ queryKey: ['order', id] });
       await client.invalidateQueries({ queryKey: ['orders'] });
       await client.invalidateQueries({ queryKey: ['wallet'] });
-      notify('Refund request submitted. We will review your return within 1–2 business days.');
       setRequestingRefund(false);
+      setEditingRefund(false);
     } catch (error) {
       notify((error as Error).message, true);
     } finally {
@@ -1520,6 +1633,75 @@ export function OrderPage({ id }: { id: string }) {
                     <span>Total</span>
                     <strong>{money(data.total)}</strong>
                   </div>
+                  {activeRefund && (
+                    <div
+                      style={{
+                        padding: '14px 16px',
+                        borderRadius: '8px',
+                        border: '1px solid var(--line)',
+                        background: activeRefund.is_pending ? 'var(--green-light)' : 'var(--paper)',
+                        marginTop: '1rem',
+                        marginBottom: '1rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                        <strong
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            fontSize: '13px',
+                            color: activeRefund.is_pending
+                              ? 'var(--green)'
+                              : activeRefund.status === 'approved'
+                              ? 'var(--green)'
+                              : activeRefund.status === 'declined'
+                              ? 'var(--rose, #e11d48)'
+                              : 'inherit',
+                          }}
+                        >
+                          <RotateCcw size={15} />
+                          {activeRefund.is_pending
+                            ? 'Refund Request Pending Review'
+                            : activeRefund.status === 'approved'
+                            ? `Refund Approved (${money(activeRefund.refund_amount)})`
+                            : activeRefund.status === 'declined'
+                            ? 'Refund Request Declined'
+                            : `Refund ${activeRefund.status}`}
+                        </strong>
+                        <Status value={activeRefund.status} />
+                      </div>
+                      <p style={{ margin: '4px 0', fontSize: '12px' }}>
+                        <strong>Amount:</strong> {money(activeRefund.refund_amount)} &middot;{' '}
+                        {activeRefund.refund_type === 'store_credit'
+                          ? 'Instant Store Credit (Wallet)'
+                          : 'Original Payment Method'}
+                      </p>
+                      <p style={{ margin: '4px 0', fontSize: '12px', color: 'var(--muted)' }}>
+                        <strong>Reason:</strong> {activeRefund.reason}
+                      </p>
+                      {activeRefund.is_pending && (
+                        <p style={{ margin: '6px 0 10px', fontSize: '11px', color: 'var(--muted)' }}>
+                          Physical returns are reviewed and processed within 1–2 business days. If you made a mistake or want to adjust items, you can edit your request below.
+                        </p>
+                      )}
+                      {(activeRefund.failure_reason || activeRefund.processing_reason) && activeRefund.status !== 'approved' && (
+                        <p style={{ margin: '4px 0', fontSize: '11px', color: 'var(--rose, #e11d48)' }}>
+                          <strong>Note:</strong> {activeRefund.failure_reason || activeRefund.processing_reason}
+                        </p>
+                      )}
+                      {activeRefund.is_pending && !requestingRefund && isWithin7Days && (
+                        <button
+                          type="button"
+                          className="button secondary"
+                          style={{ width: '100%', fontSize: '12px', padding: '7px 10px', marginTop: '6px' }}
+                          onClick={openEditRefund}
+                        >
+                          Edit refund request
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {canCancel && (
                     <button
                       type="button"
@@ -1538,7 +1720,7 @@ export function OrderPage({ id }: { id: string }) {
                   )}
                   {requestingRefund && (
                     <form className="form-stack" onSubmit={submitRefund} style={{ marginTop: '1rem' }}>
-                      <h4>Request refund (7-day window)</h4>
+                      <h4>{editingRefund ? 'Edit refund request' : 'Request refund (7-day window)'}</h4>
                       <fieldset className="form-stack">
                         <legend>Select items to return</legend>
                         {data.items.map((item) => (
@@ -1590,9 +1772,16 @@ export function OrderPage({ id }: { id: string }) {
                       )}
                       <div className="form-row">
                         <button className="button" disabled={busy || refundProducts.length === 0}>
-                          {busy ? 'Submitting…' : 'Submit request'}
+                          {busy ? (editingRefund ? 'Updating…' : 'Submitting…') : (editingRefund ? 'Save changes' : 'Submit request')}
                         </button>
-                        <button type="button" className="button secondary" onClick={() => setRequestingRefund(false)}>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          onClick={() => {
+                            setRequestingRefund(false);
+                            setEditingRefund(false);
+                          }}
+                        >
                           Cancel
                         </button>
                       </div>

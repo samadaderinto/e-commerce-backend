@@ -1,6 +1,6 @@
 # Back-office roles and staff activation
 
-The API is authoritative. The client hides consumer routes and navigation for administrative accounts and sends them to `/admin`. All protected JSON endpoints use `Authorization: Bearer <access JWT>`. Browser clients use the Next.js proxy, which keeps JWTs in HTTP-only cookies. Public authentication and catalog endpoints do not require a token.
+The API is authoritative. The client shields consumer routes (`/`, `/cart`, `/checkout`, `/saved`, `/account/orders`, `/account/wallet`, `/account/addresses`) for administrative accounts and redirects them to `/admin`. Backoffice operators retain direct access to their account settings (`/account`, `/account/profile`) to update their name, phone, password, and profile picture; consumer-only widgets (orders, wallets, addresses, saved items) are strictly hidden. All protected JSON endpoints use `Authorization: Bearer <access JWT>`. Browser clients use the Next.js proxy, which keeps JWTs in HTTP-only cookies. Public authentication and catalog endpoints do not require a token.
 
 ## Roles
 

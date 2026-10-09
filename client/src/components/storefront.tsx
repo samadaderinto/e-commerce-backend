@@ -765,7 +765,7 @@ export function ProductPage({ id }: { id: string }) {
         <ChevronRight size={12} />
         <span>{product.title}</span>
       </div>
-      {product.store_verified === false && (
+      {(product.store_verified === false || preview || !product.visibility) && (
         <div className="storefront-preview-banner">
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <span style={{ fontSize: "20px" }}>🔒</span>
@@ -774,7 +774,11 @@ export function ProductPage({ id }: { id: string }) {
                 Product Preview Mode (Private)
               </div>
               <div className="storefront-preview-desc">
-                This product belongs to an unverified store. It is visible only to you and staff, and is hidden from public shoppers.
+                {product.store_verified === false
+                  ? "This product belongs to an unverified store. It is visible only to you and staff, and is hidden from public shoppers."
+                  : !product.visibility
+                    ? "This product listing is an unpublished draft. It is visible only to you and staff, and is hidden from marketplace shoppers."
+                    : "This listing is being viewed in operator preview mode. Purchase actions are disabled for backoffice staff."}
               </div>
             </div>
           </div>

@@ -109,7 +109,7 @@ These suites require no running servers and **must always be executed and verifi
 npm run typecheck
 npm run test:unit
 
-# Backend Pytest Suite (Full suite: 294 tests; 286 passed, 8 offline environment skips)
+# Backend Pytest Suite (Full suite: 330 tests; 322 passed, 8 offline environment skips)
 .venv/bin/pytest server/
 ```
 

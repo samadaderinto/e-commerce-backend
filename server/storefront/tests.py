@@ -12,7 +12,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from cart.models import CartItem
-from core.models import Address, User
+from core.models import Address, Refund, User
 from core.services import credit_user_wallet
 from notification.models import NotificationDelivery
 
@@ -581,6 +581,7 @@ class StorefrontTests(TestCase):
         self.buyer.save(update_fields=['is_staff', 'is_business_admin'])
         response = self.client.post('/api/v1/admin/coupons/', payload, format='json')
         self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn(self.buyer.email, response.data['created_by'])
 
     def test_checkout_revalidates_stock(self):
         self.add()
@@ -663,6 +664,63 @@ class StorefrontTests(TestCase):
         self.assertEqual(refund_resp.data['refund_amount'], '17000.00')
         order = Order.objects.get(pk=order_id)
         self.assertEqual(order.status, 'confirmed')
+
+    def test_order_refund_duplicate_rejected_and_edit_pending_supported(self):
+        self.add()
+        order_resp = self.checkout()
+        order_id = order_resp.data['id']
+        refund_resp = self.client.post(
+            f'/api/v1/orders/{order_id}/refund/',
+            {'reason': 'wrong_item_received', 'product_ids': [self.product.pk]},
+            format='json',
+        )
+        self.assertEqual(refund_resp.status_code, 201)
+
+        # Duplicate refund submission while pending is rejected
+        dup_resp = self.client.post(
+            f'/api/v1/orders/{order_id}/refund/',
+            {'reason': 'item_damaged', 'product_ids': [self.product.pk]},
+            format='json',
+        )
+        self.assertEqual(dup_resp.status_code, 400)
+        self.assertIn('already pending review', dup_resp.data['error']['message'])
+
+        # GET active refund for the order
+        get_resp = self.client.get(f'/api/v1/orders/{order_id}/refund/')
+        self.assertEqual(get_resp.status_code, 200)
+        self.assertTrue(get_resp.data['is_pending'])
+        self.assertEqual(get_resp.data['reason'], 'wrong_item_received')
+
+        # Order detail includes active_refund
+        detail_resp = self.client.get(f'/api/v1/orders/{order_id}/')
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertIsNotNone(detail_resp.data['active_refund'])
+        self.assertTrue(detail_resp.data['active_refund']['is_pending'])
+
+        # Customer edits the pending refund request
+        patch_resp = self.client.patch(
+            f'/api/v1/orders/{order_id}/refund/',
+            {'reason': 'item_damaged', 'refund_type': 'original_payment'},
+            format='json',
+        )
+        self.assertEqual(patch_resp.status_code, 200)
+        self.assertEqual(patch_resp.data['refund_type'], 'original_payment')
+
+        # Verify edited values in DB
+        refund = Refund.objects.get(pk=refund_resp.data['refund_id'])
+        self.assertEqual(refund.reason, 'Item damaged')
+        self.assertEqual(refund.refund_type, 'original_payment')
+
+        # Editing a non-pending refund (e.g. approved) is disallowed
+        refund.status = Refund.STATUS_APPROVED
+        refund.save()
+        non_pending_patch = self.client.patch(
+            f'/api/v1/orders/{order_id}/refund/',
+            {'reason': 'wrong_item_received'},
+            format='json',
+        )
+        self.assertEqual(non_pending_patch.status_code, 400)
+        self.assertIn('no pending refund request', non_pending_patch.data['error']['message'])
 
     def test_order_refund_fails_after_7_days(self):
         self.add()

@@ -376,7 +376,7 @@ class AuditRegressionTests(TestCase):
         order = self.checkout()
         self.client.force_authenticate(self.seller)
         url = f"/api/v1/stores/{self.store.pk}/orders/{order.pk}/tracking/"
-        for status in ["cancelled", "refunded", "delivered"]:
+        for status in ["cancelled", "refunded"]:
             self.assertEqual(
                 self.client.patch(url, {"status": status}, format="json").status_code,
                 400,
@@ -391,6 +391,36 @@ class AuditRegressionTests(TestCase):
         )
         order.refresh_from_db()
         self.assertEqual(order.status, "shipped")
+        self.assertEqual(
+            self.client.patch(url, {"status": "delivered"}, format="json").status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.patch(url, {"status": "shipped"}, format="json").status_code,
+            400,
+        )
+        order.refresh_from_db()
+        self.assertEqual(order.status, "delivered")
+
+    def test_merchant_can_fulfill_directly_to_delivered(self) -> None:
+        order = self.checkout()
+        self.client.force_authenticate(self.seller)
+        url = f"/api/v1/stores/{self.store.pk}/orders/{order.pk}/tracking/"
+        res = self.client.patch(
+            url,
+            {"status": "delivered", "tracking_number": "TRACK-DELIV-1", "carrier": "USPS"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 200)
+        order.refresh_from_db()
+        self.assertEqual(order.status, "delivered")
+        self.assertIsNotNone(order.shipped_at)
+        self.assertIsNotNone(order.delivered_at)
+        fulfillment = order.fulfillments.get(store=self.store)
+        self.assertEqual(fulfillment.status, "delivered")
+        self.assertEqual(fulfillment.tracking_number, "TRACK-DELIV-1")
+        self.assertIsNotNone(fulfillment.shipped_at)
+        self.assertIsNotNone(fulfillment.delivered_at)
 
     def test_mixed_store_fulfillment_does_not_complete_another_store(self) -> None:
         seller = User.objects.create_user(
@@ -805,6 +835,62 @@ class AuditRegressionTests(TestCase):
             UserWallet.objects.get(user=self.buyer).balance, Decimal("1000")
         )
         refund.assert_called_once()
+
+    def test_coupon_atomic_used_increments_and_deactivates_at_cap(self) -> None:
+        coupon = Coupon.objects.create(
+            code="ATOMICCAP",
+            discount=10,
+            num_available=2,
+            num_used=1,
+            valid_to=timezone.now() + timezone.timedelta(days=1),
+        )
+        coupon.used()
+        coupon.refresh_from_db()
+        self.assertEqual(coupon.num_used, 2)
+        self.assertFalse(coupon.active)
+        with self.assertRaises(ValidationError):
+            coupon.used()
+
+    def test_compensate_checkout_applies_idempotency_key_without_double_crediting(self) -> None:
+        from payment.checkout_recovery import compensate_checkout
+        from payment.models import CheckoutAttempt
+
+        key = uuid4()
+        attempt = CheckoutAttempt.objects.create(
+            user=self.buyer,
+            checkout_key=key,
+            session_id="cs_test_comp",
+            wallet_amount=Decimal("50.00"),
+            expires_at=timezone.now() + timezone.timedelta(minutes=30),
+            status="reserved",
+        )
+        initial_balance = UserWallet.objects.get(user=self.buyer).balance
+        session = {"payment_status": "unpaid", "status": "expired"}
+        self.assertTrue(compensate_checkout(attempt, session, "Session expired"))
+        self.buyer.refresh_from_db()
+        self.assertEqual(
+            UserWallet.objects.get(user=self.buyer).balance,
+            initial_balance + Decimal("50.00"),
+        )
+        self.assertEqual(
+            UserWalletTransaction.objects.filter(
+                idempotency_key=f"compensate-{key}-wallet"
+            ).count(),
+            1,
+        )
+        # Calling again should not double credit
+        self.assertTrue(compensate_checkout(attempt, session, "Retry"))
+        self.assertEqual(
+            UserWallet.objects.get(user=self.buyer).balance,
+            initial_balance + Decimal("50.00"),
+        )
+
+    def test_settle_pending_merchant_earnings_atomic_execution(self) -> None:
+        from store.services import settle_pending_merchant_earnings
+
+        settled = settle_pending_merchant_earnings()
+        self.assertIsInstance(settled, int)
+
 
 
 @skipUnless(

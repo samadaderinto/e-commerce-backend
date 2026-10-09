@@ -64,9 +64,10 @@ class AccessAndShippingTests(TestCase):
         official_store = Store.objects.create(
             user=self.admin, name='Official Store', is_official=True, status='active', verified_at=timezone.now()
         )
-        Product.objects.create(store=official_store, title='Official Product', price=Decimal('30'), discount=0, available=5)
+        prod = Product.objects.create(store=official_store, title='Official Product', price=Decimal('30'), discount=0, available=5)
         self.assertEqual(self.client.get('/api/v1/stores/').data['count'], 1)
         self.assertEqual(self.client.get(f'/api/v1/stores/{official_store.pk}/products/').status_code, 200)
+        self.assertEqual(self.client.get(f'/api/v1/products/{prod.pk}/').status_code, 200)
 
         # Staff cannot create stores, delete stores, or approve sellers
         self.assertEqual(self.client.post('/api/v1/stores/', {'name': 'Forbidden', 'username': 'forbidden', 'address': {'address': '1 Main St', 'city': 'Tampa', 'state': 'FL', 'country': 'US', 'zip': '33602'}}, format='json').status_code, 403)

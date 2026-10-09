@@ -79,13 +79,29 @@ class Coupon(DatesMixin):
         return is_active and is_usable and is_valid_date
 
     def used(self) -> None:
+        from django.db.models import Case, F, Value, When
         from django.utils import timezone
+        from rest_framework.exceptions import ValidationError
 
-        self.last_used_at = timezone.now()
-        self.num_used += 1
-        if self.num_used >= self.num_available:
-            self.active = False
-        self.save()
+        now = timezone.now()
+        updated = Coupon.objects.filter(
+            pk=self.pk,
+            active=True,
+            num_used__lt=F("num_available"),
+        ).update(
+            num_used=F("num_used") + 1,
+            last_used_at=now,
+            active=Case(
+                When(num_used__gte=F("num_available") - 1, then=Value(False)),
+                default=Value(True),
+            ),
+        )
+        if not updated:
+            self.refresh_from_db()
+            raise ValidationError(
+                {"coupon": "This coupon has reached its maximum usage limit."}
+            )
+        self.refresh_from_db()
 
 
 class CouponRedemption(DatesMixin):

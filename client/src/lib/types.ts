@@ -44,6 +44,7 @@ export type Product = LifecycleTimestamps & {
   seller_tier?: SellerTier;
   is_digital: boolean;
   digital_preview_watermark?: boolean;
+  visibility?: boolean;
   id: number;
   title: string;
   description: string;
@@ -95,6 +96,7 @@ export type User = ActivityTimestamps & {
   is_business_admin: boolean;
   must_change_password: boolean;
   role: string;
+  avatar_url?: string | null;
 };
 
 export type StaffUser = User & {
@@ -191,6 +193,20 @@ export type OrderFulfillment = {
   delivered_at: string | null;
 };
 
+export type OrderActiveRefund = {
+  id: number;
+  status: 'pending' | 'approved' | 'declined' | 'failed';
+  is_pending: boolean;
+  reason: string;
+  refund_type: 'store_credit' | 'original_payment';
+  refund_amount: string;
+  product_ids: number[];
+  failure_reason?: string;
+  processing_reason?: string;
+  created: string;
+  updated: string;
+};
+
 export type Order = LifecycleTimestamps & {
   id: number;
   reference: string;
@@ -210,6 +226,7 @@ export type Order = LifecycleTimestamps & {
   shipped_at?: string | null;
   delivered_at?: string | null;
   tracking_events?: TrackingEvent[];
+  active_refund?: OrderActiveRefund | null;
   items: {
     product: number;
     title: string;

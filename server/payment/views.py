@@ -4,7 +4,8 @@ from django.conf import settings
 from cart.models import Cart, CartItem
 from cart.cache import invalidate_cart_cache
 from utils.functions import make_payment
-from payment.models import Coupon, DeliveryInfo
+from payment.models import Coupon, CouponRedemption, DeliveryInfo
+from django.db import transaction
 from product.models import Product
 from product.policies import validate_purchase
 from rest_framework.permissions import IsAuthenticated
@@ -58,6 +59,7 @@ class PaymentViewSet(viewsets.GenericViewSet):
 
     @extend_schema(responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['post'], url_path='checkout/pay')
+    @transaction.atomic
     def capture_checkout_session(self, request):
         data = JSONParser().parse(request)
         data["user"] = request.user.pk
@@ -78,16 +80,18 @@ class PaymentViewSet(viewsets.GenericViewSet):
             validate_purchase(item.product, user)
 
         cart_serializer = CartSerializer(cart)
-        coupon = get_object_or_404(Coupon, code=serializer.validated_data['coupon_code'])
-        discount = coupon.discount if coupon.can_use() else None
-
-        if not discount:
+        coupon = Coupon.objects.select_for_update().filter(code=serializer.validated_data['coupon_code']).first()
+        if not coupon or not coupon.can_use():
             return Response('invalid coupon code', status=status.HTTP_404_NOT_FOUND)
+        if CouponRedemption.objects.filter(coupon=coupon, user=user).exists():
+            return Response('coupon already used', status=status.HTTP_400_BAD_REQUEST)
+        discount = coupon.discount
 
         checkout_session = make_payment(items, cart_serializer.data['total'], discount)
         if checkout_session['payment_status'] == 'paid':
             cart.ordered = True
             coupon.used()
+            CouponRedemption.objects.create(coupon=coupon, user=user)
             cart.save()
             invalidate_cart_cache(cart)
             serializer.save()

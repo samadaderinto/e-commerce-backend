@@ -208,7 +208,8 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 - **ClickBank Affiliate & Partner Offers**: Seamless integration of external ClickBank partner products coexisting alongside native marketplace listings. Features partner badges, custom CTA labels ("Buy on Partner Site"), and transparent partner fulfillment notes. Secure outbound routing via `/api/affiliates/clickbank/outbound/<id>` attaches tracking tokens (`tid=cb_*`) and logs outbound clicks while blocking local cart checkout.
 - Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
 - Email-verified registration, sign-in, password reset, and session management.
-- Profile, delivery addresses, order history, and detailed order pages.
+- Profile, personal avatars with circular 512x512 crop dialog, delivery addresses, order history, and detailed order pages.
+- **User Avatar & Photo Management**: Profile picture upload with client-side circular crop tool (`UserAvatarCropDialog`), 512x512 server validation, MinIO media persistence, and instant reflection across customer account, global `/settings`, merchant workspaces, and backoffice staff tables.
 - **Order Tracking**: Recorded fulfillment milestones and official USPS, UPS, FedEx, and DHL tracking links. Shipping service and carrier quotes are preserved in each order.
 - **In-App Password Management**: In-dialog password updates (`/api/v1/password/change/`) verifying current passwords and enforcing secure credential hygiene.
 - **ProAce Wallet, Top-Ups & Refunds**: Integrated customer wallet balance with Stripe Checkout top-up sessions (`/api/v1/wallet/topup-session/`), 7-day physical return window, and instant store credit refund resolution.
@@ -271,7 +272,7 @@ npm run typecheck
 # 2. Frontend Unit Tests (24 tests via Node native runner)
 npm run test:unit
 
-# 3. Backend Test Suite (Django / Pytest: 294 tests; 286 passed, 8 environment-dependent skips offline)
+# 3. Backend Test Suite (Django / Pytest: 330 tests; 322 passed, 8 environment-dependent skips offline)
 .venv/bin/pytest server/
 ```
 

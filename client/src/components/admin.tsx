@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
+  ArrowLeft,
   ArrowRight,
   ArrowUpRight,
   Ban,
@@ -176,9 +177,14 @@ export function AdminDashboardPage() {
   }
 
   async function setCoupon(coupon: AdminCoupon, action: 'toggle' | 'delete') {
+    const isUsed = Boolean(coupon.num_used > 0 || (coupon.redemptions && coupon.redemptions.length > 0));
     try {
       if (action === 'delete') {
-        if (await actionDialog.ask({ title: 'Delete coupon', message: `Delete unused coupon ${coupon.code}?`, confirmLabel: 'Delete' }) === null) return;
+        if (isUsed) {
+          notify(`Coupon ${coupon.code} has recorded customer redemptions and cannot be deleted to preserve order history. Keep it deactivated instead.`, true);
+          return;
+        }
+        if (await actionDialog.ask({ title: 'Delete coupon', message: `Permanently delete unused coupon ${coupon.code}?`, confirmLabel: 'Delete' }) === null) return;
         await api(`admin/staff/coupons/${coupon.id}`, 'DELETE');
         notify(`Coupon ${coupon.code} deleted`);
       } else {
@@ -536,7 +542,7 @@ export function AdminDashboardPage() {
                             rows: [
                               ['Status', coupon.active ? 'Active' : 'Inactive'],
                               ['Discount', `${coupon.discount}%`],
-                              ['Created by', coupon.created_by || 'Platform / Unattributed'],
+                              ['Created by', coupon.created_by || 'Staff Backoffice'],
                               ['Valid from', new Date(coupon.valid_from).toLocaleString()],
                               ['Valid to', new Date(coupon.valid_to).toLocaleString()],
                               ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
@@ -557,8 +563,18 @@ export function AdminDashboardPage() {
                       </button>
                       <button
                         className="icon-button"
-                        aria-label={`Delete coupon ${coupon.code}`}
-                        title="Delete unused coupon"
+                        aria-label={
+                          coupon.num_used > 0
+                            ? `Coupon ${coupon.code} cannot be deleted (used in orders)`
+                            : `Delete coupon ${coupon.code}`
+                        }
+                        title={
+                          coupon.num_used > 0
+                            ? 'Used coupons cannot be deleted to preserve redemption history. Keep deactivated.'
+                            : 'Delete unused coupon'
+                        }
+                        disabled={coupon.num_used > 0}
+                        style={coupon.num_used > 0 ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}
                         onClick={() => void setCoupon(coupon, 'delete')}
                       >
                         <Trash2 size={16} />
@@ -817,8 +833,21 @@ export function AdminUsersPage() {
               {results.map(member => (
                 <tr key={member.id}>
                   <td>
-                    <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Unnamed user'}</strong>
-                    <small style={{ display: 'block' }}>{member.email}</small>
+                    <div className="admin-staff-person">
+                      {member.avatar_url ? (
+                        <img
+                          src={member.avatar_url}
+                          alt={member.first_name || member.email}
+                          style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                        />
+                      ) : (
+                        <span>{member.first_name?.[0] || member.email[0]}</span>
+                      )}
+                      <div>
+                        <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Unnamed user'}</strong>
+                        <small>{member.email}</small>
+                      </div>
+                    </div>
                   </td>
                   <td>{member.phone1 || '—'}</td>
                   <td><span className="status">{member.role.replace('_', ' ')}</span></td>
@@ -911,15 +940,29 @@ export function AdminUserDetailPage({ id }: { id: string }) {
   return (
     <div className="container admin-staff-page section">
       <Link className="text-link" href="/admin/users">
-        <ArrowRight size={16} />All users
+        <ArrowLeft size={16} />
+        All users
       </Link>
 
-      <div className="admin-staff-heading" style={{ marginTop: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-        <div>
-          <span className="eyebrow green">USER PROFILE</span>
-          <h1>{`${data.user.first_name} ${data.user.last_name}`.trim() || data.user.email}</h1>
-          <p>{data.user.email} · {data.user.role.replace('_', ' ')} · Joined {new Date(data.user.date_joined).toLocaleDateString()}</p>
-          <ActivityDetails {...data.user} />
+      <div className="admin-staff-heading" style={{ marginTop: '1.5rem', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center' }}>
+          {data.user.avatar_url ? (
+            <img
+              src={data.user.avatar_url}
+              alt={data.user.first_name || data.user.email}
+              className="admin-user-profile-avatar"
+            />
+          ) : (
+            <div className="admin-user-profile-avatar-fallback">
+              {data.user.first_name?.[0]?.toUpperCase() || data.user.email[0]?.toUpperCase()}
+            </div>
+          )}
+          <div>
+            <span className="eyebrow green">USER PROFILE</span>
+            <h1>{`${data.user.first_name} ${data.user.last_name}`.trim() || data.user.email}</h1>
+            <p>{data.user.email} · {data.user.role.replace('_', ' ')} · Joined {new Date(data.user.date_joined).toLocaleDateString()}</p>
+            <ActivityDetails {...data.user} />
+          </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
           <Status value={data.user.is_active ? 'active' : 'blocked'} />
@@ -1286,27 +1329,10 @@ export function AdminStaffPage() {
           <h1>Staff management</h1>
           <p>Add trusted team members and control their access.</p>
         </div>
-        <div className="admin-dashboard-shortcuts">
-          {user.is_superuser && <a
-            className="button secondary"
-            href={process.env.NEXT_PUBLIC_GRAFANA_URL || 'http://127.0.0.1:3002'}
-            target="_blank"
-            rel="noreferrer"
-            title="Open Grafana Live Telemetry & Metrics (Technical admin sign-in required)"
-          >
-            <Activity size={17} />
-            Live Metrics (Grafana)
-            <ArrowUpRight size={14} />
-          </a>}
-          <Link className="button secondary" href="/admin">
-            <ChartNoAxesCombined size={17} />
-            Platform Dashboard
-          </Link>
-          <button className="button" onClick={() => setAdding(true)}>
-            <Plus size={17} />
-            Add staff
-          </button>
-        </div>
+        <button className="button" onClick={() => setAdding(true)}>
+          <Plus size={17} />
+          Add staff
+        </button>
       </div>
       <div className="admin-staff-toolbar">
         <div className="search-box">
@@ -1335,7 +1361,15 @@ export function AdminStaffPage() {
                 <tr key={member.id}>
                   <td>
                     <div className="admin-staff-person">
-                      <span>{member.first_name?.[0] || member.email[0]}</span>
+                      {member.avatar_url ? (
+                        <img
+                          src={member.avatar_url}
+                          alt={member.first_name || member.email}
+                          style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                        />
+                      ) : (
+                        <span>{member.first_name?.[0] || member.email[0]}</span>
+                      )}
                       <div>
                         <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Staff member'}</strong>
                         <small>{member.email}</small>
@@ -1614,7 +1648,8 @@ export function AdminStoresPage() {
                   <th>Store</th>
                   <th>Type</th>
                   <th>Status</th>
-<th>Created / Updated / Active</th>                  <th>Staff access</th>
+                  <th>Created / Updated / Active</th>
+                  <th>Staff access</th>
                   <th><span className="sr-only">Actions</span>Actions</th>
                 </tr>
               </thead>
@@ -1660,7 +1695,6 @@ export function AdminStoresPage() {
                           <span className="account-badge customer">Independent Seller</span>
                         )}
                       </td>
-                      <td>{activityDate(store.created)}<br />{activityDate(store.updated)}<br />{activityDate(store.last_active_at)}</td>
                       <td>
                         <Status value={store.status} />
                         {store.blocked_reason && (
@@ -1668,6 +1702,13 @@ export function AdminStoresPage() {
                             {store.blocked_reason}
                           </small>
                         )}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
+                          <span><small style={{ color: 'var(--muted)', marginRight: 4 }}>Created:</small>{activityDate(store.created)}</span>
+                          <span><small style={{ color: 'var(--muted)', marginRight: 4 }}>Updated:</small>{activityDate(store.updated)}</span>
+                          <span><small style={{ color: 'var(--muted)', marginRight: 4 }}>Active:</small>{activityDate(store.last_active_at)}</span>
+                        </div>
                       </td>
                       <td>
                         {store.is_official ? (
@@ -2222,9 +2263,14 @@ export function AdminCouponsPage() {
   });
 
   async function setCoupon(coupon: AdminCoupon, action: 'toggle' | 'delete') {
+    const isUsed = Boolean(coupon.num_used > 0 || (coupon.redemptions && coupon.redemptions.length > 0));
     try {
       if (action === 'delete') {
-        if (await actionDialog.ask({ title: 'Delete coupon', message: `Delete unused coupon ${coupon.code}?`, confirmLabel: 'Delete' }) === null) return;
+        if (isUsed) {
+          notify(`Coupon ${coupon.code} has recorded customer redemptions and cannot be deleted to preserve order history. Keep it deactivated instead.`, true);
+          return;
+        }
+        if (await actionDialog.ask({ title: 'Delete coupon', message: `Permanently delete unused coupon ${coupon.code}?`, confirmLabel: 'Delete' }) === null) return;
         await api(`admin/staff/coupons/${coupon.id}`, 'DELETE');
         notify(`Coupon ${coupon.code} deleted`);
       } else {
@@ -2376,7 +2422,7 @@ export function AdminCouponsPage() {
                         {new Date(coupon.valid_from).toLocaleDateString()} – {new Date(coupon.valid_to).toLocaleDateString()}
                       </small>
                     </td>
-                    <td><small>{coupon.created_by || 'Platform / Seed'}</small></td>
+                    <td><small>{coupon.created_by || 'Staff Backoffice'}</small></td>
                     <td>{coupon.redemptions?.length || 0} orders</td>
                     <td>
                       <div className="form-actions" style={{ justifyContent: 'flex-start' }}>
@@ -2389,7 +2435,7 @@ export function AdminCouponsPage() {
                             rows: [
                               ['Status', coupon.active ? 'Active' : 'Inactive'],
                               ['Discount', `${coupon.discount}%`],
-                              ['Created by', coupon.created_by || 'Platform / Unattributed'],
+                              ['Created by', coupon.created_by || 'Staff Backoffice'],
                               ['Valid from', new Date(coupon.valid_from).toLocaleString()],
                               ['Valid to', new Date(coupon.valid_to).toLocaleString()],
                               ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
@@ -2409,8 +2455,18 @@ export function AdminCouponsPage() {
                         <button
                           type="button"
                           className="icon-button"
-                          aria-label={`Delete coupon ${coupon.code}`}
-                          title="Delete unused coupon"
+                          aria-label={
+                            coupon.num_used > 0
+                              ? `Coupon ${coupon.code} cannot be deleted (used in orders)`
+                              : `Delete coupon ${coupon.code}`
+                          }
+                          title={
+                            coupon.num_used > 0
+                              ? 'Used coupons cannot be deleted to preserve redemption history. Keep deactivated.'
+                              : 'Delete unused coupon'
+                          }
+                          disabled={coupon.num_used > 0}
+                          style={coupon.num_used > 0 ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}
                           onClick={() => void setCoupon(coupon, 'delete')}
                         >
                           <Trash2 size={16} />

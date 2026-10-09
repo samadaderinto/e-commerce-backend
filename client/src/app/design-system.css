@@ -22,7 +22,7 @@ p { color: var(--muted); }
 input, select, textarea {
   border-color: var(--line);
   border-radius: var(--radius-control);
-  background: var(--paper);
+  background-color: var(--paper);
   color: var(--ink);
   transition: border-color 160ms ease, box-shadow 160ms ease;
 }

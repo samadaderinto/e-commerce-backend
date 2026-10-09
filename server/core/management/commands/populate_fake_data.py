@@ -563,7 +563,7 @@ class Command(BaseCommand):
 
         # Step 5: Coupons & Promo Codes
         self.stdout.write(self.style.HTTP_INFO("[5/11] Generating promotional coupons..."))
-        coupons = self.seed_coupons(products)
+        coupons = self.seed_coupons(products, users)
 
         # Step 5b: Sales Tax Jurisdictions
         self.seed_tax_jurisdictions()
@@ -1031,12 +1031,20 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f"  -> {len(created_products)} catalog products & specifications ready."))
         return list(Product.objects.all()[:count])
 
-    def seed_coupons(self, products: List[Product]) -> List[Coupon]:
+    def seed_coupons(self, products: List[Product], users: Optional[List[User]] = None) -> List[Coupon]:
         coupons = []
-        for bp in COUPON_BLUEPRINTS:
+        admin_staff = [
+            u for u in (users or [])
+            if getattr(u, 'is_staff', False) or getattr(u, 'is_superuser', False) or getattr(u, 'is_business_admin', False)
+        ]
+        if not admin_staff:
+            admin_staff = list(User.objects.filter(models.Q(is_staff=True) | models.Q(is_superuser=True) | models.Q(is_business_admin=True), is_active=True))
+
+        for idx, bp in enumerate(COUPON_BLUEPRINTS):
             code = bp["code"]
             product = products[0] if bp["type"] == "product" else None
-            coupon, _ = Coupon.objects.get_or_create(
+            creator = admin_staff[idx % len(admin_staff)] if admin_staff else None
+            coupon, created = Coupon.objects.get_or_create(
                 code=code,
                 defaults={
                     "valid_to": timezone.now() + timedelta(days=90),
@@ -1047,9 +1055,17 @@ class Command(BaseCommand):
                     "type": bp["type"],
                     "category": bp["category"],
                     "product": product,
+                    "created_by": creator,
                 },
             )
+            if not created and coupon.created_by is None and creator:
+                coupon.created_by = creator
+                coupon.save(update_fields=["created_by"])
             coupons.append(coupon)
+
+        if admin_staff:
+            Coupon.objects.filter(created_by__isnull=True).update(created_by=admin_staff[0])
+
         return coupons
 
     def seed_tax_jurisdictions(self) -> None:

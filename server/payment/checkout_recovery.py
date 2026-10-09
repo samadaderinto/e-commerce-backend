@@ -46,8 +46,13 @@ def compensate_checkout(attempt: CheckoutAttempt, session: Any, reason: str) -> 
             stripe.checkout.Session.expire(attempt.session_id)
         attempt.status = 'released'
     if attempt.wallet_amount > 0:
-        credit_user_wallet(attempt.user, attempt.wallet_amount, 'Released checkout wallet reservation',
-                           reference=f'release-{attempt.checkout_key}')
+        credit_user_wallet(
+            attempt.user,
+            attempt.wallet_amount,
+            'Released checkout wallet reservation',
+            reference=f'release-{attempt.checkout_key}',
+            idempotency_key=f'compensate-{attempt.checkout_key}-wallet',
+        )
     attempt.save(update_fields=['status', 'failure_reason', 'payment_intent', 'updated'])
     return True
 

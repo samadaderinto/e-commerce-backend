@@ -24,7 +24,7 @@ import {
   HelpPage,
   PolicyPage,
 } from '@/components/help';
-import { AppearanceSettings } from '@/components/theme';
+import { AppSettings } from '@/components/theme';
 import { Loading } from '@/components/ui';
 import {
   AdminStoresPage,
@@ -63,8 +63,8 @@ export default async function Page({
   } else if (slug[0] === 'settings' && slug.length === 1) {
     content = (
       <div className="container section app-settings">
-        <h1>App settings</h1>
-        <AppearanceSettings />
+        <h1>Settings</h1>
+        <AppSettings />
       </div>
     );
   } else if (slug[0] === 'cart' && slug.length === 1) {

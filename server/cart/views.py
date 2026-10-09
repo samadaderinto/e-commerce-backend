@@ -22,6 +22,7 @@ from rest_framework import viewsets
 from rest_framework.exceptions import ValidationError
 from django.core.cache import cache
 from django.shortcuts import get_object_or_404
+from django.db import transaction
 
 from drf_spectacular.utils import extend_schema
 # Create your views here.
@@ -77,6 +78,7 @@ class CartViewSet(viewsets.GenericViewSet):
     
     @extend_schema(responses={status.HTTP_200_OK: None})
     @action(detail=False, methods=['post'], url_path='add')
+    @transaction.atomic
     def add_to_cart(self, request):
         data = request_payload(request)
         quantity = parse_quantity(data)
@@ -102,14 +104,14 @@ class CartViewSet(viewsets.GenericViewSet):
                 status=status.HTTP_409_CONFLICT
             )
 
-        cart, created_cart = self.user_cart.objects.get_or_create(
+        cart, created_cart = self.user_cart.objects.select_for_update().get_or_create(
             user=request.user,
             ordered=False
         )
         from product.policies import selected_variant
         variant_name = str(data.get('variant') or '')
         option = selected_variant(product, variant_name)
-        cart_item, created = self.cart_item.objects.get_or_create(cart=cart, product=product, variant=variant_name)
+        cart_item, created = self.cart_item.objects.select_for_update().get_or_create(cart=cart, product=product, variant=variant_name)
         if not created:
             quantity += cart_item.quantity
 
@@ -129,14 +131,15 @@ class CartViewSet(viewsets.GenericViewSet):
         return Response(serialize_cart(cart), status=status.HTTP_201_CREATED)
 
     @extend_schema(responses={status.HTTP_200_OK: CartSerializer})
-    def _resolve_cart_item(self, request, data):
+    def _resolve_cart_item(self, request, data, lock=False):
         product_id = data.get("product")
         if not product_id:
             raise ValidationError({"product": "Product ID is required."})
         cart_id = data.get("cart")
         cart_filter = {"cart_id": cart_id} if cart_id else {}
+        query = self.cart_item.objects.select_for_update() if lock else self.cart_item.objects
         return get_object_or_404(
-            self.cart_item,
+            query,
             cart__user=request.user,
             cart__ordered=False,
             product_id=product_id,
@@ -146,10 +149,11 @@ class CartViewSet(viewsets.GenericViewSet):
 
     @extend_schema(responses={status.HTTP_200_OK: CartSerializer})
     @action(detail=False, methods=['patch'], url_path='update')
+    @transaction.atomic
     def update_cart_item(self, request):
         data = request_payload(request)
         quantity = parse_quantity(data)
-        cart_item = self._resolve_cart_item(request, data)
+        cart_item = self._resolve_cart_item(request, data, lock=True)
 
         from product.policies import selected_variant
         option = selected_variant(cart_item.product, cart_item.variant)
@@ -171,10 +175,11 @@ class CartViewSet(viewsets.GenericViewSet):
 
     @extend_schema(responses={status.HTTP_200_OK: CartSerializer})
     @action(detail=False, methods=['post'], url_path='increase')
+    @transaction.atomic
     def increase_cart_item(self, request):
         data = request_payload(request)
         increment_by = parse_quantity(data)
-        cart_item = self._resolve_cart_item(request, data)
+        cart_item = self._resolve_cart_item(request, data, lock=True)
         quantity = cart_item.quantity + increment_by
         from product.policies import selected_variant
         option = selected_variant(cart_item.product, cart_item.variant)
@@ -197,10 +202,11 @@ class CartViewSet(viewsets.GenericViewSet):
 
     @extend_schema(responses={status.HTTP_200_OK: CartSerializer})
     @action(detail=False, methods=['post'], url_path='decrease')
+    @transaction.atomic
     def decrease_cart_item(self, request):
         data = request_payload(request)
         decrement_by = parse_quantity(data)
-        cart_item = self._resolve_cart_item(request, data)
+        cart_item = self._resolve_cart_item(request, data, lock=True)
         cart = cart_item.cart
         quantity = cart_item.quantity - decrement_by
 
@@ -215,9 +221,10 @@ class CartViewSet(viewsets.GenericViewSet):
 
     @extend_schema(responses={status.HTTP_202_ACCEPTED: None})
     @action(detail=False, methods=['delete'], url_path='delete')
+    @transaction.atomic
     def delete_cart_item(self, request):
         data = request_payload(request)
-        cart_item = self._resolve_cart_item(request, data)
+        cart_item = self._resolve_cart_item(request, data, lock=True)
         cart = cart_item.cart
         cart_item.delete()
         invalidate_cart_cache(cart)
@@ -225,6 +232,7 @@ class CartViewSet(viewsets.GenericViewSet):
 
     @extend_schema(responses={status.HTTP_202_ACCEPTED: CartSerializer})
     @action(detail=False, methods=['delete'], url_path='clear')
+    @transaction.atomic
     def clear_cart(self, request):
         data = request_payload(request)
         cart_id = data.get("cart")

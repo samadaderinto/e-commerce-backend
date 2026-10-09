@@ -9,6 +9,8 @@ import {
   useState,
 } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import { useShop } from './providers';
+import { UserAvatarUpload } from './user-avatar';
 
 type Theme = 'light' | 'dark' | 'system';
 type Appearance = 'light' | 'dark';
@@ -162,5 +164,24 @@ export function AppearanceSettings() {
         The header icon saves your light or dark choice too. Changes apply across all tabs in this browser.
       </p>
     </section>
+  );
+}
+
+export function AppSettings() {
+  const { user } = useShop();
+
+  return (
+    <div className="app-settings-stack">
+      {user && (
+        <section style={{ marginBottom: '2.5rem' }}>
+          <h2>Profile picture</h2>
+          <p className="muted" style={{ marginBottom: '1.25rem' }}>
+            Personalize your account across the marketplace.
+          </p>
+          <UserAvatarUpload user={user} />
+        </section>
+      )}
+      <AppearanceSettings />
+    </div>
   );
 }
