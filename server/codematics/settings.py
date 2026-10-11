@@ -269,6 +269,9 @@ AUTH_USER_MODEL = "core.User"
 
 CACHE_URL = os.environ.get("CACHE_URL") or os.environ.get("REDIS_URL")
 CACHE_TIMEOUT = int(os.environ.get("CACHE_TIMEOUT", 60 * 5))
+PUBLIC_CATALOG_CACHE_SECONDS = max(
+    0, min(60, int(os.environ.get("PUBLIC_CATALOG_CACHE_SECONDS", "15")))
+)
 CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", 256))
 
 if CACHE_URL:

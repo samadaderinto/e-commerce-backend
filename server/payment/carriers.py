@@ -1,6 +1,12 @@
 """Direct carrier rating adapters. Live failures never become invented rates."""
 import base64
 import os
+import logging
+from typing import Any
+
+import httpx
+from asgiref.sync import async_to_sync
+from .async_carriers import usps_prices
 from datetime import timedelta
 from decimal import Decimal
 
@@ -9,25 +15,30 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+logger = logging.getLogger("codematics.carriers")
+
 CARRIERS = {'USPS', 'UPS', 'FEDEX', 'DHL'}
 
 
-def env(name, default=''):
+def env(name: str, default: str = '') -> str:
     return (os.environ.get(name) or default).strip()
 
 
-def request_json(url, *, data=None, headers=None, form=False):
+def request_json(
+    url: str, *, data: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None, form: bool = False,
+) -> dict[str, Any]:
     response = requests.post(url, data=data if form else None, json=None if form else data,
                              headers=headers or {}, timeout=8)
     response.raise_for_status()
     return response.json()
 
 
-def basic(key, secret):
+def basic(key: str, secret: str) -> str:
     return 'Basic ' + base64.b64encode(f'{key}:{secret}'.encode()).decode()
 
 
-def oauth(carrier, base, path):
+def oauth(carrier: str, base: str, path: str) -> str:
     key, secret = env(f'{carrier}_CLIENT_ID'), env(f'{carrier}_CLIENT_SECRET')
     if not key or not secret:
         raise ValueError('Carrier credentials missing')
@@ -39,7 +50,10 @@ def oauth(carrier, base, path):
     return request_json(base + path, data={'grant_type': 'client_credentials', 'client_id': key, 'client_secret': secret}, form=True)['access_token']
 
 
-def option(carrier, code, name, amount, currency='USD', description='Carrier calculated rate'):
+def option(
+    carrier: str, code: str, name: str, amount: Any, currency: str = 'USD',
+    description: str = 'Carrier calculated rate',
+) -> dict[str, Any]:
     price = Decimal(str(amount))
     if currency.upper() != 'USD' or not price.is_finite() or price < 0:
         raise ValueError('Unsupported carrier amount or currency')
@@ -47,30 +61,40 @@ def option(carrier, code, name, amount, currency='USD', description='Carrier cal
             'amount': str(price.quantize(Decimal('.01'))), 'currency': currency.upper(),
             'description': description, 'is_default': False, 'source': 'live'}
 
-# Why hardcoded values dawg
-def dimensions(package=None):
+def dimensions(package: dict[str, Any] | None = None) -> dict[str, float]:
     package = package or {}
     return {key: float(package.get(key) or 1)
             for key in ('length', 'width', 'height')}
 
 
-def live_rates(carrier, origin, destination, weight, package=None):
+def live_rates(
+    carrier: str, origin: str, destination: str, weight: Decimal,
+    package: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     sandbox = env('SHIPPING_SANDBOX', 'true').lower() == 'true'
     dims = dimensions(package)
     if carrier == 'USPS':
         base = 'https://apis-tem.usps.com' if sandbox else 'https://apis.usps.com'
-        token = oauth(carrier, base, '/oauth2/v3/token')
-        rates = []
-        for code, mail_class, name in [('ground_advantage', 'USPS_GROUND_ADVANTAGE', 'USPS Ground Advantage'),
-                                      ('priority_mail', 'PRIORITY_MAIL', 'USPS Priority Mail'),
-                                      ('priority_express', 'PRIORITY_MAIL_EXPRESS', 'USPS Priority Mail Express')]:
-            result = request_json(base + '/prices/v3/base-rates/search', headers={'Authorization': f'Bearer {token}'},
-                                  data={'originZIPCode': origin, 'destinationZIPCode': destination,
-                                        'weight': float(weight), **dims, 'mailClass': mail_class,
-                                        'processingCategory': 'MACHINABLE', 'destinationEntryFacilityType': 'NONE',
-                                        'rateIndicator': 'DR', 'priceType': 'RETAIL', 'mailingDate': timezone.now().date().isoformat()})
-            rates.append(option(carrier, code, name, result['totalBasePrice']))
-        return rates
+        services = (
+            ('ground_advantage', 'USPS_GROUND_ADVANTAGE', 'USPS Ground Advantage'),
+            ('priority_mail', 'PRIORITY_MAIL', 'USPS Priority Mail'),
+            ('priority_express', 'PRIORITY_MAIL_EXPRESS', 'USPS Priority Mail Express'),
+        )
+        results = async_to_sync(usps_prices)(
+            base, env('USPS_CLIENT_ID'), env('USPS_CLIENT_SECRET'),
+            {
+                'originZIPCode': origin, 'destinationZIPCode': destination,
+                'weight': float(weight), **dims,
+                'processingCategory': 'MACHINABLE',
+                'destinationEntryFacilityType': 'NONE', 'rateIndicator': 'DR',
+                'priceType': 'RETAIL', 'mailingDate': timezone.now().date().isoformat(),
+            },
+            tuple(service[1] for service in services),
+        )
+        return [
+            option(carrier, code, name, result['totalBasePrice'])
+            for (code, _, name), result in zip(services, results, strict=True)
+        ]
     if carrier == 'UPS':
         base = 'https://wwwcie.ups.com' if sandbox else 'https://onlinetools.ups.com'
         token = oauth(carrier, base, '/security/v1/oauth/token')
@@ -153,7 +177,10 @@ def live_rates(carrier, origin, destination, weight, package=None):
     return rates
 
 
-def calculate_carrier_rates(carrier, origin, destination, weight, subtotal, physical, package=None):
+def calculate_carrier_rates(
+    carrier: str, origin: str, destination: str, weight: Decimal,
+    subtotal: Decimal, physical: bool, package: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     carrier = carrier.upper()
     if carrier not in CARRIERS:
         raise ValidationError({'carrier': 'Choose USPS, UPS, FEDEX, or DHL.'})
@@ -190,7 +217,8 @@ def calculate_carrier_rates(carrier, origin, destination, weight, subtotal, phys
     elif mode == 'live':
         try:
             rates = live_rates(carrier, origin, destination, weight, package)
-        except (requests.RequestException, ValueError, KeyError, TypeError, StopIteration, ArithmeticError):
+        except (requests.RequestException, httpx.HTTPError, ValueError, KeyError, TypeError, StopIteration, ArithmeticError):
+            logger.warning("Carrier rate request failed for %s", carrier, exc_info=True)
             raise ValidationError({'carrier': f'{carrier} rates are unavailable. Choose another carrier or retry.'})
     else:
         raise ValidationError({'carrier': 'Shipping rate configuration is invalid.'})

@@ -24,6 +24,9 @@ def store_product_cache_key(store_id: int | str, product_id: int | str) -> str:
 
 
 def invalidate_product_cache(product: Any) -> None:
+    from storefront.catalog_cache import invalidate_catalog_snapshot
+
+    invalidate_catalog_snapshot()
     invalidate_revision('products')
     cache.delete(LANDING_PRODUCTS_CACHE_KEY)
     cache.delete(product_cache_key(product.id))

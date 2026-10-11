@@ -15,7 +15,7 @@ CATEGORY_DIRS = {
     "load": QA_REPORTS_DIR / "performance-testing" / "load",
     "stress": QA_REPORTS_DIR / "performance-testing" / "stress",
     "volume": QA_REPORTS_DIR / "performance-testing" / "volume",
-    "audit": QA_REPORTS_DIR / "bug-audit",
+    "security": QA_REPORTS_DIR / "security",
 }
 
 
@@ -23,6 +23,7 @@ def ensure_directories() -> None:
     """Ensure all required QA report directories exist."""
     for path in CATEGORY_DIRS.values():
         path.mkdir(parents=True, exist_ok=True)
+    (QA_REPORTS_DIR / "bug-audit").mkdir(parents=True, exist_ok=True)
 
 
 def get_report_dir(category: str) -> pathlib.Path:

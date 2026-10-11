@@ -339,6 +339,21 @@ class ProductsView(APIView):
         description='Returns a page of active-store products. Each page contains at most 24 results.',
     )
     def get(self, request: Request) -> Response:
+        from .catalog_cache import snapshot_key, read_snapshot, write_snapshot
+
+        key = snapshot_key(request)
+        cached = read_snapshot(key)
+        if cached is not None:
+            response = Response(cached)
+            response['X-Catalog-Cache'] = 'HIT'
+            return response
+        response = self._get_uncached(request)
+        if response.status_code == 200:
+            write_snapshot(key, response.data)
+        response['X-Catalog-Cache'] = 'MISS' if key else 'BYPASS'
+        return response
+
+    def _get_uncached(self, request: Request) -> Response:
         params = request.query_params
         is_store_preview = False
 

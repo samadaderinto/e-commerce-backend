@@ -1,6 +1,6 @@
 import re
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 from django.core import mail
@@ -317,14 +317,14 @@ from django.test import SimpleTestCase
                            'FEDEX_CLIENT_ID': 'test', 'FEDEX_CLIENT_SECRET': 'test', 'FEDEX_ACCOUNT_NUMBER': 'test',
                            'DHL_API_KEY': 'test', 'DHL_API_SECRET': 'test', 'DHL_ACCOUNT_NUMBER': 'test'})
 class CarrierAdapterTests(SimpleTestCase):
-    @patch('payment.carriers.request_json')
-    def test_usps_oauth_and_v3_prices(self, request):
-        request.side_effect = [{'access_token': 'test'}, {'totalBasePrice': 5.5}, {'totalBasePrice': 9.5}, {'totalBasePrice': 30}]
+    @patch('payment.carriers.usps_prices', new_callable=AsyncMock)
+    def test_usps_oauth_and_v3_prices(self, request) -> None:
+        request.return_value = [{'totalBasePrice': 5.5}, {'totalBasePrice': 9.5}, {'totalBasePrice': 30}]
         rates = live_rates('USPS', '33602', '33601', Decimal('2'))
         self.assertEqual(len(rates), 3)
         self.assertEqual(rates[0]['amount'], '5.50')
-        self.assertIn('/prices/v3/base-rates/search', request.call_args.args[0])
-        self.assertEqual(request.call_args.kwargs['data']['weight'], 2.0)
+        self.assertEqual(request.call_args.args[3]['weight'], 2.0)
+        self.assertEqual(len(request.call_args.args[4]), 3)
 
     @patch('payment.carriers.request_json')
     def test_ups_singleton_rating_response(self, request):

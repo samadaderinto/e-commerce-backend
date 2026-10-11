@@ -284,7 +284,7 @@ npm run typecheck
 # 2. Frontend Unit Tests (28 tests via Node native runner)
 npm run test:unit
 
-# 3. Backend Test Suite (Django / Pytest: 386 tests; 377 passed, 9 environment-dependent skips offline)
+# 3. Backend Test Suite (Django / Pytest: 409 tests; 400 passed, 9 environment-dependent skips offline)
 .venv/bin/pytest server/
 ```
 
@@ -443,7 +443,7 @@ PERFORMANCE_API_PREFIX=/api npm run test:load -- --url http://127.0.0.1:3000
 PERFORMANCE_API_PREFIX=/api npm run test:volume -- --url http://127.0.0.1:3000
 ```
 
-The inventory check uses 20 separate buyers making real checkout requests against five units in a uniquely named PostgreSQL test database. It asserts five successful orders, fifteen stock rejections, and zero remaining stock. It never uses live commerce carts or products. The database is created and removed by Django's test runner. Run it through the existing API container:
+The inventory check uses 20 separate buyers making real checkout requests against five units in a uniquely named PostgreSQL test database. It asserts five successful orders, fifteen stock rejections, and zero remaining stock. It never uses live commerce carts or products. The runner also stubs realtime publishing so fixture user IDs cannot emit events to live Redis inbox channels; email delivery uses the test memory backend. The database is created and removed by Django's test runner. Run it through the existing API container:
 
 ```bash
 .venv/bin/python scripts/qa/inventory_check.py
@@ -454,7 +454,16 @@ INVENTORY_TEST_JUNIT=qa-reports/performance-testing/stress/inventory-check-<time
 The stress runner accepts only a completed matching inventory test case from a JUnit artifact less than one hour old. Missing or skipped inventory evidence yields INCOMPLETE when performance otherwise passes. SQLite offline runs skip the PostgreSQL contention test explicitly.
 
 
-Catalog review counts use a scalar subquery so page totals do not group the full catalog. Worker-count tuning must be benchmarked against the actual deployment: increasing local workers did not improve tail latency in this environment, so the shipped two-worker, 32-thread configuration is retained.
+Catalog review counts use a scalar subquery so page totals do not group the full catalog. Worker-count tuning must be benchmarked against the actual deployment: increasing local processes did not improve tail latency in this environment. The two-process, 32-thread default is retained, overridable with `GUNICORN_THREADS`. A local eight-thread trial improved the anonymous benchmark during memory pressure, but lowers total request slots from 64 to 16. Live notification streams occupy those slots, so that trial is not sufficient evidence to lower the application-wide default. Rebenchmark process/thread limits with notification streams and carrier I/O on the actual deployment.
+
+Anonymous catalog pages use a short-lived shared snapshot (`PUBLIC_CATALOG_CACHE_SECONDS=15`, range 0–60; 0 disables). Warm snapshots perform two lightweight database checks instead of fetching and serializing the model graph. Every hit rechecks current product visibility, active/verified store status, ownership, price, discount, stock and variants. Model, image, specification, review, tag and earnings changes invalidate after commit, with store timestamps covering missed Redis invalidations. Earnings-related timestamps update after commit to avoid adding Store row locks to financial transactions. Authenticated, transactional and search requests bypass snapshots; checkout retains authoritative database validation. Bulk changes that skip model signals and explicit invalidation can leave metadata, page membership and totals stale until the bounded TTL; use model saves or `invalidate_product_cache()` for such writes. Load reports record HIT/MISS/BYPASS counts and describe their mixed warm/uncached workload.
+
+USPS live rating uses HTTPX async I/O with one bounded three-connection pool: authenticate once, then request Ground Advantage, Priority Mail and Priority Mail Express concurrently. Failure cancels sibling requests before closing the pool and returns a sanitized shipping error without invented rates. Other carriers retain their existing adapters. Tests use mock transports; live carrier latency and credentials are not established by these tests.
+
+The API runs two Gunicorn processes with 32 request threads each by default. Async USPS calls are bridged into the synchronous request stack; the request thread waits while network operations overlap. Celery already runs background work in separate processes. Async is appropriate for independent network waits; CPU-heavy work needs process workers, and checkout/payment/inventory transactions stay synchronous and atomic. A full ASGI migration would also require async-compatible middleware/authentication, native async I/O, database connection-pooling review, and benchmarks; merely changing `def` to `async def` does not provide that migration. See [Django async guidance](https://docs.djangoproject.com/en/5.2/topics/async/) and [HTTPX async clients](https://www.python-httpx.org/async/).
+
 
 
 Product-page interaction hooks, including share-link feedback state, are initialized before loading/error returns. This keeps hook order stable when asynchronous catalog data arrives and prevents the product page from crashing during guest browsing and checkout.
+
+Elasticsearch search reuses one thread-safe client and its persistent connection pool per process instead of creating a client for every request. Forked workers reset the inherited client and lock; configuration changes replace the local pool. Search still queries Elasticsearch for current IDs/counts and retains the existing database fallback. This is connection reuse, not caching search results or an ASGI migration. See [the official Python client's connection/thread guarantees](https://github.com/elastic/elasticsearch-py).

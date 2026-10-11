@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
+from threading import Lock
+from typing import TYPE_CHECKING
 from typing import Any, Optional
 
 from django.conf import settings
@@ -8,22 +11,56 @@ from django.db import transaction
 
 from product.models import Product
 
+if TYPE_CHECKING:
+    from elasticsearch import Elasticsearch
+
 logger = logging.getLogger("codematics.search")
+_client_instance: Elasticsearch | None = None
+_client_config: tuple[int, str, float] | None = None
+_client_lock = Lock()
+
+
+def _reset_client_after_fork() -> None:
+    # Child workers must create their own sockets and cannot inherit a held lock.
+    global _client_instance, _client_config, _client_lock
+    _client_instance = None
+    _client_config = None
+    _client_lock = Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_client_after_fork)
 
 
 def enabled() -> bool:
     return bool(getattr(settings, "ELASTICSEARCH_ENABLED", False))
 
 
-def client() -> Any:
+def client() -> Elasticsearch:
     from elasticsearch import Elasticsearch
 
-    return Elasticsearch(
+    global _client_instance, _client_config
+    config = (
+        os.getpid(),
         settings.ELASTICSEARCH_URL,
-        request_timeout=settings.ELASTICSEARCH_TIMEOUT,
-        retry_on_timeout=True,
-        max_retries=1,
+        float(settings.ELASTICSEARCH_TIMEOUT),
     )
+    with _client_lock:
+        if _client_instance is None or config != _client_config:
+            if (
+                _client_instance is not None
+                and _client_config
+                and _client_config[0] == config[0]
+            ):
+                _client_instance.close()
+            _client_instance = Elasticsearch(
+                config[1],
+                request_timeout=config[2],
+                retry_on_timeout=True,
+                max_retries=1,
+            )
+            _client_config = config
+        return _client_instance
 
 
 def product_document(product: Product) -> dict[str, Any]:
@@ -63,9 +100,15 @@ def ensure_products_index(es: Any = None) -> bool:
             mappings={
                 "properties": {
                     "id": {"type": "integer"},
-                    "title": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                    "title": {
+                        "type": "text",
+                        "fields": {"keyword": {"type": "keyword"}},
+                    },
                     "description": {"type": "text"},
-                    "brand": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
+                    "brand": {
+                        "type": "text",
+                        "fields": {"keyword": {"type": "keyword"}},
+                    },
                     "category": {"type": "keyword"},
                     "store_id": {"type": "integer"},
                     "store_status": {"type": "keyword"},
@@ -84,7 +127,10 @@ def ensure_products_index(es: Any = None) -> bool:
         )
         return True
     except (BadRequestError, ApiError) as exc:
-        if "resource_already_exists_exception" in str(exc) or getattr(exc, "status_code", None) == 400:
+        if (
+            "resource_already_exists_exception" in str(exc)
+            or getattr(exc, "status_code", None) == 400
+        ):
             return True
         raise
 
@@ -93,7 +139,11 @@ def index_product(product_id: int) -> None:
     if not enabled():
         return
     try:
-        product = Product.objects.select_related("store").prefetch_related("tags").get(pk=product_id)
+        product = (
+            Product.objects.select_related("store")
+            .prefetch_related("tags")
+            .get(pk=product_id)
+        )
         es = client()
         ensure_products_index(es)
         es.index(
@@ -104,7 +154,9 @@ def index_product(product_id: int) -> None:
     except Product.DoesNotExist:
         delete_product(product_id)
     except Exception:
-        logger.exception("Failed to index product in Elasticsearch", extra={"product_id": product_id})
+        logger.exception(
+            "Failed to index product in Elasticsearch", extra={"product_id": product_id}
+        )
 
 
 def delete_product(product_id: int) -> None:
@@ -117,7 +169,10 @@ def delete_product(product_id: int) -> None:
             ignore=[404],
         )
     except Exception:
-        logger.exception("Failed to delete product from Elasticsearch", extra={"product_id": product_id})
+        logger.exception(
+            "Failed to delete product from Elasticsearch",
+            extra={"product_id": product_id},
+        )
 
 
 def schedule_index_product(product_id: int) -> None:
@@ -140,13 +195,15 @@ def search_product_ids(
     if not enabled() or not query:
         return None
     filters = filters or {}
-    must = [{
-        "multi_match": {
-            "query": query,
-            "fields": ["title^4", "brand^3", "category^2", "tags^2", "description"],
-            "fuzziness": "AUTO",
+    must = [
+        {
+            "multi_match": {
+                "query": query,
+                "fields": ["title^4", "brand^3", "category^2", "tags^2", "description"],
+                "fuzziness": "AUTO",
+            }
         }
-    }]
+    ]
     filter_clauses = [
         {"term": {"visibility": True}},
         {"term": {"store_status": "active"}},
@@ -192,4 +249,3 @@ def search_product_ids(
         "ids": [int(hit["_id"]) for hit in hits],
         "count": int(total),
     }
-
