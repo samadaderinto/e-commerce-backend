@@ -6,7 +6,7 @@ import { CollectionCount, CollectionFilters, CollectionPagination, financialFiel
 import { DateStamp, activityDate } from './activity';
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, type JSX, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -742,7 +742,7 @@ export function ShopPage() {
   );
 }
 
-export function ProductPage({ id }: { id: string }) {
+export function ProductPage({ id }: { id: string }): JSX.Element {
   const { add, notify, toggleSave, saved, user } = useShop();
   const params = useSearchParams();
   const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
@@ -767,6 +767,8 @@ export function ProductPage({ id }: { id: string }) {
   const [reviewBusy, setReviewBusy] = useState(false);
   const [selectedVariantIdx, setSelectedVariantIdx] = useState<number>(0);
   const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
+  const [copied, setCopied] = useState<boolean>(false);
+
   if (productQuery.isLoading) return <Loading />;
   if (productQuery.error) {
     if ((productQuery.error as ApiError).status === 404) {
@@ -840,8 +842,6 @@ export function ProductPage({ id }: { id: string }) {
       notify((error as Error).message, true);
     }
   }
-
-  const [copied, setCopied] = useState(false);
 
   async function handleShare() {
     const url = typeof window !== 'undefined' ? window.location.href : `/products/${id}`;

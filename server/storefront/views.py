@@ -17,7 +17,8 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import models, transaction
-from django.db.models import Count, Q, F, Case, When
+from django.db.models import Count, Q, F, Case, When, QuerySet, OuterRef, Subquery, IntegerField, Value
+from django.db.models.functions import Coalesce
 from django.http import Http404, FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -74,12 +75,35 @@ from .serializers import (
 )
 
 
-def catalog():
-    return Product.objects.filter(
-        visibility=True,
-        store__status=Store.STATUS_ACTIVE,
-        store__verified_at__isnull=False,
-    ).select_related('store').prefetch_related('images', 'tags').annotate(rating_count=Count('review', distinct=True))
+def with_catalog_details(products: QuerySet[Product]) -> QuerySet[Product]:
+    reviews = (
+        Review.objects.filter(product_id=OuterRef('pk'))
+        .order_by()
+        .values('product_id')
+        .annotate(total=Count('pk'))
+        .values('total')[:1]
+    )
+    # A scalar review count avoids grouping the entire catalog for pagination totals.
+    return (
+        products.select_related('store', 'specification')
+        .prefetch_related('images', 'tags')
+        .annotate(
+            rating_count=Coalesce(
+                Subquery(reviews, output_field=IntegerField()),
+                Value(0),
+            ),
+        )
+    )
+
+
+def catalog() -> QuerySet[Product]:
+    return with_catalog_details(
+        Product.objects.filter(
+            visibility=True,
+            store__status=Store.STATUS_ACTIVE,
+            store__verified_at__isnull=False,
+        )
+    )
 
 
 def tokens(user):
@@ -326,10 +350,9 @@ class ProductsView(APIView):
                 is_authorized = bool(user and user.is_authenticated and (user == store_obj.user or user.is_staff or user.is_superuser))
                 if is_authorized:
                     is_store_preview = True
-                    products = Product.objects.filter(
-                        store=store_obj,
-                        visibility=True,
-                    ).select_related('store').prefetch_related('images', 'tags').annotate(rating_count=Count('review', distinct=True))
+                    products = with_catalog_details(
+                        Product.objects.filter(store=store_obj, visibility=True)
+                    )
                 else:
                     products = Product.objects.none()
             else:
@@ -395,10 +418,12 @@ class ProductDetailView(APIView):
     permission_classes = [AllowAny]
 
     @extend_schema(operation_id='storefront_product_retrieve', responses=CatalogSerializer, auth=[])
-    def get(self, request, pk):
+    def get(self, request: Request, pk: int) -> Response:
         product = catalog().filter(pk=pk).first()
         if not product:
-            raw_product = Product.objects.filter(pk=pk).select_related('store').prefetch_related('images', 'tags').annotate(rating_count=Count('review', distinct=True)).first()
+            raw_product = with_catalog_details(
+                Product.objects.filter(pk=pk)
+            ).first()
             if not raw_product:
                 raise Http404('No Product matches the given query.')
             user = request.user

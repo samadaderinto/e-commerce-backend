@@ -1,6 +1,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+from django.db.models import Sum
 from django.contrib.auth.password_validation import validate_password
 from django.core.files.uploadedfile import UploadedFile
 from rest_framework import serializers
@@ -10,7 +11,7 @@ from core.models import Address, Review, User
 from product.models import Product
 from payment.models import Coupon
 from product.policies import is_own_store
-from store.models import Store, StoreInfo, StoreAddress
+from store.models import Store, StoreInfo, StoreAddress, StoreEarningsLedger
 from store.services import calculate_store_tier
 from store.serializers import StoreInfoSerializer
 from utils.functions import normalize_media_url
@@ -231,13 +232,10 @@ class CatalogSerializer(serializers.ModelSerializer):
         ]
 
     @extend_schema_field(OpenApiTypes.OBJECT)
-    def get_specifications(self, obj):
+    def get_specifications(self, obj: Product) -> dict[str, Any] | None:
         if getattr(obj, 'is_digital', False) or getattr(obj, 'product_type', '') == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
             return None
         spec = getattr(obj, 'specification', None)
-        if not spec:
-            from product.models import Specification
-            spec = Specification.objects.filter(product=obj).first()
         if spec:
             return {
                 'serial': spec.serial,
@@ -254,8 +252,25 @@ class CatalogSerializer(serializers.ModelSerializer):
     def get_store_verified(self, obj):
         return bool(obj.store.status == Store.STATUS_ACTIVE and obj.store.verified_at)
 
-    def get_seller_tier(self, obj):
-        return calculate_store_tier(obj.store)
+    def get_seller_tier(self, obj: Product) -> dict[str, Any]:
+        # Keep this cache on the serializer: each response reflects current earnings.
+        tiers: dict[int, dict[str, Any]] = self.context.setdefault('catalog_store_tiers', {})
+        if not tiers and isinstance(self.parent, serializers.ListSerializer):
+            stores = {product.store_id: product.store for product in self.parent.instance}
+            totals = {
+                row['store_id']: row['total']
+                for row in StoreEarningsLedger.objects.filter(
+                    store_id__in=[pk for pk, store in stores.items() if not store.is_official],
+                    entry_type=StoreEarningsLedger.TYPE_SALE,
+                ).exclude(
+                    status=StoreEarningsLedger.STATUS_REVERSED,
+                ).values('store_id').annotate(total=Sum('gross_amount'))
+            }
+            for pk, store in stores.items():
+                tiers[pk] = calculate_store_tier(store, totals.get(pk, Decimal('0')))
+        if obj.store_id not in tiers:
+            tiers[obj.store_id] = calculate_store_tier(obj.store)
+        return tiers[obj.store_id]
 
     @extend_schema_field(OpenApiTypes.BOOL)
     def get_is_own_store(self, obj):

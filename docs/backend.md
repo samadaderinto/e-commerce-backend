@@ -220,17 +220,20 @@ Beyond the catalog seeding tools, the backend includes essential operational com
 | `rebuild_notification_index` | `server/notification/management/commands/rebuild_notification_index.py` | **Notification Search Sync**: Rebuilds the Elasticsearch notifications index (`commerce-notifications`) from PostgreSQL records.<br>`python server/manage.py rebuild_notification_index --clean` |
 | `consume_logs` | `server/observability/management/commands/consume_logs.py` | **Kafka Log Consumer**: Consumes structured application logs from Kafka topics into the local searchable `LogEntry` audit database.<br>`python server/manage.py consume_logs --group commerce-log-indexer` |
 
-### 5. Pre-Deployment QA & Performance Testing Commands
+### 5. Pre-Deployment QA, Performance Testing & Bug Audits
 
-The repository provides automated load, stress, volume, and bug audit runners in `scripts/qa/`. All reports are stored in `qa-reports/` (untracked by git):
+All QA reports are stored in `qa-reports/` (strictly untracked by git via `.gitignore`):
+
+- **AI Agent Bug Audits**: When an AI agent performs bug audits or regression investigations, the full audit report is written directly to `qa-reports/bug-audit/`.
+- **Pre-Deployment Performance & Security Testing Commands**:
 
 | Command | Script | Target & Report Destination |
 | :--- | :--- | :--- |
 | `npm run test:load` | `scripts/qa/load_test.py` | Sustained concurrent user browsing, search, and detail requests &rarr; `qa-reports/performance-testing/load/` |
 | `npm run test:stress` | `scripts/qa/stress_test.py` | Step-ramp concurrency, instant traffic spikes, race condition lock integrity &rarr; `qa-reports/performance-testing/stress/` |
 | `npm run test:volume` | `scripts/qa/volume_test.py` | Deep pagination LIMIT/OFFSET, multi-criteria filtering, payload serialization &rarr; `qa-reports/performance-testing/volume/` |
-| `npm run test:audit` | `scripts/qa/audit_test.py` | Sensitive information leak detection, role boundary isolation, audit regression suites &rarr; `qa-reports/bug-audit/` |
-| `npm run test:qa` | Sequential runner | Runs all four suites consecutively for full pre-flight verification before deployment |
+| `npm run test:security` | `scripts/qa/security_test.py` | Sensitive information leak detection, role boundary isolation, security regression suites &rarr; `qa-reports/security/` |
+| `npm run test:qa` | Sequential runner | Runs all four performance and security suites consecutively for full pre-flight verification |
 
 ## Search
 
@@ -530,3 +533,30 @@ Digital product onboarding & variant enhancements:
 - **Automatic Preview Watermark Protection**: Digital image files default `digital_preview_watermark = True` to protect artwork on public storefronts with the `PROACE PREVIEW` overlay. Non-image files (PDFs, ZIPs) coerce watermark to `False`. The raw unwatermarked file is securely served only after authorized purchase via `/api/v1/orders/<id>/download/`.
 - **Digital Product Options & Variants**: Digital products support options/variants (e.g., 4K Wallpaper, Mobile HD, Print-Ready Vector) with unlimited digital inventory, variant-specific prices/deltas, and gallery image mappings without physical inventory deduction during checkout.
 
+
+
+### Performance benchmark validation
+
+Catalog responses load specifications in the product query and aggregate seller earnings once per response. This keeps catalog database query counts bounded as product and store counts grow, while retaining current tiers, ownership checks, and the existing 24-item page contract.
+
+Performance runners discover real product IDs, categories, and populated page counts from the target API. Load tests default to 60 seconds and record HTTP status distributions, empty-response coverage, and successful-only latency. Stress verdicts require ramp p95 below 450 ms and error rates below 1%; spike thresholds and catalog recovery are evaluated from measurements. Volume reports include every sample's status and result count and mark insufficient dataset/deep-page coverage as INCOMPLETE. API timings do not establish browser rendering, image performance, query plans, or index utilization. Exit codes are 0 for PASS, 1 for FAIL, and 2 for INCOMPLETE; discovery failure also exits unsuccessfully.
+
+Run the same workload through the same-origin frontend proxy:
+
+```bash
+PERFORMANCE_API_PREFIX=/api npm run test:load -- --url http://127.0.0.1:3000
+PERFORMANCE_API_PREFIX=/api npm run test:volume -- --url http://127.0.0.1:3000
+```
+
+The inventory check uses 20 separate buyers making real checkout requests against five units in a uniquely named PostgreSQL test database. It asserts five successful orders, fifteen stock rejections, and zero remaining stock. It never uses live commerce carts or products. The database is created and removed by Django's test runner. Run it through the existing API container:
+
+```bash
+.venv/bin/python scripts/qa/inventory_check.py
+INVENTORY_TEST_JUNIT=qa-reports/performance-testing/stress/inventory-check-<timestamp>.xml npm run test:stress
+.venv/bin/pytest scripts/qa/test_performance_reports.py
+```
+
+The stress runner accepts only a completed matching inventory test case from a JUnit artifact less than one hour old. Missing or skipped inventory evidence yields INCOMPLETE when performance otherwise passes. SQLite offline runs skip the PostgreSQL contention test explicitly.
+
+
+Catalog review counts use a scalar subquery so page totals do not group the full catalog. Worker-count tuning must be benchmarked against the actual deployment: increasing local workers did not improve tail latency in this environment, so the shipped two-worker, 32-thread configuration is retained.

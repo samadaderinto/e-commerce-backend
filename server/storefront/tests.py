@@ -1438,3 +1438,70 @@ class ExtendedStorefrontFeatureTests(TestCase):
         new_client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
         me_resp = new_client.get('/api/v1/me/')
         self.assertEqual(me_resp.status_code, 200)
+
+
+@override_settings(ROOT_URLCONF='storefront.urls')
+class CatalogQueryBudgetTests(TestCase):
+    def test_catalog_queries_do_not_grow_with_product_or_store_count(self) -> None:
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from product.models import Specification
+
+        owner = User.objects.create_user(email='catalog-budget@test.com', password='test-password')
+        stores = [
+            Store.objects.create(
+                user=owner,
+                name=f'Budget store {index}',
+                status=Store.STATUS_ACTIVE,
+                verified_at=timezone.now(),
+            )
+            for index in range(3)
+        ]
+        products = [
+            Product.objects.create(
+                store=stores[index % 3],
+                title=f'Budget product {index}',
+                discount=0,
+                price=Decimal('10'),
+                available=5,
+            )
+            for index in range(24)
+        ]
+        from store.models import StoreEarningsLedger
+        from store.services import get_or_create_merchant_wallet
+
+        wallet = get_or_create_merchant_wallet(owner)
+        StoreEarningsLedger.objects.create(
+            wallet=wallet, store=stores[1], gross_amount=Decimal('6000'),
+            entry_type=StoreEarningsLedger.TYPE_SALE,
+        )
+        StoreEarningsLedger.objects.create(
+            wallet=wallet, store=stores[1], gross_amount=Decimal('1000000'),
+            entry_type=StoreEarningsLedger.TYPE_SALE, status=StoreEarningsLedger.STATUS_REVERSED,
+        )
+        Specification.objects.create(
+            product=products[0], serial='REAL-SPEC', attributes='Recorded dimensions',
+            height=1, width=2, breadth=3, weight=4, color='Blue',
+        )
+        from core.models import Review
+
+        for index in range(2):
+            Review.objects.create(
+                user=User.objects.create_user(email=f'catalog-reviewer-{index}@test.com', password='test-password'),
+                product=products[0], label=f'Review {index}', comment='Recorded review',
+            )
+        client = APIClient()
+        with CaptureQueriesContext(connection) as queries:
+            response = client.get('/api/v1/products/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.data['results']), 24)
+        self.assertLessEqual(len(queries), 5)
+        by_id = {item['id']: item for item in response.data['results']}
+        self.assertEqual(by_id[products[0].pk]['specifications']['serial'], 'REAL-SPEC')
+        self.assertIsNone(by_id[products[1].pk]['specifications'])
+        self.assertEqual(by_id[products[0].pk]['rating_count'], 2)
+        self.assertEqual(by_id[products[1].pk]['rating_count'], 0)
+        self.assertEqual(by_id[products[0].pk]['seller_tier']['current_sales'], 0)
+        self.assertEqual(by_id[products[1].pk]['seller_tier']['current_sales'], 6000)
+        self.assertEqual(by_id[products[1].pk]['seller_tier']['tier'], 'booster')
+        self.assertEqual(by_id[products[2].pk]['seller_tier']['current_sales'], 0)

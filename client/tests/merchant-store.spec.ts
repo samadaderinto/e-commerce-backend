@@ -212,7 +212,7 @@ test('ClickBank editor hides local promotions and previews vendor-controlled pri
   await page.getByRole('button', { name: 'Preview', exact: true }).click();
   const preview = await popupPromise;
   await expect(preview.getByRole('heading', { name: 'Partner guide' })).toBeVisible({ timeout: 30000 });
-  await expect(preview.getByText('Check current price on partner site', { exact: true })).toBeVisible();
+  await expect(preview.getByText('Price available on partner site', { exact: true })).toBeVisible();
   await expect(preview.locator('.detail-price del')).toHaveCount(0);
   await expect(preview.locator('.flash-deal-badge')).toHaveCount(0);
   await preview.close();

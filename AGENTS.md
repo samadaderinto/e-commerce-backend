@@ -154,25 +154,27 @@ npm run test:e2e
 - `variant-images.spec.ts`: Dynamic variant option selection and image gallery synchronization.
 - `ui-stability.spec.ts` & `theme.spec.ts`: Responsive layouts, modal focus trapping, and UI themes.
 
-### Tier 3: Pre-Deployment Performance & Bug Audit Reports (Local Execution)
-Before shipping features or releases to production, operators run individual performance and audit suites locally. All generated reports must be written exclusively to `qa-reports/` and must remain strictly untracked by git (`.gitignore`):
+### Tier 3: Pre-Deployment Performance, Security & Bug Audits (Local Execution)
+Before shipping features or releases to production, operators run individual performance and security suites locally, and AI agents record bug audits into dedicated report directories. All generated reports must be written exclusively to `qa-reports/` and must remain strictly untracked by git (`.gitignore`):
 
-```bash
-# 1. Load Testing (Sustained concurrent browsing, search, and detail requests)
-npm run test:load       # Writes report to qa-reports/performance-testing/load/
+- **AI Agent Bug Audits**: Whenever an AI agent conducts a bug audit (e.g. reviewing regressions, triage, security inspection, or error-handling audits), the agent must write its comprehensive markdown audit report directly into `qa-reports/bug-audit/` (e.g., `qa-reports/bug-audit/bug-audit-YYYY-MM-DD.md`).
+- **Pre-Deployment Performance & Security Testing Commands**:
+  ```bash
+  # 1. Load Testing (Sustained concurrent browsing, search, and detail requests)
+  npm run test:load       # Writes report to qa-reports/performance-testing/load/
 
-# 2. Stress & Spike Testing (Step-ramp concurrency, instant traffic spikes, inventory race-condition locks)
-npm run test:stress     # Writes report to qa-reports/performance-testing/stress/
+  # 2. Stress & Spike Testing (Step-ramp concurrency, instant traffic spikes, inventory race-condition locks)
+  npm run test:stress     # Writes report to qa-reports/performance-testing/stress/
 
-# 3. Volume Testing (Deep pagination LIMIT/OFFSET, multi-criteria filtering, payload serialization)
-npm run test:volume     # Writes report to qa-reports/performance-testing/volume/
+  # 3. Volume Testing (Deep pagination LIMIT/OFFSET, multi-criteria filtering, payload serialization)
+  npm run test:volume     # Writes report to qa-reports/performance-testing/volume/
 
-# 4. Bug & Security Audit (Sensitive data leak detection, role boundary isolation, audit regression suites)
-npm run test:audit      # Writes report to qa-reports/bug-audit/
+  # 4. Security & Data Leak Check (Sensitive data leak detection, role boundary isolation, audit regression suites)
+  npm run test:security   # Writes report to qa-reports/security/
 
-# 5. Full Pre-Deployment QA Suite (Runs all 4 suites sequentially)
-npm run test:qa
-```
+  # 5. Full Pre-Deployment QA Suite (Runs all 4 suites sequentially)
+  npm run test:qa
+  ```
 
 
 ## 5. Automatic Targeted Docker Rebuilds

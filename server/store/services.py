@@ -50,7 +50,10 @@ def get_or_create_merchant_wallet(user: Any) -> MerchantWallet:
     return wallet
 
 
-def calculate_store_tier(store: Store | None) -> dict:
+def calculate_store_tier(
+    store: Store | None,
+    gross_sales: Decimal | None = None,
+) -> dict[str, Any]:
     """
     Computes the seller tier and badge color based on cumulative sales volume:
     - Official Store: 'official' (Gold badge #e5a93c)
@@ -85,12 +88,14 @@ def calculate_store_tier(store: Store | None) -> dict:
             'next_threshold': None,
         }
 
-    gross = StoreEarningsLedger.objects.filter(
-        store=store,
-        entry_type=StoreEarningsLedger.TYPE_SALE,
-    ).exclude(
-        status=StoreEarningsLedger.STATUS_REVERSED
-    ).aggregate(total=Sum('gross_amount'))['total'] or Decimal('0.00')
+    gross = gross_sales
+    if gross is None:
+        gross = StoreEarningsLedger.objects.filter(
+            store=store,
+            entry_type=StoreEarningsLedger.TYPE_SALE,
+        ).exclude(
+            status=StoreEarningsLedger.STATUS_REVERSED,
+        ).aggregate(total=Sum('gross_amount'))['total'] or Decimal('0.00')
 
     sales = float(gross)
 

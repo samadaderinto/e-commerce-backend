@@ -303,3 +303,6 @@ Digital product onboarding & variant enhancements:
 - **Auto-Cover & Smart Photography Card**: When onboarding digital image assets (artwork, wallpapers, photography), the uploaded file immediately populates the storefront cover preview. The Product photography section shows an auto-generated cover card with a `PROACE PREVIEW` badge indicating that no separate cover photo is needed, while preserving an optional upload button for custom promotional banners.
 - **Storefront Carousel & Watermark Integration**: On the public storefront and in live merchant preview, digital image previews display the `PROACE PREVIEW` watermark overlay across all gallery and variant images.
 - **Digital Options & Variants**: Digital products support edition/resolution variants (e.g. 4K Wallpaper, Mobile HD, Print-Ready Vector). The variant editor displays an "Unlimited digital inventory" badge instead of physical stock counters, permits price adjustments, and syncs variant selection with image switching in the gallery carousel.
+
+
+Product-page interaction hooks, including share-link feedback state, are initialized before loading/error returns. This keeps hook order stable when asynchronous catalog data arrives and prevents the product page from crashing during guest browsing and checkout.

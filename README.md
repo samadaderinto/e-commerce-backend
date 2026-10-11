@@ -281,10 +281,10 @@ Run locally before staging or committing changes:
 # 1. Frontend TypeScript Validation (zero type errors required)
 npm run typecheck
 
-# 2. Frontend Unit Tests (24 tests via Node native runner)
+# 2. Frontend Unit Tests (28 tests via Node native runner)
 npm run test:unit
 
-# 3. Backend Test Suite (Django / Pytest: 330 tests; 322 passed, 8 environment-dependent skips offline)
+# 3. Backend Test Suite (Django / Pytest: 386 tests; 377 passed, 9 environment-dependent skips offline)
 .venv/bin/pytest server/
 ```
 
@@ -299,25 +299,27 @@ npm run test:integration
 npm run test:e2e
 ```
 
-### Tier 3: Pre-Deployment QA, Performance & Bug Audits (Local PC)
+### Tier 3: Pre-Deployment QA, Performance, Security & Bug Audits (Local PC)
 Run locally before deploying new features to production. All generated reports are saved into the git-ignored `qa-reports/` directory:
 
-```bash
-# 1. Load Testing (Sustained concurrent browsing, search, and detail requests)
-npm run test:load       # -> qa-reports/performance-testing/load/
+- **AI Agent Bug Audits**: Whenever an AI agent conducts a bug audit (e.g. reviewing regressions, triage, security inspection), the markdown audit report is saved to `qa-reports/bug-audit/`.
+- **Pre-Deployment Performance & Security Testing Commands**:
+  ```bash
+  # 1. Load Testing (Sustained concurrent browsing, search, and detail requests)
+  npm run test:load       # -> qa-reports/performance-testing/load/
 
-# 2. Stress & Spike Testing (Step-ramp concurrency, instant traffic spikes, race condition locks)
-npm run test:stress     # -> qa-reports/performance-testing/stress/
+  # 2. Stress & Spike Testing (Step-ramp concurrency, instant traffic spikes, race condition locks)
+  npm run test:stress     # -> qa-reports/performance-testing/stress/
 
-# 3. Volume Testing (Deep pagination LIMIT/OFFSET, multi-criteria filtering, payload serialization)
-npm run test:volume     # -> qa-reports/performance-testing/volume/
+  # 3. Volume Testing (Deep pagination LIMIT/OFFSET, multi-criteria filtering, payload serialization)
+  npm run test:volume     # -> qa-reports/performance-testing/volume/
 
-# 4. Bug & Security Audit (Sensitive data leak detection, role boundary isolation, audit regression suites)
-npm run test:audit      # -> qa-reports/bug-audit/
+  # 4. Security & Data Leak Check (Sensitive data leak detection, role boundary isolation, audit regression suites)
+  npm run test:security   # -> qa-reports/security/
 
-# 5. Full Pre-Deployment QA Suite (Runs all 4 suites sequentially)
-npm run test:qa
-```
+  # 5. Full Pre-Deployment QA Suite (Runs all 4 suites sequentially)
+  npm run test:qa
+  ```
 
 Unit tests exercise frontend API serialization/error handling, currency formatting,
 categories, address validation, and backend price rounding without making external service calls.
@@ -426,3 +428,33 @@ Digital product onboarding & variant enhancements:
 - **Redundant Cover Photo Elimination & Auto-Cover**: For digital image products (artwork, wallpapers, photography), uploading a digital file automatically populates `product.image_url` if no custom cover was specified, removing redundant cover uploads. Custom promotional banners remain optional.
 - **Automatic Preview Watermark Protection**: Digital image files default `digital_preview_watermark = True` to protect artwork on public storefronts with the `PROACE PREVIEW` overlay. Non-image files (PDFs, ZIPs) coerce watermark to `False`. The raw unwatermarked file is securely served only after authorized purchase via `/api/v1/orders/<id>/download/`.
 - **Digital Product Options & Variants**: Digital products support options/variants (e.g., 4K Wallpaper, Mobile HD, Print-Ready Vector) with unlimited digital inventory, variant-specific prices/deltas, and gallery image mappings without physical inventory deduction during checkout.
+
+
+### Performance benchmark validation
+
+Catalog responses load specifications in the product query and aggregate seller earnings once per response. This keeps catalog database query counts bounded as product and store counts grow, while retaining current tiers, ownership checks, and the existing 24-item page contract.
+
+Performance runners discover real product IDs, categories, and populated page counts from the target API. Load tests default to 60 seconds and record HTTP status distributions, empty-response coverage, and successful-only latency. Stress verdicts require ramp p95 below 450 ms and error rates below 1%; spike thresholds and catalog recovery are evaluated from measurements. Volume reports include every sample's status and result count and mark insufficient dataset/deep-page coverage as INCOMPLETE. API timings do not establish browser rendering, image performance, query plans, or index utilization. Exit codes are 0 for PASS, 1 for FAIL, and 2 for INCOMPLETE; discovery failure also exits unsuccessfully.
+
+Run the same workload through the same-origin frontend proxy:
+
+```bash
+PERFORMANCE_API_PREFIX=/api npm run test:load -- --url http://127.0.0.1:3000
+PERFORMANCE_API_PREFIX=/api npm run test:volume -- --url http://127.0.0.1:3000
+```
+
+The inventory check uses 20 separate buyers making real checkout requests against five units in a uniquely named PostgreSQL test database. It asserts five successful orders, fifteen stock rejections, and zero remaining stock. It never uses live commerce carts or products. The database is created and removed by Django's test runner. Run it through the existing API container:
+
+```bash
+.venv/bin/python scripts/qa/inventory_check.py
+INVENTORY_TEST_JUNIT=qa-reports/performance-testing/stress/inventory-check-<timestamp>.xml npm run test:stress
+.venv/bin/pytest scripts/qa/test_performance_reports.py
+```
+
+The stress runner accepts only a completed matching inventory test case from a JUnit artifact less than one hour old. Missing or skipped inventory evidence yields INCOMPLETE when performance otherwise passes. SQLite offline runs skip the PostgreSQL contention test explicitly.
+
+
+Catalog review counts use a scalar subquery so page totals do not group the full catalog. Worker-count tuning must be benchmarked against the actual deployment: increasing local workers did not improve tail latency in this environment, so the shipped two-worker, 32-thread configuration is retained.
+
+
+Product-page interaction hooks, including share-link feedback state, are initialized before loading/error returns. This keeps hook order stable when asynchronous catalog data arrives and prevents the product page from crashing during guest browsing and checkout.

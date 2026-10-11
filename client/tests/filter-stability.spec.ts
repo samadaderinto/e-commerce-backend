@@ -131,9 +131,9 @@ for (const profile of profiles.filter(profile => profile.is_staff)) {
       await route.fulfill({ json: { count: 0, results: [] } });
     });
     await page.goto('/admin/users');
-    await expect(page.getByText('0 users', { exact: true })).toBeVisible();
+    await expect(page.getByText('0 matching records', { exact: true })).toBeVisible();
     try {
-      await assertStableControl(page, 'Filter user role', 'staff');
+      await assertStableControl(page, 'users: Role', 'staff');
       release?.();
       await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toHaveCount(0);
     } finally {
@@ -204,7 +204,7 @@ for (const profile of profiles) {
     expect(login.ok()).toBe(true);
     const isStoreOwner: boolean = ['seller', 'merchant'].includes(profile.first_name);
     const path: string = profile.is_staff ? '/admin/users' : isStoreOwner ? '/merchant/products' : '/shop';
-    const label: string = profile.is_staff ? 'Filter user role' : 'Sort products';
+    const label: string = profile.is_staff ? 'users: Role' : 'Sort products';
     const option: string = profile.is_staff ? 'staff' : isStoreOwner ? 'created' : 'price';
     await page.goto(path);
     const control = page.getByRole('combobox', { name: label, exact: true });
