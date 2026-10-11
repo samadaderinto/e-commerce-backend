@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { calendarDateLabel, toLocalDateTimeInput } from '../../src/lib/datetime.ts';
+import { calendarDateLabel, toLocalDateTimeInput, displayDate, displayTime, displayDateTime } from '../../src/lib/datetime.ts';
 
 test('UTC flash deadlines round-trip through local editors across DST', () => {
   const previous = process.env.TZ;
@@ -13,6 +13,28 @@ test('UTC flash deadlines round-trip through local editors across DST', () => {
       assert.equal(calendarDateLabel('2026-10-08'), '8 Oct');
     }
     assert.equal(toLocalDateTimeInput('invalid'), '');
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+
+
+test('display dates keep the local calendar day and omit seconds', () => {
+  const previous = process.env.TZ;
+  try {
+    process.env.TZ = 'Africa/Lagos';
+    assert.equal(displayDate('2026-10-09T23:40:44Z'), '10 Oct 2026');
+    assert.equal(displayTime('2026-10-09T23:40:44Z'), '00:40');
+    assert.equal(displayDateTime('2026-10-09T23:40:44Z'), '10 Oct 2026 · 00:40');
+    process.env.TZ = 'America/New_York';
+    assert.equal(displayDate('2026-10-10T01:00:00Z'), '9 Oct 2026');
+    assert.equal(displayTime('2026-10-10T01:00:00Z'), '21:00');
+    for (const value of [undefined, null, '', 'invalid']) {
+      assert.equal(displayDate(value), 'Not recorded');
+      assert.equal(displayTime(value), '');
+      assert.equal(displayDateTime(value), 'Not recorded');
+    }
   } finally {
     if (previous === undefined) delete process.env.TZ;
     else process.env.TZ = previous;

@@ -48,3 +48,34 @@ class DemoScenarioTests(TestCase):
         counts = (Store.objects.count(), Product.objects.count(), StoreEarningsLedger.objects.count())
         command.seed_scenarios(users)
         self.assertEqual(counts, (Store.objects.count(), Product.objects.count(), StoreEarningsLedger.objects.count()))
+
+    def test_populate_fake_data_preserves_existing_superuser_password(self):
+        command = Command(stdout=StringIO())
+        # First seed initial accounts
+        command.seed_users(12, make_password('Initial-password-123!'))
+        admin = User.objects.get(email='admin@proace.local')
+        self.assertTrue(admin.check_password('Initial-password-123!'))
+
+        # Change admin password to a custom password
+        admin.set_password('Custom-admin-secret-999!')
+        admin.save()
+        self.assertTrue(admin.check_password('Custom-admin-secret-999!'))
+
+        # Run clear_existing_data
+        command.clear_existing_data()
+        # Admin must NOT be deleted
+        admin.refresh_from_db()
+        self.assertTrue(admin.is_superuser)
+        self.assertTrue(admin.check_password('Custom-admin-secret-999!'))
+
+        # Run seed_users again with a different seed password
+        command.seed_users(12, make_password('Overwriting-seed-password-456!'))
+        admin.refresh_from_db()
+        # Admin password must remain untouched
+        self.assertTrue(admin.check_password('Custom-admin-secret-999!'))
+        self.assertFalse(admin.check_password('Overwriting-seed-password-456!'))
+
+        # Non-superusers should have the new seed password
+        shopper = User.objects.get(email='shopper@proace.local')
+        self.assertTrue(shopper.check_password('Overwriting-seed-password-456!'))
+

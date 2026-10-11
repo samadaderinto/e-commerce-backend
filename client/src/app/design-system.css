@@ -184,3 +184,469 @@ td { line-height: 1.6; }
 @media print {
   .order-summary, .analytics-panel, .address-card, .admin-detail-dialog { box-shadow: none; }
 }
+
+/* Keep each date and time intact while letting records stack in narrow columns. */
+.date-stamp {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+.date-stamp-label {
+  color: var(--muted);
+  font-size: 0.75em;
+  font-weight: 500;
+}
+.date-stamp-value {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.date-stamp-day,
+.date-stamp-time,
+.date-stamp-missing {
+  white-space: nowrap;
+}
+.date-stamp-time,
+.date-stamp-missing {
+  color: var(--muted);
+  font-size: 0.9em;
+}
+/* Group account activity into compact cards instead of page-wide label/value rows. */
+.activity-details,
+.admin-profile-details .activity-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 12px;
+  width: 100%;
+  max-width: 840px;
+  margin: 0 0 24px;
+}
+
+.activity-details .activity-detail {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+}
+
+.activity-details .activity-detail dt,
+.activity-details .activity-detail dd {
+  grid-row: auto;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.activity-details .activity-detail dt {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.activity-details .activity-detail dd {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.activity-detail .date-stamp-value {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.activity-detail .date-stamp-time {
+  font-size: inherit;
+}
+
+.activity-detail .date-stamp-time::before {
+  content: '·';
+  margin-right: 10px;
+}
+
+/* Order Fulfillment Progress Tracker (Dual-Theme Light & Dark Support) */
+.order-progress {
+  display: flex;
+  max-width: 580px;
+  margin: 18px auto 44px;
+  padding: 0 16px;
+  position: relative;
+}
+
+.order-progress > div {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+  text-align: center;
+}
+
+/* Connecting track behind step circles */
+.order-progress > div::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  width: 100%;
+  height: 3px;
+  background: var(--line);
+  z-index: 0;
+  transition: background-color 200ms ease;
+}
+
+.order-progress > div:last-child::before {
+  display: none;
+}
+
+/* Completed track segment */
+.order-progress > div.line-done::before {
+  background: var(--green);
+}
+
+/* Step circle indicator */
+.order-progress > div > span {
+  position: relative;
+  z-index: 1;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--soft);
+  border: 2px solid var(--line);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  box-sizing: border-box;
+  transition: all 200ms ease;
+}
+
+/* Pending step inner dot */
+.order-progress .step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+
+/* Completed step indicator */
+.order-progress > div.done > span {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--green) 30%, transparent);
+}
+
+/* Current step active ring */
+.order-progress > div.current > span {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 22%, transparent);
+}
+
+/* Step typography */
+.order-progress strong {
+  text-transform: capitalize;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+  transition: color 200ms ease;
+}
+
+.order-progress > div.done strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.order-progress > div.current strong {
+  color: var(--green);
+  font-weight: 700;
+}
+
+/* Dark Mode explicit overrides ensuring WCAG AA/AAA visibility */
+:root[data-theme='dark'] .order-progress > div:not(.done) > span {
+  background: #1c261f;
+  border-color: #38493c;
+  color: var(--muted);
+}
+
+:root[data-theme='dark'] .order-progress > div.done > span {
+  background: var(--green);
+  border-color: var(--green);
+  color: var(--button-text);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--green) 35%, transparent);
+}
+
+:root[data-theme='dark'] .order-progress > div.current > span {
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 30%, transparent);
+}
+
+:root[data-theme='dark'] .order-progress > div::before {
+  background: #314034;
+}
+
+:root[data-theme='dark'] .order-progress > div.line-done::before {
+  background: var(--green);
+}
+
+:root[data-theme='dark'] .order-progress .step-dot {
+  background: var(--muted);
+  opacity: 0.7;
+}
+
+:root[data-theme='dark'] .order-progress strong {
+  color: var(--muted);
+}
+
+:root[data-theme='dark'] .order-progress > div.done strong {
+  color: var(--ink);
+}
+
+:root[data-theme='dark'] .order-progress > div.current strong {
+  color: var(--green);
+}
+
+@media (max-width: 480px) {
+  .order-progress {
+    margin: 12px auto 32px;
+    padding: 0 8px;
+  }
+  .order-progress > div > span {
+    width: 28px;
+    height: 28px;
+  }
+  .order-progress > div::before {
+    top: 13px;
+  }
+  .order-progress strong {
+    font-size: 10px;
+  }
+}
+
+/* Partner pricing is supporting information beside the purchase action. */
+.detail-price .partner-price-note {
+  width: auto;
+  margin-top: 0;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.collection-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-block: 16px;
+}
+
+.collection-filters label {
+  display: grid;
+  gap: 4px;
+  flex: 1 1 160px;
+  min-width: 0;
+  color: var(--ink);
+}
+
+.collection-filters label span {
+  font-size: 12px;
+}
+
+.collection-filters input,
+.collection-filters select {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.order-state-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  max-width: 760px;
+  margin: 20px auto 32px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.order-state-notice strong {
+  display: block;
+  font-size: 18px;
+}
+
+.order-state-notice p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.order-state-notice .date-stamp {
+  margin-top: 8px;
+}
+
+.order-summary > .button + .button {
+  margin-top: 10px;
+}
+
+.order-outcome-icon {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 20px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--soft);
+  color: var(--ink);
+}
+
+.affiliate-workspace { max-width: 1200px; }
+.affiliate-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 16px;
+  margin: 24px 0;
+}
+.affiliate-summary > div, .affiliate-invite, .affiliate-enrollment {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--soft);
+}
+.affiliate-summary span { display: block; color: var(--muted); }
+.affiliate-summary strong { display: block; font-size: 26px; margin-top: 8px; color: var(--ink); }
+.affiliate-invite, .affiliate-enrollment { margin: 24px 0; }
+.affiliate-workspace .field { display: grid; gap: 8px; margin-bottom: 16px; }
+.affiliate-workspace input { width: 100%; min-width: 0; }
+
+/* Social Authentication Buttons (Google & Apple) */
+.social-auth-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.social-auth-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 18px;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
+  user-select: none;
+}
+
+.social-auth-btn:hover:not(:disabled) {
+  background: var(--soft);
+  border-color: var(--ink);
+}
+
+.social-auth-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.social-auth-btn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.social-auth-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.social-auth-btn svg {
+  flex-shrink: 0;
+}
+
+.social-auth-btn.apple-btn {
+  color: var(--ink);
+}
+
+.social-auth-btn.apple-btn svg {
+  fill: currentColor;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  width: 100%;
+  margin: 16px 0 20px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--line);
+}
+
+.auth-divider span {
+  padding: 0 12px;
+}
+
+/* Product page purchase actions & Share button */
+.purchase-actions > .button.secondary {
+  width: 48px;
+  min-width: 48px;
+  height: 44px;
+  padding: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 4px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  transition: all 0.15s ease;
+}
+
+.purchase-actions > .button.secondary:hover:not(:disabled) {
+  background: var(--soft);
+  border-color: var(--ink);
+}
+
+.purchase-actions > .button.secondary.saved {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.purchase-actions > .button.secondary.copied {
+  color: var(--green);
+  border-color: var(--green);
+}
+

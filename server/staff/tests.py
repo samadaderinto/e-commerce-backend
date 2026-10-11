@@ -45,6 +45,35 @@ class StaffAdministrationTests(TestCase):
         self.assertIn('wallet', payload)
         self.assertIn('orders', payload)
 
+    def test_profile_order_filters_pagination_and_unfiltered_totals(self) -> None:
+        self.client.force_authenticate(self.admin)
+        matching = Order.objects.create(
+            user=self.staff, ordered=True, status="delivered", total="50.00",
+            carrier="UPS", payment_type="card", tracking_number="PROFILE-TRACK",
+        )
+        Order.objects.create(user=self.staff, ordered=True, status="pending", total="20.00")
+        Order.objects.create(user=self.admin, ordered=True, status="delivered", total="90.00", carrier="UPS", payment_type="card", tracking_number="PROFILE-TRACK")
+        url = f"/staffs/users/{self.staff.pk}/"
+        response = self.client.get(url, {
+            "order_search": "PROFILE-TRACK", "order_status": "delivered",
+            "order_carrier": "UPS", "order_payment": "card", "order_ordering": "total",
+        })
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual([row["id"] for row in response.data["orders"]], [matching.pk])
+        self.assertEqual(response.data["order_count"], 1)
+        self.assertEqual(response.data["total_orders"], 2)
+        self.assertEqual(str(response.data["lifetime_spent"]), "70.00")
+        for _ in range(15):
+            Order.objects.create(user=self.staff, ordered=True, status="pending", total="1.00")
+        first = self.client.get(url)
+        second = self.client.get(url, {"order_offset": 15})
+        self.assertEqual(first.data["order_count"], 17)
+        self.assertEqual(len(first.data["orders"]), 15)
+        self.assertEqual(len(second.data["orders"]), 2)
+        self.assertFalse({row["id"] for row in first.data["orders"]} & {row["id"] for row in second.data["orders"]})
+        for params in [{"order_offset": -1}, {"order_ordering": "user"}, {"order_status": "unknown"}]:
+            self.assertEqual(self.client.get(url, params).status_code, 400)
+
     def staff_payload(self):
         return {
             "email": "new.staff@example.com",
@@ -112,6 +141,81 @@ class StaffAdministrationTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.admin.refresh_from_db()
         self.assertTrue(self.admin.is_active)
+
+    def test_staff_can_block_and_unblock_non_official_store(self):
+        from store.models import Store
+        seller = User.objects.create_user(
+            email="seller-to-block@example.com",
+            password="Strong-password-123!",
+            first_name="Shop",
+            last_name="Owner",
+            gender="male",
+            phone1="+2348012345677",
+        )
+        store = Store.objects.create(
+            user=seller,
+            name="Community Boutique",
+            username="comm-boutique",
+            status=Store.STATUS_ACTIVE,
+            is_official=False,
+        )
+        self.client.force_authenticate(self.staff)
+
+        # 1. Staff blocks active store
+        res_block = self.client.post(
+            f"/staffs/stores/{store.pk}/block/",
+            {"reason": "Policy violation"},
+            format="json",
+        )
+        self.assertEqual(res_block.status_code, 200, res_block.data)
+        store.refresh_from_db()
+        self.assertEqual(store.status, Store.STATUS_BLOCKED)
+        self.assertEqual(store.blocked_reason, "Policy violation")
+        self.assertEqual(store.blocked_by, self.staff)
+
+        # 2. Staff unblocks store
+        res_unblock = self.client.post(f"/staffs/stores/{store.pk}/unblock/")
+        self.assertEqual(res_unblock.status_code, 200, res_unblock.data)
+        store.refresh_from_db()
+        self.assertEqual(store.status, Store.STATUS_ACTIVE)
+        self.assertEqual(store.blocked_reason, "")
+        self.assertIsNone(store.blocked_by)
+
+    def test_staff_cannot_block_official_store(self):
+        from store.models import Store
+        official_store = Store.objects.create(
+            user=self.admin,
+            name="ProAce Official Store",
+            username="proace-official",
+            status=Store.STATUS_ACTIVE,
+            is_official=True,
+        )
+        self.client.force_authenticate(self.staff)
+
+        # Staff attempt to block official store is rejected
+        res = self.client.post(
+            f"/staffs/stores/{official_store.pk}/block/",
+            {"reason": "Unauthorized suspension"},
+            format="json",
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertIn("Official company stores cannot be blocked", res.data.get("detail", ""))
+        official_store.refresh_from_db()
+        self.assertEqual(official_store.status, Store.STATUS_ACTIVE)
+
+    def test_store_model_guardrail_prevents_blocking_official_store(self):
+        from store.models import Store
+        from django.core.exceptions import ValidationError
+        official_store = Store.objects.create(
+            user=self.admin,
+            name="ProAce Flagship",
+            username="proace-flagship",
+            status=Store.STATUS_ACTIVE,
+            is_official=True,
+        )
+        official_store.status = Store.STATUS_BLOCKED
+        with self.assertRaises(ValidationError):
+            official_store.save()
 
 
 @override_settings(ROOT_URLCONF="storefront.urls")
@@ -201,6 +305,74 @@ class StaffEmergencyOperationsTests(TestCase):
         self.assertEqual(self.order.status, "shipped")
         self.assertEqual(self.order.tracking_events[-1]["actor_id"], self.staff.pk)
         self.assertEqual(self.customer.notifications.filter(data__event="order_status_override").count(), 1)
+
+    def test_staff_cannot_override_digital_order_to_shipped_or_revert_delivered(self):
+        # 1. Delivered digital orders cannot be reverted to shipped or picked up
+        delivered_digital_order = Order.objects.create(
+            user=self.customer,
+            status="delivered",
+            ordered=True,
+            total="15.00",
+            subtotal="15.00",
+            paid_total="15.00",
+            items_snapshot=[
+                {"product": 99, "title": "Digital Audio Guide", "price": "15.00", "quantity": 1, "is_digital": True}
+            ],
+        )
+        response = self.client.post(
+            f"/staffs/orders/{delivered_digital_order.pk}/status/",
+            {"status": "shipped", "reason": "Accidental physical dispatch override"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn("Digital orders", str(response.data))
+
+        # 2. Digital orders stuck in shipped can transition to delivered and clear shipped_at
+        shipped_digital_order = Order.objects.create(
+            user=self.customer,
+            status="shipped",
+            ordered=True,
+            total="15.00",
+            subtotal="15.00",
+            paid_total="15.00",
+            shipped_at=timezone.now(),
+            items_snapshot=[
+                {"product": 99, "title": "Digital Audio Guide", "price": "15.00", "quantity": 1, "is_digital": True}
+            ],
+        )
+        response = self.client.post(
+            f"/staffs/orders/{shipped_digital_order.pk}/status/",
+            {"status": "delivered", "reason": "Immediate digital access granted"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        shipped_digital_order.refresh_from_db()
+        self.assertEqual(shipped_digital_order.status, "delivered")
+        self.assertIsNotNone(shipped_digital_order.delivered_at)
+        self.assertIsNone(shipped_digital_order.shipped_at)
+
+    def test_staff_can_override_mixed_order_to_shipped(self):
+        mixed_order = Order.objects.create(
+            user=self.customer,
+            status="confirmed",
+            ordered=True,
+            total="35.00",
+            subtotal="30.00",
+            paid_total="35.00",
+            items_snapshot=[
+                {"product": 1, "title": "Physical Shirt", "price": "20.00", "quantity": 1, "is_digital": False},
+                {"product": 2, "title": "Digital Album", "price": "10.00", "quantity": 1, "is_digital": True},
+            ],
+        )
+        response = self.client.post(
+            f"/staffs/orders/{mixed_order.pk}/status/",
+            {"status": "shipped", "reason": "Dispatched physical goods from warehouse"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        mixed_order.refresh_from_db()
+        self.assertEqual(mixed_order.status, "shipped")
+        self.assertIsNotNone(mixed_order.shipped_at)
 
     def test_staff_can_process_refund_only_once(self):
         refund = Refund.objects.create(
@@ -340,10 +512,13 @@ class StaffEmergencyOperationsTests(TestCase):
         self.assertIn("prohibited", response.data.get("detail", "").lower())
 
     def test_staff_orders_list_search_and_filtering(self):
+        self.order.carrier = "USPS"
+        self.order.save(update_fields=["carrier"])
         # Create additional order
         other_order = Order.objects.create(
             user=self.customer, status="delivered", ordered=True,
             total="150.00", subtotal="140.00", payment_type="cash_on_delivery",
+            carrier="UPS",
         )
         # Filter status
         res = self.client.get("/staffs/orders/?status=delivered")
@@ -355,6 +530,17 @@ class StaffEmergencyOperationsTests(TestCase):
         res = self.client.get("/staffs/orders/?payment_type=cash_on_delivery")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data["count"], 1)
+
+        # Filter by carrier and courier query params
+        res_carrier = self.client.get("/staffs/orders/?carrier=UPS")
+        self.assertEqual(res_carrier.status_code, 200)
+        self.assertEqual(res_carrier.data["count"], 1)
+        self.assertEqual(res_carrier.data["results"][0]["orderId"], other_order.orderId)
+
+        res_courier = self.client.get("/staffs/orders/?courier=USPS")
+        self.assertEqual(res_courier.status_code, 200)
+        self.assertEqual(res_courier.data["count"], 1)
+        self.assertEqual(res_courier.data["results"][0]["orderId"], self.order.orderId)
 
         # Search by orderId
         res = self.client.get(f"/staffs/orders/?search={self.order.orderId}")
@@ -399,14 +585,31 @@ class StaffEmergencyOperationsTests(TestCase):
         }
         create_res = self.client.post("/staffs/coupons/", payload, format="json")
         self.assertEqual(create_res.status_code, 201)
-        self.assertIn(self.staff.email, create_res.data["created_by"])
-        self.assertIn("Staff", create_res.data["created_by"])
+        self.assertEqual(self.staff.email, create_res.data["created_by"])
 
         # Listing coupons also shows the staff creator
         list_res = self.client.get("/staffs/coupons/?search=STAFFPROMO")
         self.assertEqual(list_res.status_code, 200)
         self.assertEqual(list_res.data["count"], 1)
-        self.assertIn(self.staff.email, list_res.data["results"][0]["created_by"])
+        self.assertEqual(self.staff.email, list_res.data["results"][0]["created_by"])
+
+    def test_coupon_creator_email_uses_authenticated_admin(self) -> None:
+        admin: User = User.objects.create_superuser(email="coupon.admin@example.com", password="Test-password-123!")
+        self.client.force_authenticate(admin)
+        response = self.client.post("/staffs/coupons/", {
+            "code": "ADMINEMAIL", "discount": 10, "num_available": 20,
+            "valid_to": (timezone.now() + timedelta(days=10)).isoformat(),
+            "created_by": self.staff.email,
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["created_by"], admin.email)
+        self.assertEqual(Coupon.objects.get(code="ADMINEMAIL").created_by_id, admin.pk)
+        legacy = Coupon.objects.create(
+            code="UNATTRIBUTED", discount=5, num_available=10,
+            valid_to=timezone.now() + timedelta(days=10),
+        )
+        response = self.client.get("/staffs/coupons/", {"search": legacy.code})
+        self.assertEqual(response.data["results"][0]["created_by"], "")
 
     def test_staff_refunds_list_search_and_filtering(self):
         r1 = Refund.objects.create(email="user1@example.com", order=self.order, status=Refund.STATUS_PENDING, refund_type=Refund.REFUND_TYPE_STORE_CREDIT, reason="Wrong item")
@@ -486,3 +689,47 @@ class StaffEmergencyOperationsTests(TestCase):
         resp2 = self.client.get("/staffs/commission-wallet/")
         self.assertEqual(resp2.data["available"], "54.00")
         self.assertEqual(resp2.data["withdrawn_or_pending"], "150.00")
+
+    def test_dashboard_and_user_detail_include_referral_data(self) -> None:
+        from decimal import Decimal
+        from affiliates.models import Marketer, Referral
+
+        marketer_user = User.objects.create_user(email="marketer@example.com", password="PassWord123!", first_name="Top", last_name="Affiliate")
+        marketer = Marketer.objects.create(user=marketer_user, name="Top Affiliate")
+
+        referred_user = User.objects.create_user(email="newshopper@example.com", password="PassWord123!", first_name="Jane", last_name="Shopper")
+        Referral.objects.create(
+            marketer=marketer,
+            referred_user=referred_user,
+            status=Referral.REWARDED,
+            reward_amount=Decimal("25.00"),
+        )
+
+        admin = User.objects.create_superuser(email="admin.referrals@example.com", password="Admin-password-123!")
+        self.client.force_authenticate(admin)
+
+        # 1. Dashboard metrics check
+        dash_resp = self.client.get("/staffs/dashboard/")
+        self.assertEqual(dash_resp.status_code, 200)
+        self.assertIn("referrals", dash_resp.data)
+        self.assertEqual(dash_resp.data["referrals"]["total"], 1)
+        self.assertEqual(dash_resp.data["referrals"]["rewarded"], 1)
+        self.assertEqual(dash_resp.data["referrals"]["rewarded_amount"], "25.00")
+
+        # 2. Referred user detail check
+        detail_resp = self.client.get(f"/staffs/users/{referred_user.pk}/")
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertIsNotNone(detail_resp.data.get("referral"))
+        self.assertEqual(detail_resp.data["referral"]["referrer_name"], "Top Affiliate")
+        self.assertEqual(detail_resp.data["referral"]["status"], "rewarded")
+        self.assertEqual(detail_resp.data["referral"]["reward_amount"], "25.00")
+        self.assertIsNone(detail_resp.data.get("affiliate"))
+
+        # 3. Marketer user detail check
+        marketer_detail_resp = self.client.get(f"/staffs/users/{marketer_user.pk}/")
+        self.assertEqual(marketer_detail_resp.status_code, 200)
+        self.assertIsNotNone(marketer_detail_resp.data.get("affiliate"))
+        self.assertEqual(marketer_detail_resp.data["affiliate"]["referral_count"], 1)
+        self.assertEqual(marketer_detail_resp.data["affiliate"]["rewarded_count"], 1)
+        self.assertEqual(marketer_detail_resp.data["affiliate"]["credit_earned"], "25.00")
+

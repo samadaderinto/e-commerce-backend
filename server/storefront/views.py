@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from core.listing_filters import ListingQuerySerializer, filter_records, record_page
+
+import logging
 from decimal import Decimal
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
+
+logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.contrib.auth import authenticate
@@ -22,7 +27,7 @@ from notification.delivery import queue_email_delivery
 from utils.functions import send_mail
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from core.access import IsCustomer, IsBackoffice, IsBusinessAdmin as IsAdminUser
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -80,7 +85,9 @@ def catalog():
 def tokens(user):
     refresh = RefreshToken.for_user(user)
     refresh["credential_version"] = user.credential_version
-    return {'access': str(refresh.access_token), 'refresh': str(refresh), 'user': UserSerializer(user).data}
+    access = refresh.access_token
+    access["credential_version"] = user.credential_version
+    return {'access': str(access), 'refresh': str(refresh), 'user': UserSerializer(user).data}
 
 
 class AuthView(APIView):
@@ -100,12 +107,16 @@ class AuthView(APIView):
         auth=[],
         description=(
             'Submit an action-specific payload. Supported actions: login, register, verify, '
-            'forgot, reset, refresh, and logout. Successful login returns access and refresh '
+            'forgot, reset, refresh, logout, google, apple, and social. Successful authentication returns access and refresh '
             'JWTs plus the user; other actions return a detail message or refreshed token.'
         ),
     )
     def post(self, request: Request, action: str) -> Response:
         data = request.data
+        if action in ('google', 'apple', 'social'):
+            from core.social_auth import authenticate_social_user
+            provider = action if action in ('google', 'apple') else str(data.get('provider', '')).strip().lower()
+            return Response(authenticate_social_user(provider, data, request), status=200)
         if action == 'login':
             email = str(data.get('email', '')).strip().lower()
             password = data.get('password', '')
@@ -133,9 +144,10 @@ class AuthView(APIView):
                 raise ValidationError({'password': error.messages})
             referral_code = serializer.validated_data.pop('referral_code', '').strip()
             user = User.objects.create_user(**serializer.validated_data, is_active=False)
+            token_payload = {'user': user.pk}
             if referral_code:
-                reward_referral(referral_code, user)
-            token = signing.dumps({'user': user.pk}, salt='proace-verify')
+                token_payload['ref'] = referral_code
+            token = signing.dumps(token_payload, salt='proace-verify')
             url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
             send_mail(
                 'onboarding-user',
@@ -149,17 +161,22 @@ class AuthView(APIView):
             return Response({'detail': 'Check your email to activate your account.'}, status=201)
         if action == 'verify':
             raw_token = str(data.get('token', '')).strip().split('"')[0].split("'")[0].split('<')[0].split('&')[0].split(' ')[0]
+            raw_token = raw_token.removeprefix('=3D')
             if raw_token.startswith('staff:'):
                 from core.onboarding import activate_staff
                 activate_staff(raw_token[6:])
-                return Response({'detail': 'Email verified. Temporary credentials have been emailed to you.'})
+                return Response({'detail': 'Email verified. Please check your email to set your password.'})
             try:
                 payload = signing.loads(raw_token, salt='proace-verify', max_age=86400)
                 user = User.objects.get(pk=payload['user'])
             except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError):
                 raise ValidationError({'detail': 'This verification link is invalid or expired.'})
+            was_inactive = not user.is_active
             user.is_active = True
             user.save(update_fields=['is_active'])
+            ref = str(payload.get('ref') or '').strip()
+            if was_inactive and ref:
+                reward_referral(ref, user)
             return Response({'detail': 'Email verified. You can now sign in.'})
         if action == 'forgot':
             email = serializers.EmailField().run_validation(data.get('email'))
@@ -292,12 +309,12 @@ class ProductsView(APIView):
 
     @extend_schema(
         operation_id='storefront_products_list',
-        parameters=[CatalogQuerySerializer],
+        parameters=[CatalogQuerySerializer, ListingQuerySerializer],
         responses=CatalogPageSerializer,
         auth=[],
         description='Returns a page of active-store products. Each page contains at most 24 results.',
     )
-    def get(self, request):
+    def get(self, request: Request) -> Response:
         params = request.query_params
         is_store_preview = False
 
@@ -323,6 +340,9 @@ class ProductsView(APIView):
             store = None
             products = catalog()
 
+        products = filter_records(
+            products, params, fields={"is_digital": "is_digital", "product_type": "product_type"},
+        )
         search = params.get('search')
         if params.get('category'):
             products = products.filter(category=params['category'])
@@ -345,7 +365,7 @@ class ProductsView(APIView):
         page_size = 24
         offset = (page - 1) * page_size
         if search:
-            if not is_store_preview:
+            if not is_store_preview and not params.get("is_digital") and not params.get("product_type"):
                 search_results = search_product_ids(
                     search,
                     filters={
@@ -492,7 +512,11 @@ def check_is_verified_buyer(user, product) -> bool:
 class ReviewsView(APIView):
     permission_classes = [IsCustomer]
     def get_permissions(self):
-        return [AllowAny()] if self.request.method == 'GET' else super().get_permissions()
+        if self.request.method == "GET":
+            return [AllowAny()]
+        if self.request.method == "DELETE":
+            return [IsAuthenticated()]
+        return super().get_permissions()
 
     @extend_schema(responses=ReviewSerializer(many=True), auth=[])
     def get(self, request, pk):
@@ -504,8 +528,8 @@ class ReviewsView(APIView):
     def post(self, request, pk):
         product = get_object_or_404(catalog(), pk=pk)
         
-        # Verify user is a verified buyer or staff
-        if not check_is_verified_buyer(request.user, product) and not (request.user.is_staff or request.user.is_superuser):
+        # Verify user is a verified buyer
+        if not check_is_verified_buyer(request.user, product):
             return Response(
                 {'detail': 'Only verified buyers who have purchased this product can leave a review.'},
                 status=403,
@@ -529,7 +553,6 @@ class ReviewsView(APIView):
                 request.user.is_staff
                 or request.user.is_superuser
                 or getattr(request.user, 'is_business_admin', False)
-                or (product.store and product.store.user_id == request.user.id)
                 or review.user_id == request.user.id
             )
             if not is_moderator:
@@ -701,7 +724,7 @@ class CartView(APIView):
                 quantity += item.quantity
             from product.policies import selected_variant
             option = selected_variant(product, variant_name)
-            if option and quantity > option.get('available', product.available):
+            if option and not product.is_digital and quantity > option.get('available', product.available):
                 raise ValidationError({'variant': 'Insufficient stock for the selected option.'})
             other_quantity = sum(row.quantity for row in cart.cart_items.filter(product=product).exclude(variant=variant_name))
             if not product.is_digital and quantity + other_quantity > product.available:
@@ -795,17 +818,43 @@ def order_data(order):
                 'created': _iso(refund.created),
                 'updated': _iso(refund.updated),
             }
-            if (refund := Refund.objects.filter(order=order).order_by('-created').first())
+            if (
+                refund := (
+                    Refund.objects.filter(order=order, status=Refund.STATUS_PENDING).first()
+                    or Refund.objects.filter(order=order).order_by('-created').first()
+                )
+            )
             else None
         ),
+        'claimed_product_ids': sorted(list({
+            item.get('product')
+            for ref in Refund.objects.filter(
+                order=order,
+                status__in=[
+                    Refund.STATUS_PENDING,
+                    Refund.STATUS_APPROVED,
+                    Refund.STATUS_DECLINED,
+                    Refund.STATUS_FAILED,
+                ],
+            )
+            for item in (ref.selected_items or order.items_snapshot or [])
+            if item.get('product')
+        })),
     }
 
 
 class OrdersView(APIView):
     permission_classes = [IsCustomer]
-    @extend_schema(responses=OrderSerializer(many=True))
-    def get(self, request):
-        orders = Order.objects.filter(user=request.user).order_by('-created')
+    @extend_schema(parameters=[ListingQuerySerializer], responses=OrderSerializer(many=True))
+    def get(self, request: Request) -> Response:
+        orders = filter_records(
+            Order.objects.filter(user=request.user).order_by('-created', '-pk'), request.query_params,
+            search_fields=("orderId", "tracking_number", "carrier", "cart__cart_items__product__title"),
+            fields={"status": "status", "payment_type": "payment_type"}, amount_field="total",
+        )
+        count, page = record_page(orders, request.query_params)
+        if request.query_params.get("paginated") == "1":
+            return Response({"count": count, "results": [order_data(order) for order in page]})
         return Response([order_data(order) for order in orders[:100]])
 
 
@@ -816,31 +865,125 @@ class OrderDetailView(APIView):
             orders = Order.objects.all().order_by('-created')
         else:
             orders = Order.objects.filter(user=request.user).order_by('-created')
-        return Response(order_data(get_object_or_404(orders, pk=pk)))
+        order = get_object_or_404(orders, pk=pk)
+        if (
+            order.status in ("confirmed", "shipped")
+            and order.ordered
+            and order.paid_total >= order.total
+            and order.items_snapshot
+            and all(row.get("is_digital") for row in order.items_snapshot)
+        ):
+            now = timezone.now()
+            order.status = "delivered"
+            order.delivered_at = order.delivered_at or order.created or now
+            order.shipped_at = None
+            order.status_updated_at = now
+            events = list(order.tracking_events or [])
+            if not any(ev.get("status") == "delivered" for ev in events):
+                events.append({
+                    "status": "delivered",
+                    "description": "Instant digital fulfillment completed.",
+                    "timestamp": now.isoformat(),
+                })
+            order.tracking_events = events
+            order.save(update_fields=["status", "delivered_at", "shipped_at", "status_updated_at", "tracking_events", "updated"])
+        return Response(order_data(order))
 
 
 class DigitalDownloadView(APIView):
     """Stream purchased files without exposing object-storage URLs."""
     def get(self, request, pk, product_pk):
-        orders = Order.objects.all() if (request.user.is_staff or request.user.is_superuser or request.user.is_business_admin) else Order.objects.filter(user=request.user)
-        order = get_object_or_404(orders, pk=pk, ordered=True, paid_total__gte=F('total'), status__in=['confirmed', 'shipped', 'delivered', 'picked up'])
-        item = next((row for row in (order.items_snapshot or []) if row.get('product') == product_pk and row.get('is_digital')), None)
+        orders = (
+            Order.objects.all()
+            if (
+                request.user.is_staff
+                or request.user.is_superuser
+                or request.user.is_business_admin
+            )
+            else Order.objects.filter(user=request.user)
+        )
+        order = get_object_or_404(orders, pk=pk)
+        if order.status in ["cancelled", "refunded"]:
+            return Response(
+                {
+                    "detail": f"Download access is revoked because this order was {order.status}."
+                },
+                status=404,
+            )
+        if (
+            not order.ordered
+            or order.status not in ["confirmed", "shipped", "delivered", "picked up"]
+            or order.paid_total < order.total
+        ):
+            raise Http404
+
+        item = next(
+            (
+                row
+                for row in (order.items_snapshot or [])
+                if row.get("product") == product_pk and row.get("is_digital")
+            ),
+            None,
+        )
         if not item:
             raise Http404
         product = get_object_or_404(Product, pk=product_pk, is_digital=True)
         from django.core.files.storage import default_storage
         from urllib.parse import urlparse
-        raw_url = (item.get('download_url') or product.digital_file_url or '').strip()
-        path = urlparse(raw_url).path.lstrip('/')
-        bucket = getattr(settings, 'MINIO_BUCKET_NAME', 'commerce-images')
-        for prefix in (f'{bucket}/media/', f'{bucket}/', 'media/'):
-            if path.startswith(prefix):
-                path = path[len(prefix):]
+
+        candidates = []
+        item_download = (item.get("download_url") or "").strip()
+        if item_download and not item_download.startswith("/api/"):
+            candidates.append(item_download)
+        prod_download = (product.digital_file_url or "").strip()
+        if prod_download and prod_download not in candidates:
+            candidates.append(prod_download)
+
+        bucket = getattr(settings, "MINIO_BUCKET_NAME", "commerce-images")
+        known_prefixes = (
+            f"{bucket}/media/",
+            f"{bucket}/",
+            "commerce-images/media/",
+            "commerce-images/",
+            "commerce-media/media/",
+            "commerce-media/",
+            "media/",
+        )
+
+        resolved_path = None
+        for raw in candidates:
+            path = urlparse(raw).path.lstrip("/")
+            for prefix in known_prefixes:
+                if path.startswith(prefix):
+                    path = path[len(prefix):]
+                    break
+
+            variants = [path]
+            if path.startswith("media/"):
+                variants.append(path[len("media/"):])
+            else:
+                variants.append(f"media/{path}")
+
+            for candidate in variants:
+                if candidate and default_storage.exists(candidate):
+                    resolved_path = candidate
+                    break
+            if resolved_path:
                 break
-        if not path or not default_storage.exists(path):
-            return Response({'detail': 'The digital asset is unavailable. Contact support for a replacement.'}, status=404)
-        response = FileResponse(default_storage.open(path, 'rb'), as_attachment=True, filename=path.rsplit('/', 1)[-1])
-        response['Cache-Control'] = 'private, no-store'
+
+        if not resolved_path:
+            return Response(
+                {
+                    "detail": "The digital asset is unavailable. Contact support for a replacement."
+                },
+                status=404,
+            )
+        response = FileResponse(
+            default_storage.open(resolved_path, "rb"),
+            as_attachment=True,
+            filename=resolved_path.rsplit("/", 1)[-1],
+        )
+        response["Cache-Control"] = "private, no-store"
         return response
 
 
@@ -872,16 +1015,24 @@ class UserWalletView(APIView):
     permission_classes = [IsCustomer]
 
     @extend_schema(
+        parameters=[ListingQuerySerializer],
         responses={200: OpenApiTypes.OBJECT},
         description="Get current user's wallet balance and transactions.",
     )
-    def get(self, request):
+    def get(self, request: Request) -> Response:
         wallet = get_or_create_user_wallet(request.user)
+        transactions = filter_records(
+            wallet.transactions.order_by("-created", "-pk"), request.query_params,
+            search_fields=("description", "reference", "source"),
+            fields={"transaction_type": "transaction_type", "source": "source"}, amount_field="amount",
+        )
+        count, transactions = record_page(transactions, request.query_params)
         return Response(
             {
                 "balance": format(wallet.balance, ".2f"),
+                "count": count,
                 "transactions": UserWalletTransactionSerializer(
-                    wallet.transactions.all()[:30], many=True
+                    transactions, many=True
                 ).data,
             }
         )
@@ -1071,6 +1222,7 @@ class OrderRefundView(APIView):
             status__in=[
                 Refund.STATUS_PENDING,
                 Refund.STATUS_APPROVED,
+                Refund.STATUS_DECLINED,
                 Refund.STATUS_FAILED,
             ],
         ):
@@ -1080,7 +1232,7 @@ class OrderRefundView(APIView):
         if selected_ids & claimed:
             raise ValidationError(
                 {
-                    "product_ids": "A refund already exists for one or more selected products."
+                    "product_ids": "A refund has already been requested, processed, or declined for one or more selected products."
                 }
             )
         refund_amount = sum(
@@ -1120,21 +1272,8 @@ class OrderRefundView(APIView):
             },
         )
 
-        stores = {item.get("store") for item in snapshots if item.get("store")}
-        for store_id in stores:
-            store = Store.objects.filter(pk=store_id).first()
-            if store and store.user:
-                create_notification(
-                    recipient=store.user,
-                    verb=f"Refund Requested for Order #{order.orderId}",
-                    description=f"Customer requested a refund ({refund.get_refund_type_display()}) for Order #{order.orderId}. Reason: {reason}",
-                    data={
-                        "order_id": order.pk,
-                        "refund_id": refund.pk,
-                        "store_id": store.pk,
-                        "event": "refund_requested",
-                    },
-                )
+        from notification.domain import refund_notice
+        refund_notice(refund, request.user, selected, updated=False)
 
         return Response(
             {
@@ -1222,6 +1361,7 @@ class OrderRefundView(APIView):
                 status__in=[
                     Refund.STATUS_PENDING,
                     Refund.STATUS_APPROVED,
+                    Refund.STATUS_DECLINED,
                     Refund.STATUS_FAILED,
                 ],
             ).exclude(pk=refund.pk):
@@ -1230,7 +1370,7 @@ class OrderRefundView(APIView):
                 )
             if selected_ids & claimed:
                 raise ValidationError({
-                    "product_ids": "A refund already exists for one or more selected products."
+                    "product_ids": "A refund has already been requested, processed, or declined for one or more selected products."
                 })
             new_amount = sum(
                 (Decimal(str(item["line_total"])) for item in selected), Decimal("0")
@@ -1244,21 +1384,8 @@ class OrderRefundView(APIView):
 
         refund.save(update_fields=["reason", "refund_type", "selected_items", "refund_amount", "updated"])
 
-        stores = {item.get("store") for item in (refund.selected_items or snapshots) if item.get("store")}
-        for store_id in stores:
-            store = Store.objects.filter(pk=store_id).first()
-            if store and store.user:
-                create_notification(
-                    recipient=store.user,
-                    verb=f"Refund Request Updated for Order #{order.orderId}",
-                    description=f"Customer updated their refund request ({refund.get_refund_type_display()}) for Order #{order.orderId}. Reason: {refund.reason}",
-                    data={
-                        "order_id": order.pk,
-                        "refund_id": refund.pk,
-                        "store_id": store.pk,
-                        "event": "refund_updated",
-                    },
-                )
+        from notification.domain import refund_notice
+        refund_notice(refund, request.user, refund.selected_items, updated=True)
 
         return Response(
             {
@@ -1291,6 +1418,33 @@ class OrderCancelView(APIView):
         order = get_object_or_404(
             Order.objects.select_for_update(), user=request.user, pk=pk
         )
+        has_physical = any(
+            not item.get("is_digital", False) for item in (order.items_snapshot or [])
+        )
+        if not has_physical:
+            raise ValidationError(
+                {
+                    "detail": "Digital orders are fulfilled immediately upon purchase and cannot be cancelled or refunded."
+                }
+            )
+        has_digital = any(
+            item.get("is_digital", False) for item in (order.items_snapshot or [])
+        )
+        if has_digital:
+            raise ValidationError(
+                {
+                    "detail": "Orders containing instant digital products cannot be cancelled once access is delivered."
+                }
+            )
+        cancellation_window_hours = getattr(settings, "CANCELLATION_WINDOW_HOURS", 12)
+        from datetime import timedelta
+
+        if timezone.now() > order.created + timedelta(hours=cancellation_window_hours):
+            raise ValidationError(
+                {
+                    "detail": f"Orders can only be cancelled within {cancellation_window_hours} hours of placement."
+                }
+            )
         if order.status not in {"pending", "confirmed"}:
             raise ValidationError(
                 {
@@ -1319,7 +1473,7 @@ class CouponValidateView(APIView):
     def post(self, request):
         code = str(request.data.get("code", "")).strip()
         if not code:
-            raise ValidationError({"code": "Enter a coupon code."})
+            raise ValidationError({"detail": "Enter a coupon code."})
 
         coupon = Coupon.objects.filter(
             code__iexact=code,
@@ -1330,19 +1484,19 @@ class CouponValidateView(APIView):
 
         if not coupon:
             raise ValidationError(
-                {"code": "This coupon code is invalid or has expired."}
+                {"detail": "This coupon code is invalid or has expired."}
             )
 
         if coupon.num_available and coupon.num_used >= coupon.num_available:
             raise ValidationError(
-                {"code": "This coupon has reached its maximum usage limit."}
+                {"detail": "This coupon has reached its maximum usage limit."}
             )
 
         cart = active_cart(request.user)
         items = list(cart.cart_items.select_related("product").all())
         if not items:
             raise ValidationError(
-                {"code": "Add items to your bag before applying a coupon."}
+                {"detail": "Add items to your bag before applying a coupon."}
             )
 
         coupon_lines = []
@@ -1362,8 +1516,20 @@ class CouponValidateView(APIView):
             discount = calculate_coupon_discount(
                 coupon, request.user, coupon_lines, subtotal, reserve=False
             )
-        except Exception as exc:
-            raise ValidationError({"code": str(exc)})
+        except ValidationError as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                first_msg = next(iter(detail.values()), "This coupon cannot be applied.")
+                if isinstance(first_msg, (list, tuple)) and first_msg:
+                    first_msg = first_msg[0]
+                error_text = str(first_msg)
+            elif isinstance(detail, (list, tuple)) and detail:
+                error_text = str(detail[0])
+            else:
+                error_text = str(detail)
+            raise ValidationError({"detail": error_text})
+        except Exception:
+            raise ValidationError({"detail": "This coupon cannot be applied to your cart."})
 
         return Response(
             {
@@ -1525,9 +1691,10 @@ class CheckoutView(APIView):
             )
 
     def _lines(
-        self, request: Request, lock: bool = False
+        self, request: Any, lock: bool = False
     ) -> tuple[Cart, list[dict[str, Any]], list[dict[str, Any]], Decimal]:
-        cart = active_cart(request.user)
+        user = getattr(request, "user", request)
+        cart = active_cart(user)
         items = list(cart.cart_items.order_by("product_id"))
         if not items:
             raise ValidationError({"detail": "Your cart is empty."})
@@ -1545,11 +1712,11 @@ class CheckoutView(APIView):
         for item in items:
             query = Product.objects.select_for_update() if lock else Product.objects
             product = query.get(pk=item.product_id)
-            validate_purchase(product, request.user)
+            validate_purchase(product, user)
             from product.policies import selected_variant
 
             option = selected_variant(product, item.variant)
-            if option and variant_quantities[
+            if option and not product.is_digital and variant_quantities[
                 (item.product_id, item.variant)
             ] > option.get("available", product.available):
                 raise ValidationError(
@@ -1603,7 +1770,7 @@ class CheckoutView(APIView):
 
     def _complete(
         self,
-        request: Request,
+        request: Any,
         key: UUID,
         address: Address | None,
         code: str,
@@ -1614,13 +1781,14 @@ class CheckoutView(APIView):
         paid_amount: int | None = None,
         wallet_paid_amount: Decimal = Decimal("0"),
     ) -> Order:
-        User.objects.select_for_update().get(pk=request.user.pk)
+        user = getattr(request, "user", request)
+        User.objects.select_for_update().get(pk=user.pk)
         existing = Order.objects.filter(checkout_key=key).first()
         if existing:
-            if existing.user_id != request.user.pk:
+            if existing.user_id != user.pk:
                 raise ValidationError({"detail": "Invalid checkout reference."})
             return existing
-        cart, snapshots, coupon_lines, subtotal = self._lines(request, lock=True)
+        cart, snapshots, coupon_lines, subtotal = self._lines(user, lock=True)
         self._validate_service_area(address, snapshots)
         coupon = None
         discount = Decimal("0")
@@ -1635,9 +1803,22 @@ class CheckoutView(APIView):
                 )
                 .first()
             )
-            discount = calculate_coupon_discount(
-                coupon, request.user, coupon_lines, subtotal
-            )
+            try:
+                discount = calculate_coupon_discount(
+                    coupon, user, coupon_lines, subtotal
+                )
+            except ValidationError as exc:
+                detail = exc.detail
+                if isinstance(detail, dict):
+                    first_msg = next(iter(detail.values()), "This coupon cannot be applied.")
+                    if isinstance(first_msg, (list, tuple)) and first_msg:
+                        first_msg = first_msg[0]
+                    error_text = str(first_msg)
+                elif isinstance(detail, (list, tuple)) and detail:
+                    error_text = str(detail[0])
+                else:
+                    error_text = str(detail)
+                raise ValidationError({"detail": error_text})
             coupon.used()
         snapshots = allocate_checkout_lines(snapshots, coupon_lines, coupon, discount)
         for item in cart.cart_items.order_by("product_id"):
@@ -1659,40 +1840,39 @@ class CheckoutView(APIView):
             for item in cart.cart_items.select_related("product").all()
             if not item.product.is_digital
         )
-        if shipping_quote:
+        if not has_physical_items:
+            address = None
+            shipping_service = "digital_delivery"
+            rate = {
+                "carrier": "DIGITAL",
+                "service_id": "digital_delivery",
+                "amount": "0.00",
+            }
+        elif shipping_quote:
             rate = verify_quote(
                 shipping_quote,
-                request.user,
+                user,
                 cart,
                 address,
                 shipping_service,
                 paid=paid_amount is not None,
             )
         else:
-            if not has_physical_items:
-                rate = {
-                    "carrier": "DIGITAL",
-                    "service_id": "digital_delivery",
-                    "amount": "0.00",
-                }
-            else:
-                # Backwards compatible direct API clients still receive a server-validated carrier rate.
-                carrier = (
-                    (shipping_service or "usps_ground_advantage")
-                    .split("_", 1)[0]
-                    .upper()
+            # Backwards compatible direct API clients still receive a server-validated carrier rate.
+            carrier = (
+                (shipping_service or "usps_ground_advantage")
+                .split("_", 1)[0]
+                .upper()
+            )
+            rates = cart_rates(carrier, cart, address)
+            rate = next(
+                (row for row in rates if row["service_id"] == shipping_service),
+                None,
+            )
+            if rate is None:
+                raise ValidationError(
+                    {"shipping_service": "Select an available shipping service."}
                 )
-                rates = cart_rates(carrier, cart, address)
-                rate = next(
-                    (row for row in rates if row["service_id"] == shipping_service),
-                    None,
-                )
-                if rate is None:
-                    raise ValidationError(
-                        {"shipping_service": "Select an available shipping service."}
-                    )
-        if not has_physical_items:
-            shipping_service = "digital_delivery"
         if has_physical_items:
             from payment.geo import validate_military_carrier
 
@@ -1729,19 +1909,24 @@ class CheckoutView(APIView):
             "usps_ground_advantage" if has_physical_items else "digital_delivery"
         )
         delivery = DeliveryInfo.objects.create(
-            user=request.user,
+            user=user,
             address=address,
             method=delivery_method,
             delivery_type=delivery_service,
             total=shipping,
         )
-        buyer_email = getattr(request.user, "email", "") or ""
-        buyer_phone = str(getattr(request.user, "phone1", "") or "")
-        order = Order.objects.create(
-            user=request.user,
+        buyer_email = getattr(user, "email", "") or ""
+        buyer_phone = str(getattr(user, "phone1", "") or "")
+        now = timezone.now()
+        is_instant_digital = not has_physical_items and payment_type != "cash_on_delivery"
+        initial_status = "delivered" if is_instant_digital else "confirmed"
+        order = Order(
+            user=user,
             cart=cart,
             delivery=delivery,
-            status="confirmed",
+            status=initial_status,
+            delivered_at=now if is_instant_digital else None,
+            status_updated_at=now if is_instant_digital else None,
             ordered=True,
             coupon_code=code,
             total=subtotal - discount + shipping + tax,
@@ -1765,17 +1950,37 @@ class CheckoutView(APIView):
             if address
             else {"country": "Worldwide", "digital": True},
             tax_snapshot=tax_breakdown.to_dict(),
+            tracking_events=[
+                {
+                    "status": "confirmed",
+                    "description": "Order confirmed and payment received.",
+                    "timestamp": now.isoformat(),
+                },
+                {
+                    "status": "delivered",
+                    "description": "Instant digital fulfillment completed.",
+                    "timestamp": now.isoformat(),
+                },
+            ] if is_instant_digital else [
+                {
+                    "status": "confirmed",
+                    "description": "Order confirmed.",
+                    "timestamp": now.isoformat(),
+                }
+            ],
         )
+        order._notification_managed = True
+        order.save()
         if payment_type == "user_wallet" and order.total > 0:
             debit_user_wallet(
-                request.user,
+                user,
                 order.total,
                 f"ProAce Wallet payment for Order #{order.orderId}",
                 source=UserWalletTransaction.SOURCE_PURCHASE,
                 reference=order.orderId,
             )
         if coupon:
-            CouponRedemption.objects.filter(coupon=coupon, user=request.user).update(
+            CouponRedemption.objects.filter(coupon=coupon, user=user).update(
                 order=order
             )
         cart.ordered = True
@@ -1796,24 +2001,13 @@ class CheckoutView(APIView):
         if order.paid_total > 0:
             record_order_earnings_for_merchant(order)
 
-        store_ids = {item.get("store") for item in snapshots if item.get("store")}
+        # The buyer's HTML receipt is the only buyer email for order creation.
         order._receipt_recipient_ids = {order.user_id} if order.user_id else set()
-        for store_id in store_ids:
-            store = Store.objects.filter(pk=store_id).first()
-            if store and store.user:
-                order._receipt_recipient_ids.add(store.user_id)
-                create_notification(
-                    recipient=store.user,
-                    verb=f"New order #{order.orderId}",
-                    description=f"New order #{order.orderId} placed with items from your store. Net earnings held in 7-day review escrow.",
-                    data={
-                        "order_id": order.pk,
-                        "store_id": store.pk,
-                        "event": "new_order",
-                    },
-                )
+        order._notification_managed = False
+        from notification.events import order_changed
+        order_changed(Order, order, created=True)
 
-        recipient_email = str(order.buyer_email or getattr(request.user, "email", "") or "").strip()
+        recipient_email = str(order.buyer_email or getattr(user, "email", "") or "").strip()
         if recipient_email:
             ordered_items = [
                 {
@@ -1849,7 +2043,7 @@ class CheckoutView(APIView):
                 "order-summary",
                 recipient_email,
                 {
-                    "firstname": getattr(request.user, "first_name", ""),
+                    "firstname": getattr(user, "first_name", ""),
                     "orderId": order.orderId,
                     "ordered_items": ordered_items,
                     "has_physical_items": has_physical_items,
@@ -1935,7 +2129,12 @@ class WalletCheckoutSessionView(CheckoutView):
     @transaction.atomic
     def post(self, request: Request) -> Response:
         if stripe is None or not getattr(settings, "STRIPE_SECRET", ""):
-            raise ValidationError({"detail": "Wallet payments are not configured."})
+            logger.warning("Stripe checkout requested but STRIPE_SECRET is not configured.")
+            raise ValidationError(
+                {
+                    "detail": "Online card payments are currently unavailable. Please select another payment method or try again later."
+                }
+            )
         if getattr(settings, "STRIPE_CURRENCY", "usd").lower() != "usd":
             raise ValidationError({"detail": "Carrier checkout requires USD payments."})
         stripe.api_key = settings.STRIPE_SECRET
@@ -2002,7 +2201,15 @@ class WalletCheckoutSessionView(CheckoutView):
         ).strip()
         shipping_quote = request.data.get("shipping_quote")
         paid_amount = None
-        if shipping_quote:
+        if not has_physical_items:
+            address = None
+            shipping_service = "digital_delivery"
+            rate = {
+                "carrier": "DIGITAL",
+                "service_id": "digital_delivery",
+                "amount": "0.00",
+            }
+        elif shipping_quote:
             rate = verify_quote(
                 shipping_quote,
                 request.user,
@@ -2012,29 +2219,20 @@ class WalletCheckoutSessionView(CheckoutView):
                 paid=paid_amount is not None,
             )
         else:
-            if not has_physical_items:
-                rate = {
-                    "carrier": "DIGITAL",
-                    "service_id": "digital_delivery",
-                    "amount": "0.00",
-                }
-            else:
-                carrier = (
-                    (shipping_service or "usps_ground_advantage")
-                    .split("_", 1)[0]
-                    .upper()
+            carrier = (
+                (shipping_service or "usps_ground_advantage")
+                .split("_", 1)[0]
+                .upper()
+            )
+            rates = cart_rates(carrier, cart, address)
+            rate = next(
+                (row for row in rates if row["service_id"] == shipping_service),
+                None,
+            )
+            if rate is None:
+                raise ValidationError(
+                    {"shipping_service": "Select an available shipping service."}
                 )
-                rates = cart_rates(carrier, cart, address)
-                rate = next(
-                    (row for row in rates if row["service_id"] == shipping_service),
-                    None,
-                )
-                if rate is None:
-                    raise ValidationError(
-                        {"shipping_service": "Select an available shipping service."}
-                    )
-        if not has_physical_items:
-            shipping_service = "digital_delivery"
         if has_physical_items:
             from payment.geo import validate_military_carrier
 
@@ -2212,59 +2410,7 @@ class WalletCheckoutConfirmView(CheckoutView):
                     if existing.user_id != request.user.pk:
                         raise ValidationError({"detail": "Invalid checkout reference."})
                     return Response(order_data(existing), status=200)
-                address_raw = session.get("metadata", {}).get("address")
-                address = None
-                if address_raw:
-                    address = get_object_or_404(
-                        Address,
-                        pk=serializers.IntegerField(min_value=1).run_validation(
-                            address_raw
-                        ),
-                        user=request.user,
-                        is_deleted=False,
-                    )
-                paid_amount = serializers.IntegerField(min_value=0).run_validation(
-                    session.get("amount_total")
-                )
-                if session.get("currency") != "usd":
-                    raise ValidationError({"detail": "Unsupported payment currency."})
-                shipping_service = session.get("metadata", {}).get(
-                    "shipping_service",
-                    "digital_delivery" if not address else "usps_ground_advantage",
-                )
-                wallet_deduction_val = Decimal(
-                    str(session.get("metadata", {}).get("wallet_deduction", "0"))
-                )
-                if reserved_wallet and wallet_deduction_val != attempt.wallet_amount:
-                    raise ValidationError(
-                        {
-                            "wallet_amount": "The payment does not match its wallet reservation."
-                        }
-                    )
-                order = self._complete(
-                    request,
-                    key,
-                    address,
-                    session.get("metadata", {}).get("coupon", ""),
-                    "split_tender"
-                    if wallet_deduction_val > Decimal("0")
-                    else "stripe_wallet",
-                    session_id,
-                    shipping_service=shipping_service,
-                    shipping_quote=session.get("metadata", {}).get("shipping_quote"),
-                    paid_amount=paid_amount + int(wallet_deduction_val * 100),
-                    wallet_paid_amount=wallet_deduction_val,
-                )
-                if attempt:
-                    attempt.status = "completed"
-                    attempt.save(update_fields=["status", "updated"])
-                if not reserved_wallet and wallet_deduction_val > 0:
-                    debit_user_wallet(
-                        request.user,
-                        wallet_deduction_val,
-                        f"Split payment for #{order.orderId}",
-                        reference=order.orderId,
-                    )
+                order = complete_stripe_checkout(request.user, session, attempt)
         except Exception as exc:
             if attempt:
                 refunded = compensate_checkout(attempt, session, str(exc))
@@ -2277,6 +2423,200 @@ class WalletCheckoutConfirmView(CheckoutView):
                 )
             raise
         return Response(order_data(order), status=201)
+
+
+def complete_stripe_checkout(
+    user: User, session: dict, attempt: Any = None
+) -> Order:
+    key_raw = session.get("metadata", {}).get("checkout_key")
+    if not key_raw:
+        raise ValidationError({"detail": "Session has no checkout reference."})
+    key = serializers.UUIDField().run_validation(key_raw)
+    existing = Order.objects.filter(checkout_key=key).first()
+    if existing:
+        if attempt and attempt.status != "completed":
+            attempt.status = "completed"
+            attempt.save(update_fields=["status", "updated"])
+        return existing
+
+    address_raw = session.get("metadata", {}).get("address")
+    address = None
+    if address_raw:
+        address = Address.objects.filter(
+            pk=serializers.IntegerField(min_value=1).run_validation(address_raw),
+            user=user,
+        ).first()
+
+    paid_amount = serializers.IntegerField(min_value=0).run_validation(
+        session.get("amount_total")
+    )
+    if session.get("currency") != "usd":
+        raise ValidationError({"detail": "Unsupported payment currency."})
+
+    shipping_service = session.get("metadata", {}).get(
+        "shipping_service",
+        "digital_delivery" if not address else "usps_ground_advantage",
+    )
+    wallet_deduction_val = Decimal(
+        str(session.get("metadata", {}).get("wallet_deduction", "0"))
+    )
+    if attempt and attempt.wallet_amount > 0 and wallet_deduction_val != attempt.wallet_amount:
+        raise ValidationError(
+            {"wallet_amount": "The payment does not match its wallet reservation."}
+        )
+
+    order = CheckoutView()._complete(
+        user,
+        key,
+        address,
+        session.get("metadata", {}).get("coupon", ""),
+        "split_tender" if wallet_deduction_val > Decimal("0") else "stripe_wallet",
+        session.get("id"),
+        shipping_service=shipping_service,
+        shipping_quote=session.get("metadata", {}).get("shipping_quote"),
+        paid_amount=paid_amount + int(wallet_deduction_val * 100),
+        wallet_paid_amount=wallet_deduction_val,
+    )
+    if attempt:
+        attempt.status = "completed"
+        attempt.save(update_fields=["status", "updated"])
+    elif wallet_deduction_val > 0:
+        debit_user_wallet(
+            user,
+            wallet_deduction_val,
+            f"Split payment for #{order.orderId}",
+            reference=order.orderId,
+        )
+    return order
+
+
+class WalletCheckoutCancelView(APIView):
+    permission_classes = [IsCustomer]
+
+    @extend_schema(request=serializers.Serializer, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request: Request) -> Response:
+        from payment.models import CheckoutAttempt
+        from payment.checkout_recovery import compensate_checkout
+
+        session_id = str(request.data.get("session_id", "")).strip()
+        checkout_key_raw = request.data.get("checkout_key")
+        attempt = None
+
+        if session_id:
+            attempt = CheckoutAttempt.objects.filter(user=request.user, session_id=session_id, status="reserved").first()
+        elif checkout_key_raw:
+            try:
+                key = serializers.UUIDField().run_validation(checkout_key_raw)
+                attempt = CheckoutAttempt.objects.filter(user=request.user, checkout_key=key, status="reserved").first()
+            except Exception:
+                pass
+
+        if not attempt:
+            attempt = CheckoutAttempt.objects.filter(user=request.user, status="reserved").order_by("-created").first()
+
+        if not attempt:
+            return Response({"detail": "No active wallet reservation to release.", "released": False})
+
+        session = {"status": "expired"}
+        if stripe and getattr(settings, "STRIPE_SECRET", "") and attempt.session_id:
+            stripe.api_key = settings.STRIPE_SECRET
+            try:
+                retrieved = stripe.checkout.Session.retrieve(attempt.session_id)
+                session = retrieved
+                if retrieved.get("status") not in {"expired", "complete"}:
+                    stripe.checkout.Session.expire(attempt.session_id)
+            except Exception:
+                pass
+
+        compensate_checkout(attempt, session, "Cancelled by user")
+        return Response({"detail": "Checkout reservation released back to wallet.", "released": True})
+
+
+class WalletTopupCancelView(APIView):
+    permission_classes = [IsCustomer]
+
+    @extend_schema(request=serializers.Serializer, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request: Request) -> Response:
+        from payment.models import WalletFundingAttempt
+
+        session_id = str(request.data.get("session_id", "")).strip()
+        query = WalletFundingAttempt.objects.filter(user=request.user, status="reserved")
+        if session_id:
+            query = query.filter(session_id=session_id)
+        attempt = query.order_by("-created").first()
+
+        if not attempt:
+            return Response({"detail": "No active wallet funding reservation to release.", "released": False})
+
+        if stripe and getattr(settings, "STRIPE_SECRET", "") and attempt.session_id:
+            stripe.api_key = settings.STRIPE_SECRET
+            try:
+                retrieved = stripe.checkout.Session.retrieve(attempt.session_id)
+                if retrieved.get("status") not in {"expired", "complete"}:
+                    stripe.checkout.Session.expire(attempt.session_id)
+            except Exception:
+                pass
+
+        attempt.status = "released"
+        attempt.save(update_fields=["status", "updated"])
+        return Response({"detail": "Wallet top-up reservation released.", "released": True})
+
+
+class StripeWebhookView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(request=OpenApiTypes.OBJECT, responses={200: OpenApiTypes.OBJECT})
+    def post(self, request: Request) -> Response:
+        payload = request.body
+        sig_header = request.META.get("HTTP_STRIPE_SIGNATURE", "")
+        webhook_secret = getattr(settings, "STRIPE_WEBHOOK_SECRET", "")
+        event = None
+
+        if stripe and webhook_secret and sig_header:
+            try:
+                event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+            except Exception as exc:
+                return Response({"detail": f"Webhook signature error: {str(exc)}"}, status=400)
+        else:
+            try:
+                import json
+                event = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else str(payload))
+            except Exception:
+                return Response({"detail": "Invalid JSON payload."}, status=400)
+
+        event_type = event.get("type", "")
+        data_object = event.get("data", {}).get("object", {})
+
+        if event_type == "checkout.session.completed":
+            session = data_object
+            if session.get("payment_status") == "paid":
+                client_ref = session.get("client_reference_id")
+                user = User.objects.filter(pk=client_ref).first() if client_ref else None
+                if user:
+                    if session.get("metadata", {}).get("wallet_topup") == "true":
+                        from payment.funding import confirm_funding
+                        confirm_funding(user, session.get("id"), session)
+                    elif session.get("metadata", {}).get("checkout_key"):
+                        from payment.models import CheckoutAttempt
+                        attempt = CheckoutAttempt.objects.filter(session_id=session.get("id")).first()
+                        complete_stripe_checkout(user, session, attempt)
+
+        elif event_type == "checkout.session.expired":
+            session = data_object
+            session_id = session.get("id")
+            if session_id:
+                from payment.models import CheckoutAttempt, WalletFundingAttempt
+                from payment.checkout_recovery import compensate_checkout
+                attempt = CheckoutAttempt.objects.filter(session_id=session_id).first()
+                if attempt:
+                    compensate_checkout(attempt, session, "Stripe session expired")
+                funding_attempt = WalletFundingAttempt.objects.filter(session_id=session_id, status="reserved").first()
+                if funding_attempt:
+                    funding_attempt.status = "released"
+                    funding_attempt.save(update_fields=["status", "updated"])
+
+        return Response({"received": True}, status=200)
 
 
 class CouponAdminView(APIView):

@@ -30,7 +30,9 @@ class AffiliatesViewSet(viewsets.ViewSet):
         return super().get_permissions()
 
     @action(detail=False, methods=["post"], url_path="register")
-    def create_marketer(self, request):
+    @transaction.atomic
+    @extend_schema(request=MarketerSerializer, responses=MarketerSerializer)
+    def create_marketer(self, request: Request) -> Response:
         marketer = Marketer.objects.filter(user=request.user).first()
         created = marketer is None
         serializer = MarketerSerializer(
@@ -43,9 +45,15 @@ class AffiliatesViewSet(viewsets.ViewSet):
         marketer = serializer.save(user=request.user)
         AffiliateWallet.objects.get_or_create(user=request.user)
         if created:
+            from notification.views import create_notification
+            create_notification(
+                request.user, "Affiliate enrollment confirmed", target=marketer,
+                data={"event": "affiliate_enrolled", "email": False},
+            )
             from utils.functions import send_mail
             frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000").rstrip("/")
-            referral_link = f"{frontend_url}/?ref={marketer.marketer_id}"
+            referral_link = f"{frontend_url}/register?ref={marketer.marketer_id}"
+            dashboard_url = f"{frontend_url}/account/affiliates"
             send_mail(
                 "affiliate",
                 request.user.email,
@@ -53,7 +61,8 @@ class AffiliatesViewSet(viewsets.ViewSet):
                     "firstname": request.user.first_name,
                     "referral_code": marketer.marketer_id,
                     "referral_link": referral_link,
-                    "subject": "Welcome to the ProAce Affiliate Partner Program",
+                    "dashboard_url": dashboard_url,
+                    "subject": "Welcome to the ProAce Referral Program",
                 },
             )
         return Response(

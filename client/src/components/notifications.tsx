@@ -1,5 +1,8 @@
 'use client';
 
+import { useDebouncedValue } from './collection-filters';
+
+
 import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -46,6 +49,7 @@ export function NotificationsPage() {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedStore, setSelectedStore] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const debouncedSearch = useDebouncedValue(searchQuery);
   const [page, setPage] = useState<number>(0);
   const [, startTransition] = useTransition();
 
@@ -64,10 +68,15 @@ export function NotificationsPage() {
       activeTab,
       selectedCategory,
       selectedStore,
-      searchQuery,
+      debouncedSearch,
       page,
       user?.id,
     ],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[7] === user?.id
+        && previousQuery?.queryKey[4] === selectedStore
+        ? previousData
+        : undefined,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('limit', String(PAGE_SIZE));
@@ -87,8 +96,8 @@ export function NotificationsPage() {
         params.set('store', selectedStore);
       }
 
-      if (searchQuery.trim()) {
-        params.set('search', searchQuery.trim());
+      if (debouncedSearch.trim()) {
+        params.set('search', debouncedSearch.trim());
       }
 
       const endpoint = activeTab === 'archived'
@@ -147,6 +156,7 @@ export function NotificationsPage() {
 
   function resetFilters() {
     startTransition(() => {
+      setActiveTab('all');
       setSelectedCategory('all');
       setSelectedStore('all');
       setSearchQuery('');
@@ -155,7 +165,7 @@ export function NotificationsPage() {
   }
 
   const hasActiveFilters =
-    selectedCategory !== 'all' || selectedStore !== 'all' || searchQuery.trim().length > 0;
+    activeTab !== 'all' || selectedCategory !== 'all' || selectedStore !== 'all' || searchQuery.trim().length > 0;
 
   return (
     <Gate next="/notifications">
@@ -336,6 +346,9 @@ export function NotificationsPage() {
 
         {/* List Content */}
         <div className="notifications-main">
+          {notificationsQuery.isFetching && !notificationsQuery.isLoading && (
+            <p role="status" aria-live="polite">Updating results…</p>
+          )}
           {notificationsQuery.isLoading ? (
             <Loading />
           ) : notificationsQuery.error ? (
@@ -346,10 +359,7 @@ export function NotificationsPage() {
               <h3>
                 {hasActiveFilters
                   ? 'No notifications match your filters'
-                  : activeTab === 'archived'
-                  ? 'No archived notifications'
-                  : activeTab === 'unread'
-                  ? 'No unread notifications'
+
                   : 'You have no notifications yet'}
               </h3>
               <p>

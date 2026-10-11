@@ -7,7 +7,6 @@ from typing import Any
 from cryptography.fernet import Fernet
 from django.conf import settings
 from django.core import signing
-from django.core.mail import send_mail as send_django_mail
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 from core.models import User
@@ -68,7 +67,7 @@ def resend_staff_verification(user: User) -> User:
 
 
 @transaction.atomic
-def activate_staff(token: str) -> None:
+def activate_staff(token: str) -> User:
     try:
         payload = signing.loads(token, salt='staff-activation', max_age=86400)
         user = User.objects.select_for_update().get(pk=payload['user'], is_staff=True)
@@ -76,26 +75,33 @@ def activate_staff(token: str) -> None:
             raise ValueError()
     except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError, ValueError):
         raise ValidationError({'detail': 'This staff verification link is invalid, used, or expired.'})
-    if settings.EMAIL_BACKEND.endswith(('console.EmailBackend', 'filebased.EmailBackend')):
-        raise ValidationError({'detail': 'Configure a private email backend to issue staff credentials.'})
-    
-    # Generate temporary password upon successful email verification
-    temp_password = secrets.token_urlsafe(16)
-    user.set_password(temp_password)
+
     user.is_active = True
     user.staff_email_verified = True
     user.must_change_password = False
     user.staff_invitation_secret = ''
     user.credential_version += 1
+    user.save(update_fields=['is_active', 'staff_email_verified', 'must_change_password', 'staff_invitation_secret', 'credential_version'])
 
-    # Send temporary password with explicit advice to use "Forgot Password" flow later
-    send_django_mail(
-        'Your temporary staff credentials',
-        f'Sign in at {settings.FRONTEND_URL}/login with {user.email}\n'
-        f'Temporary password: {temp_password}\n\n'
-        f'Please note: You are advised to use the "Forgot Password" flow later to set a permanent, secure password.',
-        settings.DEFAULT_FROM_EMAIL,
-        [user.email],
-        fail_silently=False,
+    from django.contrib.auth.tokens import default_token_generator
+    from django.utils.encoding import force_bytes
+    from django.utils.http import urlsafe_base64_encode
+
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    reset_token = default_token_generator.make_token(user)
+    reset_url = f'{settings.FRONTEND_URL}/reset-password?uid={uid}&token={reset_token}'
+
+    # Notify staff member to set their permanent password via the reset flow
+    queue_email_delivery(
+        user.email,
+        'Set your ProAce staff password',
+        f'Hello {user.first_name or "Staff"},\n\n'
+        f'Your staff email address has been verified successfully.\n\n'
+        f'Please set your password using the link below to get started:\n'
+        f'{reset_url}\n\n'
+        f'You can also use the "Forgot Password" link on the sign-in page ({settings.FRONTEND_URL}/forgot-password) at any time to set or reset your password.\n\n'
+        f'Best regards,\n'
+        f'ProAce International Team',
+        recipient=user,
     )
-    user.save(update_fields=['password', 'is_active', 'staff_email_verified', 'must_change_password', 'staff_invitation_secret', 'credential_version'])
+    return user

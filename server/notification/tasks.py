@@ -28,7 +28,9 @@ def _deliver_email(delivery):
     )
     if delivery.is_html:
         message.content_subtype = "html"
-    message.send(fail_silently=False)
+    message.extra_headers["Idempotency-Key"] = delivery.idempotency_key or f"delivery-{delivery.pk}"
+    if message.send(fail_silently=False) != 1:
+        raise RuntimeError("The email backend did not accept the message.")
 
 
 def _firebase_app():

@@ -142,7 +142,7 @@
                   <tr>
                     <td align="left">
                       <div class="Inter400" style="font-family: Arial, sans-serif; color: #666666; font-size: 14px; line-height: 21px;">
-                        If you did not request this deletion, please reach out immediately to our security and support operations team at <a href="mailto:support@proace.local" style="color: #1f5b3a; text-decoration: underline;">support@proace.local</a>.
+                        {% if support_email %}If you did not request this deletion, please reach out immediately to our security and support operations team at <a href="mailto:{{ support_email }}" style="color: #1f5b3a; text-decoration: underline;">{{ support_email }}</a>.{% endif %}
                       </div>
                     </td>
                   </tr>
@@ -156,7 +156,7 @@
                 <table cellpadding="0" cellspacing="0" border="0" width="255">
                   <tr>
                     <td align="center" valign="middle" height="44" style="height: 44px; background: #44cf9c; border-radius: 10px;" bgcolor="#44CF9C">
-                      <a href="https://proace.local" class="Inter700" target="_blank" style="display: table-cell; width: 255px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
+                      <a href="{{ frontend_url }}" class="Inter700" target="_blank" style="display: table-cell; width: 255px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
                         Visit ProAce Homepage
                       </a>
                     </td>
@@ -174,7 +174,7 @@
                       <div class="Inter400" style="font-family: Arial, sans-serif; color: #697067; font-size: 13px; line-height: 19px;">
                         <strong>ProAce International</strong><br>
                         US Physical Delivery · Worldwide Digital Products · USD $<br>
-                        Customer Support: <a href="mailto:support@proace.local" style="color: #1f5b3a; text-decoration: none;">support@proace.local</a>
+                        {% if support_email %}Customer Support: <a href="mailto:{{ support_email }}" style="color: #1f5b3a; text-decoration: none;">{{ support_email }}</a>{% endif %}
                       </div>
                       <div style="height: 14px; font-size: 1px; line-height: 14px;">&nbsp;</div>
                       <div class="Inter400" style="font-family: Arial, sans-serif; color: #9aa198; font-size: 12px; line-height: 17px;">

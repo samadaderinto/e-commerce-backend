@@ -1,5 +1,13 @@
 # Proace Commerce
 
+`client/tests/filter-stability.spec.ts` exercises delayed filter responses for guests, shoppers, buyers, sellers, merchants, staff, business administrators, and technical administrators on desktop and mobile. It verifies retained results, typing focus, mounted controls, same-document shop history, and customer profile stability.
+
+Notification search, tabs, and category filters retain results within the same account and store. Backoffice filter caches and private product previews include the viewer identity; login cancels outstanding queries and clears the prior query cache before activating the new account. External payment and onboarding redirects remain full navigations.
+
+Shop filters update browser history without route navigation. Filtered catalog, merchant, and backoffice queries retain current results while fetching and show a local update status; store and account detail queries discard previous results when the selected entity changes.
+
+Catalog responses expose the backend `visibility` flag. The product page shows the draft preview banner only for explicit `visibility: false`; missing metadata is not evidence of a draft. Hidden products return 404, and unverified-store previews require the store owner or an authorized operator, even with `?preview=1`.
+
 Shared frontend styling in `client/src/app/design-system.css` standardizes form controls, buttons, cards, dialogs, catalog typography, and ClickBank partner badges across light and dark themes. Mobile controls use readable input sizes, touch devices expose quick product actions, and reduced-motion preferences are respected.
 
 Lifecycle tracking records JWT sign-ins, throttled authenticated user/store activity, profile/catalog revisions, cart mutations, notification reads, review edits, coupon redemptions, affiliate clicks, and order transitions. Apply the new Django migrations with `python server/manage.py migrate`; admin/account/merchant views surface the timestamps. Existing unknown activity and transition times remain unrecorded rather than being inferred.
@@ -204,16 +212,19 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 - **Verified Reviews & Photos**: In-place review submission and 1–3 photo uploads exclusively for verified product purchasers, with real-time rating updates and photo gallery lightbox.
 - **Flash Deals & Live Countdowns**: Urgency badges and real-time countdown clocks on limited-time discounts.
 - **Store Profiles & Announcements**: Dedicated merchant showcase pages with marquee announcements, pinned items, and direct "Message Store" contact actions.
-- **Seller Tier Badges**: Dynamic verification tick and rank badges (Starter 🔵, Booster ⚪, Accelerator 🟣, Power 🟢, Mega 💎, Legendary 👑, and Official 🟡).
+- **Seller Tier Badges**: Dynamic verification tick and rank badges (Starter 🔵, Booster ⚪, Accelerator 🟣, Power 🟢, Mega 🟠, Legendary 👑, and Official 🟡).
 - **ClickBank Affiliate & Partner Offers**: Seamless integration of external ClickBank partner products coexisting alongside native marketplace listings. Features partner badges, custom CTA labels ("Buy on Partner Site"), and transparent partner fulfillment notes. Secure outbound routing via `/api/affiliates/clickbank/outbound/<id>` attaches tracking tokens (`tid=cb_*`) and logs outbound clicks while blocking local cart checkout.
 - Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
 - Email-verified registration, sign-in, password reset, and session management.
+- **Google & Apple Social Authentication**: One-click customer registration and sign-in with Google or Apple identity tokens, dual-theme WCAG high-contrast buttons, strict security guardrails (administrative and staff accounts cannot sign in via social providers), and seamless affiliate referral synchronization awarding \$25 promotional store credit to referring marketers on new customer social signups.
+- **Product Sharing & Instant Link Copy**: One-click Share button integrated into product purchase actions, rating header, and operator/merchant preview banners. Supports native Web Share API with clipboard copy fallback, dynamic "Copied!" feedback, and toast notifications across both public product pages and draft preview modes.
 - Profile, personal avatars with circular 512x512 crop dialog, delivery addresses, order history, and detailed order pages.
-- **User Avatar & Photo Management**: Profile picture upload with client-side circular crop tool (`UserAvatarCropDialog`), 512x512 server validation, MinIO media persistence, and instant reflection across customer account, global `/settings`, merchant workspaces, and backoffice staff tables.
-- **Order Tracking**: Recorded fulfillment milestones and official USPS, UPS, FedEx, and DHL tracking links. Shipping service and carrier quotes are preserved in each order.
+- **User Avatar & Photo Management**: Profile picture upload with client-side circular crop tool (`UserAvatarCropDialog`), 512x512 server validation, MinIO media persistence, managed centrally in Personal details (`/account/profile`) with instant reflection across customer account, merchant workspaces, and backoffice staff tables.
+- **App Settings & Email Preferences**: Global `/settings` page supporting theme customization (Light / Dark / System) with an authenticated user section for **Email communication preferences** (opting in/out of product recommendations and promotional marketing emails via `/api/v1/me/`).
+- **Order Tracking & Dual-Theme Milestone Tracker**: Dynamic 3-stage fulfillment tracker (Confirmed, Shipped, Delivered) with WCAG-compliant high-contrast rendering across light and dark modes, and official USPS, UPS, FedEx, and DHL tracking links. Shipping service and carrier quotes are preserved in each order.
 - **In-App Password Management**: In-dialog password updates (`/api/v1/password/change/`) verifying current passwords and enforcing secure credential hygiene.
-- **ProAce Wallet, Top-Ups & Refunds**: Integrated customer wallet balance with Stripe Checkout top-up sessions (`/api/v1/wallet/topup-session/`), 7-day physical return window, and instant store credit refund resolution.
-- **Order Cancellation**: Self-service shopper cancellation for unfulfilled orders with atomic variant inventory restock, merchant earnings reversal, and refunds limited to actual wallet/card payments.
+- **ProAce Wallet, Top-Ups & Refunds**: Integrated customer wallet balance with Stripe Checkout top-up sessions (`/api/v1/wallet/topup-session/`), 7-day physical return window with per-product claim idempotency (declined and processed items cannot be re-requested), and instant store credit refund resolution.
+- **Order Cancellation**: Self-service shopper cancellation for unfulfilled physical orders within 12 hours of placement, with atomic variant inventory restock, merchant earnings reversal, and refunds limited to actual wallet/card payments (instant digital downloads are non-cancellable).
 - **Flexible Checkout**: Supports Cash-on-Delivery, ProAce Wallet balance, and Stripe Wallet payments with transactional stock deductions and idempotent retry handling.
 
 ## Seller Experience
@@ -221,7 +232,7 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 Visit `/merchant` after signing in:
 - **Seller Workspace Dashboard**: Daily order activity trend bar charts, low-stock inventory alerts, top-selling products, and tier milestone celebration banners.
 - **Product Management & Variants**: Create physical goods, digital assets, or ClickBank affiliate offers. Configure custom variant matrices with price deltas and individual stock allocations, flash sale timers, HopLink targets, and MinIO photo galleries.
-- **Partner Offer Configuration**: Publish ClickBank affiliate listings with direct HopLink URLs, vendor account nicknames, and custom landing CTA buttons, with automatic bypassing of physical shipping and variant restrictions.
+- **Partner Offer Configuration**: Publish ClickBank affiliate listings with direct HopLink URLs, vendor account nicknames, and custom landing CTA buttons, with automatic bypassing of physical shipping and variant restrictions. Partner listings enforce partner-controlled pricing (locking platform discounts to 0% and omitting flash sale countdowns to avoid fictitious price discrepancies).
 - **Bulk CSV Catalog Import**: RFC 4180-compliant batch upload supporting quotes, multiline values, variants, and tags.
 - **Storefront Customization**: Configure store announcement banner, banner covers, avatars, bio, and direct customer inquiry channels.
 - **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`). Official company stores automatically consolidate 100% of retail sales into Platform Treasury.
@@ -232,6 +243,7 @@ Visit `/merchant` after signing in:
 Visit `/admin` (Platform Intelligence), `/admin/commission` (Platform Treasury), and `/admin/staff` (Team Administration):
 - **Executive Analytics Dashboard**: Platform gross revenue, order volume, active user growth, and store fleet health across 7/30/90/365-day periods.
 - **Order Status Distribution Chart**: Visual fulfillment pipeline breakdown across order lifecycle stages.
+- **Customer Order Audit & Emergency Controls**: Centralized order management (`/admin/orders`) with status overrides, tracking inspection, and multi-dimensional filtering across order status, payment tender, and delivery courier (USPS, UPS, FedEx, DHL, Digital).
 - **Moderation & Payout Queues**: Review 7-day customer refund requests, moderate or remove abusive product reviews, and approve/reject third-party merchant payout requests (`/admin/payouts`).
 - **Platform Treasury & Commission Wallet**: Unified corporate finance ledger (`/admin/commission`) consolidating marketplace 4% fee commissions and 100% of official company store retail sales with audited withdrawal workflows.
 - **Store Moderation**: Review pending store onboardings, approve verified sellers, or suspend non-compliant stores with instant catalog cache invalidation.
@@ -285,6 +297,26 @@ npm run test:integration
 
 # Playwright browser end-to-end test suite (Desktop & Mobile)
 npm run test:e2e
+```
+
+### Tier 3: Pre-Deployment QA, Performance & Bug Audits (Local PC)
+Run locally before deploying new features to production. All generated reports are saved into the git-ignored `qa-reports/` directory:
+
+```bash
+# 1. Load Testing (Sustained concurrent browsing, search, and detail requests)
+npm run test:load       # -> qa-reports/performance-testing/load/
+
+# 2. Stress & Spike Testing (Step-ramp concurrency, instant traffic spikes, race condition locks)
+npm run test:stress     # -> qa-reports/performance-testing/stress/
+
+# 3. Volume Testing (Deep pagination LIMIT/OFFSET, multi-criteria filtering, payload serialization)
+npm run test:volume     # -> qa-reports/performance-testing/volume/
+
+# 4. Bug & Security Audit (Sensitive data leak detection, role boundary isolation, audit regression suites)
+npm run test:audit      # -> qa-reports/bug-audit/
+
+# 5. Full Pre-Deployment QA Suite (Runs all 4 suites sequentially)
+npm run test:qa
 ```
 
 Unit tests exercise frontend API serialization/error handling, currency formatting,
@@ -341,10 +373,56 @@ Commerce safety: split-tender checkout reserves wallet funds and records recover
 
 Commerce bug-audit fixes persist settled tender amounts, allocated coupon/tax line totals, cumulative refunds, store-scoped fulfillment, and unique wallet funding receipts. Apply `python server/manage.py migrate` before running the updated backend, then restart API/Celery processes. COD supports physical goods only and never grants paid balances or digital access. See [the remediation and verification record](docs/bug-audit-2026-10-08.md) and [backend accounting rules](docs/backend.md).
 
-Transactional service emails cover store verification, blocking (including the review reason), and restoration; administrative account suspension/restoration and backoffice permission changes; successful password changes/resets; and low physical stock for the store owner and authorized operators. Store, account-security, and inventory notices use branded HTML templates through the existing delivery outbox. No-op moderation/access requests do not resend notices. When a dedicated receipt is sent for checkout, shipment/delivery, refund decisions, cancellation, wallet top-ups, or payout decisions, the companion inbox notification suppresses its generic email while retaining inbox and push delivery. Delivery requires the configured email provider and notification worker; local console delivery does not send real email.
+Transactional service emails cover store verification, blocking (including the review reason), and restoration; administrative account suspension/restoration and backoffice permission changes; successful password changes/resets; and low physical stock for the store owner and authorized operators. Store, account-security, and inventory notices use branded HTML templates through the existing delivery outbox. No-op moderation/access requests do not resend notices. When a dedicated receipt is sent for checkout, confirmation, shipment/delivery/pickup, refund decisions, cancellation, wallet top-ups, or payout decisions, the companion inbox notification suppresses its generic email while retaining inbox and push delivery. Delivery requires the configured email provider and notification worker; local console delivery does not send real email.
 
 Inbox notifications and their email/push outbox rows are persisted in one database transaction. Worker dispatch waits until commit, so rollback removes both and broker outages leave persisted deliveries available for recovery.
 
 Store settings use plain customer-facing labels for store branding, the logo URL, cover image URL, and store announcement. Design references are kept out of the settings interface.
 
 Email receipts display actual order snapshot and recipient data. Missing personal details are omitted; digital-only orders omit delivery address sections and physical-shipment language. Delivery notices report recorded status and never include sample verification codes, names, addresses, phone numbers, carrier values, or product photos.
+
+ClickBank offer prices are retained only as internal catalog references. Public product cards, detail pages, and listing previews direct shoppers to check the current price on the partner site. Selecting the ClickBank listing type hides ProAce discount and flash-deal controls; the server rejects those promotions and clears them when converting a standard listing.
+
+Store profile pages (`/shop?store=<id>`) list only that store’s products. Filter resets retain the store and any `preview=1` mode; previews remain read-only.
+
+The catalog supports 29 departments shared by homepage category tiles, shop/store filters, and merchant product forms: Electronics, Fashion, Phones, Computing, Sports & outdoors, Books, Toys & games, Kids & baby, Home & living, Kitchen & dining, Beauty & personal care, Health & wellness, Pet supplies, Gaming, Tablets, Fishing, Lingerie & sleepwear, Coffee, tea & drinks, Garden & tools, Automotive, Jewelry & watches, Software & apps, Courses & learning, Templates & planners, Design assets, Photos & video, Music & audio, Business resources, Digital tools & presets. New department keys are validated by Django product choices; apply product migrations before using them. Existing product category keys are preserved.
+
+Backoffice user profiles use a compact identity card with contact and activity details, three financial summary cards, and bordered wallet, activity, and order panels. The layout stacks on smaller screens and respects the active theme.
+
+Dates across customer, merchant, and backoffice records use the shared `DateStamp` component: an unambiguous date (e.g. `10 Oct 2026`) and local 24-hour time without seconds. Table timestamps have separate columns, including Created, Updated, Last active, Requested, Processed, Valid from, and Valid to where applicable. Date fields are never stacked together or joined with slashes in a table cell. Tables scroll horizontally on narrow screens; profile activity uses aligned label/value rows. API timestamps and calendar-input timezone handling remain unchanged.
+
+Backoffice user-profile order history supports debounced reference/coupon/carrier/tracking search, status (including pickup), courier, payment method, sorting, reset, and 15-row server pagination. Profile order totals and lifetime spend remain independent of order filters.
+
+Backoffice coupon attribution displays the recorded creator’s email. Coupon creation assigns the authenticated staff/admin server-side; records without a creator show “Not recorded” rather than an assumed staff identity.
+
+Agent workflow: after verified implementation changes, agents automatically rebuild and recreate only the affected local Docker services (`client`, `api`, and affected `notification-worker`/`celery-beat` consumers) using Compose `up -d --build --no-deps`, then check startup and health. Documentation-only changes require no rebuild. See `AGENTS.md` for the standing authorization and service scope rules.
+
+Local backend Compose startup now starts MinIO and waits for `minio-init` to finish provisioning the media bucket and application credentials before starting API/worker/scheduler consumers. This also applies when starting a backend service individually without `--no-deps`; targeted `--no-deps` refreshes assume dependencies are already running. The initializer fails on required bucket/policy setup errors. Existing storage volumes are preserved.
+
+Partner product details and merchant previews show “Price available on partner site” as a compact supporting note, with pricing determined by the external vendor.
+
+The [listing filtering audit](docs/filtering-audit-2026-10-10.md) records gaps in payout approvals, finance histories, account/staff listings, and catalog filters, with prioritized remediation and verification criteria.
+
+
+Listing filtering remediation (2026-10-10): payout approvals, merchant payouts and earnings, customer orders/wallet, treasury withdrawals, user/staff management and profile wallet histories now filter before server pagination with matching counts. Finance criteria combine reference search, status/type/method, inclusive UTC date ranges and amount bounds; balances and lifetime totals remain independent of listing filters. Catalog controls expose category, physical/digital and standard/partner types, stock and visibility as applicable. Coupons support type, validity and creator email; stores support official/merchant and creation dates. Saved products filter the complete saved collection before pagination. Notifications support independent read/archive state and category. Search is debounced by 300 ms, criteria changes return to the first page, and reset controls clear active criteria. Invalid financial bounds and pagination return HTTP 400; existing user/store access scopes remain authoritative.
+
+Account activity on shopper, staff, admin, and user-detail profiles uses a shared responsive set of compact cards. Each label stays with its local date and time instead of spreading across the page; semantic surfaces and text colors support both themes. Table timestamps retain their separate aligned columns.
+
+
+The [notification audit of 11 October 2026](docs/notification-audit-2026-10-11.md) traces order `uuEl5iwv6QMVG`, records reproduced store-filter visibility and duplicate merchant notices, and defines the proposed recipient/channel matrix and remaining delivery/remediation work. Audit findings are not implemented fixes; local console email and disabled FCM do not verify external delivery.
+
+
+Notification remediation (11 October 2026): one canonical event identity per recipient, recipient-scoped multi-store associations, canonical categories and archived/list filters, selected-store refund reviewer routing, treasury/affiliate/review coverage, transactional inbox/outbox writes, credential outbox delivery, stable email/push queue keys and provider idempotency, shared SSE/FCM toast deduplication, and numeric order-detail links. Apply notification migrations before using the updated API and restart API, notification-worker and celery-beat together. Migration backfills do not send messages; duplicate legacy order-created notices are archived rather than deleted. Local test mode intentionally retains console email and disabled FCM; external provider delivery has not been verified. See the notification audit for channel policy and regression coverage.
+
+Customer order tracking reflects backend Pending, Confirmed, Shipped, Delivered, Picked up, Cancelled, and Refunded states. Terminal states replace the fulfillment tracker with a status notice; digital orders omit shipping. Digital orders are fulfilled electronically immediately into Delivered status upon purchase and cannot be transitioned to physical delivery statuses (shipped, picked up) or reverted from delivered in backoffice or merchant tools. Customer order lists and detail views refresh every 15 seconds while active to reflect staff changes. Cancellation and return actions retain the existing backend rules.
+
+Customer payment labels derive Paid, Awaiting payment, Partial payment, and refund outcomes from authoritative `paid_total`, `refunded_total`, and `total` amounts, rather than labelling every order as paid.
+
+Transactional email contacts use `SUPPORT_EMAIL` (default `admin@proaceintl.com`) and `ORDER_SUPPORT_EMAIL` (default `productace@proaceintl.com`), matching the storefront contacts. Sender identity uses `RESEND_FROM_EMAIL` separately. Order/refund replies go to order support; other replies go to general support. Missing contacts omit their labeled template rows.
+
+The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts the invite code visibly in an optional field. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped) and `/api/v1/admin/affiliates/` (backoffice-only).
+
+Digital product onboarding & variant enhancements:
+- **Redundant Cover Photo Elimination & Auto-Cover**: For digital image products (artwork, wallpapers, photography), uploading a digital file automatically populates `product.image_url` if no custom cover was specified, removing redundant cover uploads. Custom promotional banners remain optional.
+- **Automatic Preview Watermark Protection**: Digital image files default `digital_preview_watermark = True` to protect artwork on public storefronts with the `PROACE PREVIEW` overlay. Non-image files (PDFs, ZIPs) coerce watermark to `False`. The raw unwatermarked file is securely served only after authorized purchase via `/api/v1/orders/<id>/download/`.
+- **Digital Product Options & Variants**: Digital products support options/variants (e.g., 4K Wallpaper, Mobile HD, Print-Ready Vector) with unlimited digital inventory, variant-specific prices/deltas, and gallery image mappings without physical inventory deduction during checkout.

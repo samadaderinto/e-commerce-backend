@@ -86,14 +86,19 @@ class AccessAndShippingTests(TestCase):
         delivery = NotificationDelivery.objects.get(recipient=user)
         token = delivery.body.split('?token=')[1]
         self.client.force_authenticate(None)
-        verified = self.client.post('/api/v1/auth/verify/', {'token': token}, format='json')
+        with self.captureOnCommitCallbacks(execute=True):
+            verified = self.client.post('/api/v1/auth/verify/', {'token': token}, format='json')
         self.assertEqual(verified.status_code, 200, verified.data)
         self.assertEqual(len(mail.outbox), 1)
-        password = re.search(r'Temporary password: ([^\n]+)', mail.outbox[0].body).group(1)
-        self.assertNotIn(password, delivery.body)
+        self.assertIn('reset-password', mail.outbox[0].body)
         self.assertIn('Forgot Password', mail.outbox[0].body)
+        match = re.search(r'/reset-password\?uid=([^&]+)&token=([^\s]+)', mail.outbox[0].body)
+        self.assertIsNotNone(match)
+        uid, reset_token = match.group(1), match.group(2)
+        reset_res = self.client.post('/api/v1/auth/reset/', {'uid': uid, 'token': reset_token, 'password': 'PermanentStaffPass123!'}, format='json')
+        self.assertEqual(reset_res.status_code, 200)
         self.assertEqual(self.client.post('/api/v1/auth/verify/', {'token': token}, format='json').status_code, 400)
-        login = self.client.post('/api/v1/auth/login/', {'email': user.email, 'password': password}, format='json')
+        login = self.client.post('/api/v1/auth/login/', {'email': user.email, 'password': 'PermanentStaffPass123!'}, format='json')
         self.assertEqual(login.status_code, 200)
         access = login.data['access']
         self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {access}')
@@ -251,6 +256,58 @@ class AccessAndShippingTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(Order.objects.count(), 0)
 
+    def test_digital_cart_checkout_with_quote_and_saved_address(self):
+        digital1 = Product.objects.create(
+            store=self.store,
+            title='Digital Ebook 1',
+            price=Decimal('15.00'),
+            discount=0,
+            available=99,
+            is_digital=True,
+            digital_file_url='https://example.com/ebook1.pdf'
+        )
+        digital2 = Product.objects.create(
+            store=self.store,
+            title='Digital Video 2',
+            price=Decimal('25.00'),
+            discount=0,
+            available=99,
+            is_digital=True,
+            digital_file_url='https://example.com/video2.mp4'
+        )
+        from core.services import credit_user_wallet
+        credit_user_wallet(self.buyer, Decimal('100.00'), 'Test funds')
+        self.client.force_authenticate(self.buyer)
+        self.client.post('/api/v1/cart/', {'product': digital1.pk, 'quantity': 1}, format='json')
+        self.client.post('/api/v1/cart/', {'product': digital2.pk, 'quantity': 1}, format='json')
+
+        # 1. Fetch shipping rates for digital cart
+        rates_res = self.client.get('/api/v1/checkout/shipping-rates/')
+        self.assertEqual(rates_res.status_code, 200)
+        self.assertEqual(len(rates_res.data), 1)
+        digital_rate = rates_res.data[0]
+        self.assertEqual(digital_rate['carrier'], 'DIGITAL')
+        self.assertEqual(digital_rate['amount'], '0.00')
+        quote_token = digital_rate['quote_token']
+
+        # 2. Checkout with shipping_quote AND user's saved physical address
+        # Even though address is passed, it must not fail with quote expiration or mismatch
+        res = self.client.post('/api/v1/checkout/', {
+            'address': self.address.pk,
+            'checkout_key': str(uuid4()),
+            'payment_type': 'user_wallet',
+            'shipping_service': 'digital_delivery',
+            'shipping_quote': quote_token,
+        }, format='json')
+        self.assertEqual(res.status_code, 201, res.data)
+        order = Order.objects.get(pk=res.data['id'])
+        self.assertEqual(order.total, Decimal('40.00'))
+        self.assertEqual(order.carrier, 'DIGITAL')
+        self.assertIsNone(order.delivery.address)
+        self.assertEqual(order.address_snapshot.get('country'), 'Worldwide')
+        self.assertTrue(order.address_snapshot.get('digital'))
+
+
 
 from django.test import SimpleTestCase
 
@@ -305,4 +362,3 @@ class CarrierAdapterTests(SimpleTestCase):
         self.assertEqual([r['name'] for r in rates], ['DHL Economy Select', 'DHL Express Worldwide'])
         self.assertTrue(all(r['carrier'] == 'DHL' for r in rates))
         self.assertTrue(all('USPS' not in r['name'] for r in rates))
-

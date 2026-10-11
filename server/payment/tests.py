@@ -364,6 +364,6 @@ class PaymentRefundAndTransitionServiceTests(TestCase):
         with patch("notification.delivery._dispatch_delivery"), patch("notification.realtime.broker"), patch("notification.search.schedule_index_notification"):
             with self.captureOnCommitCallbacks(execute=True):
                 process_order_refund(refund, self.staff)
-        delivery = NotificationDelivery.objects.get(recipient=self.customer)
+        delivery = NotificationDelivery.objects.get(recipient=self.customer, subject__icontains="Refund Update")
         self.assertTrue(delivery.is_html)
         self.assertIn("Approved", delivery.body)

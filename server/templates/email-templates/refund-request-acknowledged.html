@@ -194,7 +194,7 @@
                 <table cellpadding="0" cellspacing="0" border="0" width="255">
                   <tr>
                     <td align="center" valign="middle" height="44" style="height: 44px; background: #44cf9c; border-radius: 10px;" bgcolor="#44CF9C">
-                      <a href="https://proace.local/account/orders" class="Inter700" target="_blank" style="display: table-cell; width: 255px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
+                      <a href="{{ absolute_url }}" class="Inter700" target="_blank" style="display: table-cell; width: 255px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
                         Track Order Status
                       </a>
                     </td>
@@ -211,7 +211,7 @@
                     <td align="center">
                       <div class="Inter400" style="font-family: Arial, sans-serif; color: #697067; font-size: 13px; line-height: 19px;">
                         <strong>ProAce International Customer Care</strong><br>
-                        Refund &amp; Orders Support: <a href="mailto:orders@proace.local" style="color: #1f5b3a; text-decoration: none;">orders@proace.local</a><br>
+                        {% if order_support_email %}Refund &amp; Orders Support: <a href="mailto:{{ order_support_email }}" style="color: #1f5b3a; text-decoration: none;">{{ order_support_email }}</a><br>{% endif %}
                         US Physical Delivery · Worldwide Digital Products · USD $
                       </div>
                       <div style="height: 14px; font-size: 1px; line-height: 14px;">&nbsp;</div>

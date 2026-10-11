@@ -434,8 +434,10 @@ SIMPLE_JWT = {
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
 RESEND_FROM_EMAIL = os.environ.get(
     "RESEND_FROM_EMAIL",
-    "Proace <notifications@example.com>",
+    "ProAce <admin@proaceintl.com>",
 )
+SUPPORT_EMAIL = os.environ.get("SUPPORT_EMAIL", "admin@proaceintl.com")
+ORDER_SUPPORT_EMAIL = os.environ.get("ORDER_SUPPORT_EMAIL", "productace@proaceintl.com")
 DEFAULT_FROM_EMAIL = RESEND_FROM_EMAIL
 APPLICATION_EMAIL = RESEND_FROM_EMAIL
 default_email_backend = (
@@ -541,3 +543,8 @@ REALTIME_REDIS_URL = os.environ.get("REALTIME_REDIS_URL") or CACHE_URL
 CLICKBANK_AFFILIATE_NICKNAME = os.environ.get("CLICKBANK_AFFILIATE_NICKNAME", "proace").strip()
 CLICKBANK_SECRET_KEY = os.environ.get("CLICKBANK_SECRET_KEY", "").strip()
 CLICKBANK_DEV_KEY = os.environ.get("CLICKBANK_DEV_KEY", "").strip()
+
+# Social Authentication (Google & Apple)
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+APPLE_CLIENT_ID = os.environ.get("APPLE_CLIENT_ID", "").strip()
+

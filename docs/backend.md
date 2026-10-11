@@ -1,5 +1,7 @@
 # Backend documentation
 
+Catalog responses expose the backend `visibility` flag. The product page shows the draft preview banner only for explicit `visibility: false`; missing metadata is not evidence of a draft. Hidden products return 404, and unverified-store previews require the store owner or an authorized operator, even with `?preview=1`.
+
 ## Lifecycle tracking
 
 `User.updated` records profile/credential changes, while JWT sign-in updates `last_login`. Authenticated requests update `last_active_at` for the user and owned/assigned stores at most once every five minutes; activity writes do not change profile/catalog revision times. Existing device records matching the authenticated user and direct request IP receive the sign-in timestamp. Guest browsing is not assigned to a user.
@@ -55,6 +57,20 @@ Authentication uses JWT bearer tokens at the API layer. The browser storefront
 does not store tokens in local storage; it calls through the Next.js proxy, which
 keeps tokens in HTTP-only cookies.
 
+### Social Authentication (Google & Apple) & Staff Guardrails
+Customers can sign up and sign in using Google or Apple credentials via:
+- `POST /api/v1/auth/google/`: Validates Google ID credentials against Google's tokeninfo service (or mock/dev tokens in non-production).
+- `POST /api/v1/auth/apple/`: Validates Apple identity JWT tokens and user claims.
+- `POST /api/v1/auth/social/`: Unified provider action (`provider: 'google' | 'apple'`).
+
+**Security & Role Guardrails**:
+- Administrative and staff accounts (`is_staff=True`, `is_superuser=True`, or `is_business_admin=True`) **cannot sign in via social providers**. Attempting social authentication for an admin/staff identity raises `PermissionDenied` with HTTP 403: `"Administrative and staff accounts cannot sign in via social providers. Please sign in with your email and password."`
+- Social signups create customer accounts with unusable passwords (`user.set_unusable_password()`).
+
+**Affiliate Referral Synchronization**:
+- New social signups accepting an optional `referral_code` invoke `reward_referral(referral_code, user)` from `server/affiliates/services.py`.
+- If the referral code matches a registered marketer, a `Referral` record is created, and the marketer's wallet is immediately credited with a \$25 promotional reward (`SOURCE_REFERRAL`), up to the 4-referral maximum promotional cap (\$100 total).
+
 Mutating browser flows require same-origin behavior through the proxy. Direct API
 clients can use bearer tokens and the OpenAPI docs.
 
@@ -67,13 +83,13 @@ validates owner, store state, price and stock server-side.
 
 ### Seller Tier Ranks & Milestone Verification
 Stores automatically earn tier rankings based on cumulative gross sales, dynamically resolved by `calculate_store_tier()` in `server/store/services.py`:
-- **Starter** ($0 – $999): Blue checkmark badge (`#2563eb`).
-- **Booster** ($1,000 – $4,999): Silver badge (`#94a3b8`).
-- **Accelerator** ($5,000 – $49,999): Purple badge (`#8b5cf6`).
-- **Power Seller** ($50,000 – $499,999): Emerald badge (`#059669`).
-- **Mega Seller** ($500,000 – $999,999): Diamond badge (`#0ea5e9`).
-- **Legendary Seller** ($1,000,000+): Gold Crown badge (`#d97706`).
-- **Official Brand Store**: Dedicated Golden Tick (`#eab308`).
+- **Starter** ($0 – $4,999): Sapphire Blue badge (`#2563eb`).
+- **Booster** ($5,000 – $24,999): Slate Silver badge (`#64748b`).
+- **Accelerator** ($25,000 – $99,999): Vivid Purple badge (`#7c3aed`).
+- **Power Seller** ($100,000 – $499,999): Emerald Green badge (`#059669`).
+- **Mega Seller** ($500,000 – $999,999): Flame Orange badge (`#ea580c`).
+- **Legendary Seller** ($1,000,000+): Cosmic Ruby Flame badge (`#ff0055`).
+- **Official Brand Store**: Dedicated Radiant Gold badge (`#d97706`).
 
 ### Product Variants, Specifications & Flash Sales
 - **Product Specifications (`Product.specifications`)**: Nested technical specifications dictionary exposing dimensions (`height`, `width`, `breadth`, `weight`), `color`, `serial` / part number, and `attributes` string. Specifications and physical dimensions are physical-only; digital downloads and ClickBank partner offers disallow them.
@@ -89,17 +105,19 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 - **Cleared Balance**: Once orders surpass the 7-day refund deadline, funds unlock to `cleared_net` and become available for merchant withdrawal requests via `/api/v1/stores/<id>/payouts/`.
 - **Admin Payout Processing**: Backoffice staff review and process withdrawal requests via `/api/v1/admin/staff/payouts/` with approve/reject actions and audit notes.
 - **Fulfillment & Carrier Tracking**: Merchants update carrier, tracking number, and milestone descriptions on store orders via `/api/v1/stores/<id>/orders/<order_id>/tracking/`, which triggers customer notifications and provides live tracking links.
+- **Store Order Search & Filtering**: `GET /api/v1/stores/<id>/orders/` supports `search` (order reference ID, customer name, email, phone, tracking number, purchased item titles), `status` (including `picked up`), `days` / `date_from` / `date_to`, `carrier`, `delivery_method`, and `ordering` (`-created`, `created`, `-updated`, `updated`). Multi-store merchants can filter and switch across their stores seamlessly.
 
 ## ProAce User Wallet, Order Cancellation, and 7-day refunds
 
 - **Customer Wallet (`/api/v1/wallet/`)**: Every registered customer has an integrated store balance for instant 1-click checkout purchases and instant store credit refund resolution.
 - **Wallet Top-Up (`/api/v1/wallet/topup-session/`, `/wallet/topup-confirm/`)**: Customers can top up their wallet balance with preset ($25, $50, $100, $250, $500) or custom ($5–$25,000) amounts, subject to $50,000 daily and $100,000 monthly limits including outstanding reservations.
 - **Split-Tender Payments**: Customers can combine available wallet balances with Stripe payments during checkout, deducting the wallet credit from the card charge.
-- **Order Cancellation (`/api/v1/orders/<id>/cancel/`)**: Customers can cancel orders in `pending` or `confirmed` status. Cancellation locks the order, restocks remaining physical product/variant quantities once, closes pending refund claims, reverses merchant earnings, and refunds only the remaining settled funds. Wallet tender returns as `SOURCE_REFUND`; Stripe tender returns to its original payment method. Unpaid COD orders receive no credit. Cancellation is blocked after any store starts fulfillment.
+- **12-Hour Physical Order Cancellation (`/api/v1/orders/<id>/cancel/`)**: Customers can cancel physical orders within 12 hours of placement if they are in `pending` or `confirmed` status and have not yet been marked as shipped by the seller. Cancellation locks the order, restocks physical product/variant quantities once, reverses merchant earnings, and refunds settled funds back to the customer's wallet or original payment method. Orders containing instant digital downloads cannot be cancelled or refunded once access is delivered. Cancellation is blocked after any store starts fulfillment or after 12 hours.
 - **7-Day Refund Policy (`/api/v1/orders/<id>/refund/`)**: Customers can request refunds for physical items within 7 days of order placement. Refund destinations can be selected as ProAce Store Credit (instant wallet credit upon admin approval) or original payment method. Digital goods are non-refundable once delivered.
   - **Duplicate Prevention & Pending Edits**: Duplicate refund requests for the same order are strictly rejected while an active refund is pending review or after full payment settlement. Customers can retrieve (`GET`) and edit (`PATCH`/`PUT`) their existing pending request (reasons, refund destination, selected items) before staff moderation.
   - **Order Serialization Integration**: `GET /api/v1/orders/<id>/` exposes `active_refund` metadata (`id`, `status`, `is_pending`, `reason`, `refund_type`, `refund_amount`, `product_ids`, `failure_reason`, timestamps) directly to the customer storefront.
 - **Coupon Lifecycle & Audit Preservation (`/api/v1/admin/staff/coupons/<id>/`)**: Unused coupons (`num_used == 0` and zero redemptions) can be permanently deleted by backoffice staff. Coupons with recorded customer redemption history (`num_used > 0` or redemptions present) cannot be deleted to preserve order records, receipts, and financial audit trails; they must remain deactivated.
+- **Digital Order Fulfillment Guardrails (`execute_order_status_transition`, `OrderDetailView`)**: Purely digital orders are fulfilled electronically immediately upon purchase into `delivered` status with $0.00 shipping fees and no delivery address requirement. Digital orders cannot be transitioned to physical delivery statuses (`shipped`, `picked up`) or reverted from `delivered` via staff backoffice or merchant store actions. In the event of legacy or manual database drift, `OrderDetailView` self-heals digital orders to `delivered` and clears `shipped_at` to `None`. Delivery confirmation email notifications omit carrier and tracking numbers for digital purchases.
 
 ### User Profile Avatar & Media Storage
 - **Avatar Storage (`User.avatar_image`, `User.avatar_url`)**: Authenticated users across all roles (customers, merchants, staff, superadmins) can upload a personal avatar. Media files are uploaded to `user-profiles/avatars/` in MinIO/media storage.
@@ -109,6 +127,12 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
   - `DELETE /api/v1/me/avatar/`: Authenticated user deletes their avatar, cleaning up the storage file and setting `avatar_image` and `avatar_url` to null.
   - `GET /api/v1/users/<pk>/public/images/avatar/`: Public proxy endpoint serving the user avatar with Cache-Control headers and 404 fallback.
 - **Serializer Integration**: `UserSerializer` and `StaffSerializer` dynamically generate the proxy URL `/api/users/<pk>/public/images/avatar?v=<timestamp>` to prevent stale browser cache while isolating backend origins.
+
+### User Email Communication Preferences
+- **Preference Storage (`User.email_product_recommendations`, `User.email_marketing`)**: Users maintain granular opt-in controls over non-transactional outbound emails. Product recommendations default to `True`; marketing/promotional announcements default to `False`. Critical transaction notices (order receipts, shipping milestones, refund disbursements, password resets) are strictly preserved and bypass these marketing toggles.
+- **Endpoints**:
+  - `GET /api/v1/me/`: Returns authenticated user profile including `email_product_recommendations` and `email_marketing`.
+  - `PATCH /api/v1/me/`: Authenticated users can update either or both preferences. Updates are persisted and returned immediately via `UserSerializer`.
 
 ## Technical Super Admin Credential Synchronization
 
@@ -134,7 +158,7 @@ The repository includes specialized Django management commands for seeding data,
 - **File**: `server/core/management/commands/populate_fake_data.py`
 - **Purpose**: The authoritative single source for local catalog, transaction history, and account seeding. It always provisions all primary role profiles and realistic catalog datasets.
 - **Guaranteed Accounts Created** (using the password passed via `--password`, or `DEFAULT_ADMIN_PASSWORD` from `.env`, defaulting to `ProaceDemo2026!`):
-  - **Superuser / Technical Admin**: `admin@proace.local` (Full technical super admin, `is_superuser=True, is_staff=True`, syncs with Grafana/MinIO)
+  - **Superuser / Technical Admin**: `admin@proace.local` (Full technical super admin, `is_superuser=True, is_staff=True`, syncs with Grafana/MinIO). **Password Immutability**: Seeding never overwrites, resets, or interferes with the existing password of an existing superuser account (`is_superuser=True`).
   - **Business Admin**: `business-admin@proace.local` (`is_business_admin=True, is_staff=True, is_superuser=False`, platform operator)
   - **Staff Backoffice**: `staff@proace.local` (`is_staff=True, is_superuser=False, is_business_admin=False`, order review & moderation)
   - **Single-store seller**: `seller@proace.local` (Owns store *Apex Athletics*)
@@ -195,6 +219,18 @@ Beyond the catalog seeding tools, the backend includes essential operational com
 | `ensure_default_admin` | `server/core/management/commands/ensure_default_admin.py` | **Idempotent Bootstrapper**: Checks environment variables (`DEFAULT_ADMIN_*`, `DEFAULT_STAFF_*`) and creates default admin/staff accounts idempotently if they do not exist.<br>`python server/manage.py ensure_default_admin` |
 | `rebuild_notification_index` | `server/notification/management/commands/rebuild_notification_index.py` | **Notification Search Sync**: Rebuilds the Elasticsearch notifications index (`commerce-notifications`) from PostgreSQL records.<br>`python server/manage.py rebuild_notification_index --clean` |
 | `consume_logs` | `server/observability/management/commands/consume_logs.py` | **Kafka Log Consumer**: Consumes structured application logs from Kafka topics into the local searchable `LogEntry` audit database.<br>`python server/manage.py consume_logs --group commerce-log-indexer` |
+
+### 5. Pre-Deployment QA & Performance Testing Commands
+
+The repository provides automated load, stress, volume, and bug audit runners in `scripts/qa/`. All reports are stored in `qa-reports/` (untracked by git):
+
+| Command | Script | Target & Report Destination |
+| :--- | :--- | :--- |
+| `npm run test:load` | `scripts/qa/load_test.py` | Sustained concurrent user browsing, search, and detail requests &rarr; `qa-reports/performance-testing/load/` |
+| `npm run test:stress` | `scripts/qa/stress_test.py` | Step-ramp concurrency, instant traffic spikes, race condition lock integrity &rarr; `qa-reports/performance-testing/stress/` |
+| `npm run test:volume` | `scripts/qa/volume_test.py` | Deep pagination LIMIT/OFFSET, multi-criteria filtering, payload serialization &rarr; `qa-reports/performance-testing/volume/` |
+| `npm run test:audit` | `scripts/qa/audit_test.py` | Sensitive information leak detection, role boundary isolation, audit regression suites &rarr; `qa-reports/bug-audit/` |
+| `npm run test:qa` | Sequential runner | Runs all four suites consecutively for full pre-flight verification before deployment |
 
 ## Search
 
@@ -286,12 +322,14 @@ All transactional email templates reside in `server/templates/email-templates/` 
 | Template Name | File Path | Event Trigger & Purpose |
 | --- | --- | --- |
 | `order-summary` | `server/templates/email-templates/order-summary.html` | Order placement receipt with recorded items and totals; delivery address appears only for orders containing physical items. |
+| `order-confirm` | `server/templates/email-templates/order-confirm.html` | Order confirmation notice for confirmed status transitions and itemized checkout receipts. |
+| `order-picked-up` | `server/templates/email-templates/order-picked-up.html` | Recorded pickup confirmation when an order is picked up; supports store name and optional pickup location. |
 | `delivery-confirmation` | `server/templates/email-templates/delivery-confirmation.html` | Recorded delivery confirmation with available carrier and tracking details; no verification code is generated. |
 | `wallet-funded` | `server/templates/email-templates/wallet-funded.html` | Top-up and credit confirmation showing funded amount, updated balance, and marketplace CTA. |
 | `refund-request-acknowledged` | `server/templates/email-templates/refund-request-acknowledged.html` | Customer confirmation when a physical return or refund request is submitted (1–2 business day turnaround). |
 | `refund-response` | `server/templates/email-templates/refund-response.html` | Staff resolution update (approved/declined) with notes, refund destination, and amount. |
 | `onboarding-user` | `server/templates/email-templates/onboarding-user.html` | Customer welcome email with activation and email verification link. |
-| `onboarding-staff` | `server/templates/email-templates/onboarding-staff.html` | Backoffice staff welcome and temporary access credentials guide. |
+| `onboarding-staff` | `server/templates/email-templates/onboarding-staff.html` | Backoffice staff welcome and invitation verification guide. |
 | `affiliate` | `server/templates/email-templates/affiliate.html` | Partner welcome detailing referral links, HopLinks, commission rules, and affiliate dashboard. |
 | `password-reset` | `server/templates/email-templates/password-reset.html` | Secure password reset email with signed, expiring token link. |
 | `account-delete-confirmation` | `server/templates/email-templates/account-delete-confirmation.html` | Account closure notice detailing data purge and financial audit archival policies. |
@@ -397,7 +435,9 @@ The platform supports hybrid commerce where third-party ClickBank affiliate prod
    - Appends `&tid=<token>` to the target HopLink and records the click event.
    - Issues an HTTP 302 redirect to the external partner destination.
 3. **Validation & Checkout Guardrails**:
-   - `MerchantProductSerializer`: Enforces non-empty, valid URL HopLinks when `product_type == 'affiliate_clickbank'`. Clears shipping weight/dimensions and defaults `available = 999` while bypassing variant requirements.
+   - `MerchantProductSerializer`: Enforces non-empty, valid URL HopLinks when `product_type == 'affiliate_clickbank'`. Clears shipping weight/dimensions, locks platform discounts to `0`, clears flash deal timers (`flash_sale_end = None`), and defaults `available = 999` while bypassing variant requirements.
+   - `Product.sale_price`: Always returns the vendor reference price (`str(self.price)`) without discounting when `product_type == 'affiliate_clickbank'`.
+   - `CouponAdminSerializer`: Rejects creating coupons targeted to ClickBank affiliate items because partner checkouts occur off-platform.
    - Cart addition protection: `CartViewSet.add_to_cart` immediately rejects affiliate items with HTTP 400 and provides the partner HopLink.
    - Cron protection: `server/product/cron.py` skips auto-marking affiliate products as "sold out".
 4. **Staff Catalog Audit**:
@@ -407,11 +447,11 @@ The platform supports hybrid commerce where third-party ClickBank affiliate prod
 
 `Order.paid_total` and `wallet_paid` record actual settlement; `refunded_total`, `wallet_refunded_total`, and `card_refunded_total` cap cumulative reversals. Database constraints enforce nonnegative totals and tender consistency. Order placement is distinct from payment: physical COD has no paid balance, earns no payout credit, and cannot unlock digital downloads or receive monetary refunds.
 
-Checkout snapshots persist `line_subtotal`, `discount_amount`, `net_total`, `tax_amount`, and `line_total`. Coupon allocations conserve cents across eligible lines; refunds use final line amounts and earnings use discounted merchandise amounts. Shipping quotes accept the applied coupon so preview and checkout share the tax basis. Local tax snapshots retain exact line taxes; Stripe Tax receives discounted lines and its returned line/shipping taxes are retained when available.
+Checkout snapshots persist `line_subtotal`, `discount_amount`, `net_total`, `tax_amount`, and `line_total`. Coupon allocations conserve cents across eligible lines; refunds use final line amounts and earnings use discounted merchandise amounts. Shipping quotes accept the applied coupon so preview and checkout share the tax basis. Local tax snapshots retain exact line taxes; Stripe Tax receives discounted lines and its returned line/shipping taxes are retained when available. Digital-only orders bypass physical quote verification and carrier lookups, always evaluate to `$0.00` Instant Digital Delivery, normalize address to `None`, and generate deterministic quote fingerprints independently of saved customer delivery addresses.
 
-Cancellation, refund creation and approval acquire the same order lock. Claims reserve quantities; approved claims reduce remaining inventory and refundable funds. Original-payment split refunds distribute only the remaining wallet/card tender, and card operations use provider idempotency. Provider failures leave the transaction retriable instead of recording fictional refunds. Cancellation also reverses merchant ledgers. The existing seven-day escrow applies only to verified settled sales.
+Cancellation, refund creation and approval acquire the same order lock. Claims reserve quantities; approved claims reduce remaining inventory and refundable funds. Refund requests enforce per-product claim idempotency across all statuses (`pending`, `approved`, `declined`, `failed`); products whose refund claims were previously declined or processed cannot be re-submitted for duplicate refunds (`OrderSerializer.claimed_product_ids`), while remaining unclaimed physical items on the order remain eligible for return within the 7-day window. Original-payment split refunds distribute only the remaining wallet/card tender, and card operations use provider idempotency. Provider failures leave the transaction retriable instead of recording fictional refunds. Cancellation also reverses merchant ledgers. The existing seven-day escrow applies only to verified settled sales.
 
-`OrderFulfillment` records status, carrier and tracking per store. Merchant updates permit forward fulfillment transitions only; global completion requires all physical store shipments to finish. Financial statuses use the support/payment workflows.
+`OrderFulfillment` records status, carrier and tracking per store. Merchant updates permit forward fulfillment transitions only; global completion requires all physical store shipments to finish. Financial statuses use the support/payment workflows. Staff order queries (`/api/v1/admin/staff/orders/`) support filtering by `carrier` / `courier` (matching either the root order carrier or store fulfillments) and include courier names in global search queries.
 
 `WalletFundingAttempt` reserves deposit allowance at session creation. Confirmations lock the user, verify ownership, currency and amount, and credit a unique session receipt once. Paid invalid/over-limit sessions are refunded; failed refunds retain a durable `refund_pending` state. Celery Beat runs `recover_wallet_funding` every 60 seconds to recover paid sessions and expire unpaid sessions at Stripe before releasing allowance.
 
@@ -435,7 +475,9 @@ All email templates reside under `server/templates/email-templates/`:
 | `account-delete-confirmation.html` | GDPR / account deletion acknowledgment | `DELETE /api/v1/storefront/me/` (`MeView.delete`) |
 | `affiliate.html` | Welcome email for approved affiliate marketers | `POST /api/v1/affiliates/affiliates/register/` (`AffiliatesViewSet.create_marketer`) |
 | `order-summary.html` | Order confirmation with itemized receipt & tax breakdown | `POST /api/v1/storefront/orders/checkout/` (`CheckoutView._complete`) |
+| `order-confirm.html` | Order confirmation & review receipt | `STATUS_CONFIRMED` transition (`ProductOrderTrackingView` & `transition_order_status`) |
 | `order-shipped.html` | Shipping notification with carrier, tracking number & URL | `STATUS_SHIPPED` transition (`ProductOrderTrackingView` & `execute_order_status_transition`) |
+| `order-picked-up.html` | Order picked up confirmation & receipt review | `STATUS_PICKED_UP` transition (`ProductOrderTrackingView` & `transition_order_status`) |
 | `delivery-confirmation.html` | Delivery confirmation & receipt | `STATUS_DELIVERED` transition (`execute_order_status_transition`) |
 | `order-cancelled.html` | Cancellation notice with wallet/card refund breakdown | `STATUS_CANCELLED` transition (`execute_order_status_transition`) |
 | `refund-request-acknowledged.html` | Return/refund claim acknowledgment | `POST /api/v1/storefront/orders/refund/` (`OrderRefundView.post`) |
@@ -451,7 +493,7 @@ All email templates reside under `server/templates/email-templates/`:
 
 - **Default Context Injections**: `send_mail` automatically supplies safe defaults for `frontend_url`, `shop_url`, `dashboard_url`, `order_url`, `support_email`, and `absolute_url`.
 - **Recipient Correlation**: `send_mail` automatically matches the destination email to the corresponding `core.User` foreign key when available, guaranteeing audit traceability in `NotificationDelivery.recipient`.
-- **Typo & Legacy Aliases**: The legacy template path `refund-request-acknowleged` is retained as an alias to `refund-request-acknowledged.html` for backward compatibility.
+- **Typo & Legacy Aliases**: The legacy template path `refund-request-acknowleged` is retained as an alias to `refund-request-acknowledged.html`. The aliases `order-pickup.html` and `order-confirmation.html` route directly to `order-picked-up.html` and `order-confirm.html` respectively for backward compatibility.
 
 
 Transactional service emails cover store verification, blocking (including the review reason), and restoration; administrative account suspension/restoration and backoffice permission changes; successful password changes/resets; and low physical stock for the store owner and authorized operators. Store, account-security, and inventory notices use branded HTML templates through the existing delivery outbox. No-op moderation/access requests do not resend notices. When a dedicated receipt is sent for checkout, shipment/delivery, refund decisions, cancellation, wallet top-ups, or payout decisions, the companion inbox notification suppresses its generic email while retaining inbox and push delivery. Delivery requires the configured email provider and notification worker; local console delivery does not send real email.
@@ -461,3 +503,30 @@ Inbox notifications and their email/push outbox rows are persisted in one databa
 Invalid, expired, or blacklisted refresh tokens return a structured HTTP 401 (`token_not_valid`) from `/api/v1/auth/refresh/`, allowing the browser proxy to clear revoked sessions and continue public browsing anonymously.
 
 Email receipts display actual order snapshot and recipient data. Missing personal details are omitted; digital-only orders omit delivery address sections and physical-shipment language. Delivery notices report recorded status and never include sample verification codes, names, addresses, phone numbers, carrier values, or product photos.
+
+The catalog supports 29 departments shared by homepage category tiles, shop/store filters, and merchant product forms: Electronics, Fashion, Phones, Computing, Sports & outdoors, Books, Toys & games, Kids & baby, Home & living, Kitchen & dining, Beauty & personal care, Health & wellness, Pet supplies, Gaming, Tablets, Fishing, Lingerie & sleepwear, Coffee, tea & drinks, Garden & tools, Automotive, Jewelry & watches, Software & apps, Courses & learning, Templates & planners, Design assets, Photos & video, Music & audio, Business resources, Digital tools & presets. New department keys are validated by Django product choices; apply product migrations before using them. Existing product category keys are preserved.
+
+Staff user detail accepts validated `order_search`, `order_status`, `order_carrier`, `order_payment`, `order_ordering`, and `order_offset` parameters. Orders remain scoped to the selected user; `order_count` counts matching rows, while `total_orders` and `lifetime_spent` cover all placed orders (spend excludes cancellations). Order pages contain up to 15 rows.
+
+Backoffice coupon attribution displays the recorded creator’s email. Coupon creation assigns the authenticated staff/admin server-side; records without a creator show “Not recorded” rather than an assumed staff identity.
+
+Digital catalog categories: `software`, `courses`, `templates`, `design_assets`, `photo_video`, `music_audio`, `business`, and `digital_tools` supplement existing departments such as Books and Gaming. Merchant product validation and category filtering accept these keys. Apply product migration `0014_digital_product_categories`; existing category values and digital fulfillment rules are unchanged.
+
+
+Listing filtering remediation (2026-10-10): payout approvals, merchant payouts and earnings, customer orders/wallet, treasury withdrawals, user/staff management and profile wallet histories now filter before server pagination with matching counts. Finance criteria combine reference search, status/type/method, inclusive UTC date ranges and amount bounds; balances and lifetime totals remain independent of listing filters. Catalog controls expose category, physical/digital and standard/partner types, stock and visibility as applicable. Coupons support type, validity and creator email; stores support official/merchant and creation dates. Saved products filter the complete saved collection before pagination. Notifications support independent read/archive state and category. Search is debounced by 300 ms, criteria changes return to the first page, and reset controls clear active criteria. Invalid financial bounds and pagination return HTTP 400; existing user/store access scopes remain authoritative.
+
+
+The [notification audit of 11 October 2026](notification-audit-2026-10-11.md) traces order `uuEl5iwv6QMVG`, records reproduced store-filter visibility and duplicate merchant notices, and defines the proposed recipient/channel matrix and remaining delivery/remediation work. Audit findings are not implemented fixes; local console email and disabled FCM do not verify external delivery.
+
+
+Notification remediation (11 October 2026): one canonical event identity per recipient, recipient-scoped multi-store associations, canonical categories and archived/list filters, selected-store refund reviewer routing, treasury/affiliate/review coverage, transactional inbox/outbox writes, credential outbox delivery, stable email/push queue keys and provider idempotency, shared SSE/FCM toast deduplication, and numeric order-detail links. Apply notification migrations before using the updated API and restart API, notification-worker and celery-beat together. Migration backfills do not send messages; duplicate legacy order-created notices are archived rather than deleted. Local test mode intentionally retains console email and disabled FCM; external provider delivery has not been verified. See the notification audit for channel policy and regression coverage.
+
+Transactional email contacts use `SUPPORT_EMAIL` (default `admin@proaceintl.com`) and `ORDER_SUPPORT_EMAIL` (default `productace@proaceintl.com`), matching the storefront contacts. Sender identity uses `RESEND_FROM_EMAIL` separately. Order/refund replies go to order support; other replies go to general support. Missing contacts omit their labeled template rows.
+
+The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts the invite code visibly in an optional field. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped) and `/api/v1/admin/affiliates/` (backoffice-only).
+
+Digital product onboarding & variant enhancements:
+- **Redundant Cover Photo Elimination & Auto-Cover**: For digital image products (artwork, wallpapers, photography), uploading a digital file automatically populates `product.image_url` if no custom cover was specified, removing redundant cover uploads. Custom promotional banners remain optional.
+- **Automatic Preview Watermark Protection**: Digital image files default `digital_preview_watermark = True` to protect artwork on public storefronts with the `PROACE PREVIEW` overlay. Non-image files (PDFs, ZIPs) coerce watermark to `False`. The raw unwatermarked file is securely served only after authorized purchase via `/api/v1/orders/<id>/download/`.
+- **Digital Product Options & Variants**: Digital products support options/variants (e.g., 4K Wallpaper, Mobile HD, Print-Ready Vector) with unlimited digital inventory, variant-specific prices/deltas, and gallery image mappings without physical inventory deduction during checkout.
+

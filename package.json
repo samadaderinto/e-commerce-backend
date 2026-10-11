@@ -9,6 +9,11 @@
     "test:unit": "npm run test:unit --workspace=client",
     "test:integration": "npm run test:integration --workspace=client",
     "test:e2e": "npm run test:e2e --workspace=client",
+    "test:load": ".venv/bin/python scripts/qa/load_test.py",
+    "test:stress": ".venv/bin/python scripts/qa/stress_test.py",
+    "test:volume": ".venv/bin/python scripts/qa/volume_test.py",
+    "test:audit": ".venv/bin/python scripts/qa/audit_test.py",
+    "test:qa": "npm run test:load && npm run test:stress && npm run test:volume && npm run test:audit",
     "docker:build": "docker compose -f server/compose.yaml build && docker compose -f client/compose.yaml build",
     "docker:up": "docker compose -f server/compose.yaml up -d && docker compose -f client/compose.yaml up -d && docker compose -f monitoring/compose.yaml up -d",
     "docker:down": "docker compose -f client/compose.yaml down && docker compose -f server/compose.yaml down && docker compose -f monitoring/compose.yaml down"

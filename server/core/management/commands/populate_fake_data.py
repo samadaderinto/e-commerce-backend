@@ -646,8 +646,8 @@ class Command(BaseCommand):
             UserWalletTransaction.objects.all().delete()
             UserWallet.objects.all().delete()
             Address.objects.all().delete()
-            # Retain non-local users if any
-            User.objects.filter(email__endswith="@proace.local").delete()
+            # Retain non-local users and existing technical super admin
+            User.objects.filter(email__endswith="@proace.local").exclude(is_superuser=True).delete()
         self.stdout.write(self.style.SUCCESS("Clean slate achieved.\n"))
 
     def seed_users(self, count: int, hashed_password: str) -> List[User]:
@@ -676,7 +676,8 @@ class Command(BaseCommand):
                 user.is_staff = is_staff
                 user.is_superuser = is_superuser
                 user.is_business_admin = is_business_admin
-                user.password = hashed_password
+                if not is_superuser:
+                    user.password = hashed_password
                 user.is_active = email not in {"blocked-staff@proace.local", "unverified@proace.local"}
                 user.save()
                 user_map[email] = user
@@ -965,6 +966,9 @@ class Command(BaseCommand):
             affiliate_vendor_nickname = ""
             affiliate_button_text = "Buy on Official Site"
             if is_affiliate:
+                discount = 0
+                flash_sale = None
+                variants = []
                 # Affiliate products represent platform-curated recommendations mapped under the official catalog store
                 official_store = next((s for s in stores if s.is_official), stores[0])
                 aff_nick = getattr(settings, "CLICKBANK_AFFILIATE_NICKNAME", "proace") or "proace"

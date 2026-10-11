@@ -80,10 +80,9 @@ The response is `201` with the staff profile, `is_active=false`, and `staff_emai
 The onboarding workflow operates as follows:
 
 1. **Email verification link**: The newly created staff member receives a signed, 24-hour email verification link.
-2. **Account activation & temporary password**: Upon successful email verification via `POST /api/v1/auth/verify/` with the verification token, the system generates a secure temporary password, sets it on the user account, activates the account (`is_active=true`, `staff_email_verified=true`, incrementing `credential_version`), and emails the temporary credentials to the staff member. Reusing the verification link fails.
-3. **Forgot password guidance**: The credential email containing the temporary password explicitly advises the staff member:
-   > *Please note: You are advised to use the "Forgot Password" flow later to set a permanent, secure password.*
-4. **Direct login**: Staff members can immediately log in with the temporary password and begin work without being forced into an initial password change.
+2. **Account activation & password setup**: Upon successful email verification via `POST /api/v1/auth/verify/` with the verification token, the system activates the account (`is_active=true`, `staff_email_verified=true`, incrementing `credential_version`) and emails a password reset link to the staff member so they can set their password. No plaintext or temporary passwords are generated or emailed. Reusing the verification link fails.
+3. **Password setup via reset flow**: The activation email contains a secure reset-password link and advises the staff member to set their initial password or use the "Forgot Password" flow on the sign-in page at any time.
+4. **Sign in**: Once the staff member sets their password via the reset flow, they can immediately log in and begin work.
 
 ## Separation of backoffice vs. internal store access
 

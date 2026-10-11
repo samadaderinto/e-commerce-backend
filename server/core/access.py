@@ -1,6 +1,6 @@
 """Shared role policies for both current and legacy API routes."""
 from rest_framework.permissions import IsAuthenticated, BasePermission
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 
@@ -35,7 +35,7 @@ class BackofficeJWTAuthentication(JWTAuthentication):
         if result:
             user, token = result
             if token.get('credential_version', 0) != user.credential_version:
-                raise PermissionDenied("Session expired. Sign in again.")
+                raise AuthenticationFailed("Session expired. Sign in again.")
             if user.must_change_password and request.path.rstrip('/') not in {'/api/v1/me', '/api/v1/password/change'}:
                 raise PermissionDenied("Set a new password before accessing the back office.")
             from core.activity import record_activity

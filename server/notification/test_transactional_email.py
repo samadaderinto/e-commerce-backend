@@ -1,4 +1,7 @@
 """Transactional email coverage for security, moderation, and receipt routing."""
+import re
+from pathlib import Path
+
 from collections.abc import Iterator
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -222,3 +225,65 @@ class TransactionalEmailTests(TestCase):
         for absent in ["Destination bank:", "Reference ID:", "Store:", "Notes:"]:
             self.assertNotIn(absent, delivery.body)
         self.assertIn("$10.00", delivery.body)
+
+    def test_order_picked_up_notice_omits_missing_pickup_location(self) -> None:
+        from utils.functions import send_mail
+
+        send_mail("order-picked-up", self.owner.email, {"orderId": "REAL-ORDER-PU"})
+        delivery = NotificationDelivery.objects.get(recipient=self.owner)
+        self.assertIn("marked as picked up", delivery.body)
+        self.assertNotIn("Pickup location:", delivery.body)
+        self.assertIn("REAL-ORDER-PU", delivery.body)
+
+    def test_order_confirm_notice_renders_cleanly(self) -> None:
+        from utils.functions import send_mail
+
+        send_mail("order-confirm", self.owner.email, {"orderId": "REAL-ORDER-CF"})
+        delivery = NotificationDelivery.objects.get(recipient=self.owner)
+        self.assertIn("is confirmed", delivery.body)
+        self.assertIn("REAL-ORDER-CF", delivery.body)
+        self.assertNotIn("Delivery address", delivery.body)
+        self.assertNotIn("Items ordered", delivery.body)
+
+
+    @override_settings(
+        SUPPORT_EMAIL="ProAce Support <admin@proaceintl.com>",
+        ORDER_SUPPORT_EMAIL="ProAce Orders <productace@proaceintl.com>",
+    )
+    def test_all_templates_use_authoritative_contact_addresses(self) -> None:
+        from pathlib import Path
+        from django.conf import settings
+        from utils.functions import send_mail
+
+        for template in sorted((Path(settings.BASE_DIR) / "templates" / "email-templates").glob("*.html")):
+            with self.subTest(template=template.name):
+                context = {name: "" for name in re.findall(r"{{\s*(\w+)", "".join(path.read_text() for path in template.parent.glob("*.html")))}
+                send_mail(template.stem, self.owner.email, {
+                    **context,
+                    "support_email": "admin@example.p",
+                    "order_support_email": "orders@example.com",
+                }, recipient=self.owner)
+                delivery = NotificationDelivery.objects.filter(recipient=self.owner).latest("pk")
+                self.assertNotIn("example.p", delivery.body)
+                self.assertNotIn("example.com", delivery.body)
+                self.assertNotIn("proace.local", delivery.body)
+                self.assertNotIn("mailto:ProAce", delivery.body)
+                expected = "productace@proaceintl.com" if template.stem.startswith(("order-", "refund-")) else "admin@proaceintl.com"
+                self.assertEqual(delivery.reply_to, expected)
+                if "mailto:" in template.read_text():
+                    self.assertIn("@proaceintl.com", delivery.body)
+
+    @override_settings(SUPPORT_EMAIL=" ", ORDER_SUPPORT_EMAIL="orders@example.p")
+    def test_missing_or_placeholder_contacts_omit_contact_rows(self) -> None:
+        from utils.functions import send_mail
+
+        for template in ("affiliate", "wallet-funded", "account-delete-confirmation", "refund-response", "refund-request-acknowledged", "order-cancelled", "account-security"):
+            with self.subTest(template=template):
+                from django.conf import settings
+                source = Path(settings.BASE_DIR) / "templates" / "email-templates" / f"{template}.html"
+                context = {name: "" for name in re.findall(r"{{\s*(\w+)", source.read_text())}
+                send_mail(template, self.owner.email, context, recipient=self.owner)
+                delivery = NotificationDelivery.objects.filter(recipient=self.owner).latest("pk")
+                self.assertNotIn("mailto:", delivery.body)
+                self.assertNotIn("example.p", delivery.body)
+                self.assertEqual(delivery.reply_to, "")

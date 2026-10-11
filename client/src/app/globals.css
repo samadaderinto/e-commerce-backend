@@ -2183,3 +2183,13 @@ select option:disabled {
   min-width: unset;
   line-height: 1;
 }
+
+/* Expanded department labels wrap within the responsive category grid. */
+.category-tiles > a {
+  min-width: 0;
+  white-space: normal;
+}
+
+.category-tiles > a > span:not(.category-symbol) {
+  overflow-wrap: anywhere;
+}

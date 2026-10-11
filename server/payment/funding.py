@@ -132,6 +132,14 @@ def notify_funding(user: User, amount: Decimal) -> None:
             level="warning",
         )
 
+        from notification.events import operators
+        for reviewer in operators(admins_only=True):
+            create_notification(
+                reviewer, "Large wallet deposit requires review",
+                description=f"A deposit of ${amount:.2f} was recorded for account {user.pk}.",
+                data={"event": "wallet_topup_review", "category": "wallet", "user_id": user.pk, "amount": str(amount)},
+            )
+
 
 @transaction.atomic
 def confirm_funding(user: User, session_id: str, session: Any) -> WalletFundingAttempt:

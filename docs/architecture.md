@@ -113,7 +113,7 @@ is ready for production:
 | Keep integrated and legacy Django configurations separate. | `storefront_settings` and `storefront.urls` are the current entry points; the legacy core API surface is removed while shared core domain models remain in use. |
 | Derive ownership from authenticated users and validate purchases on the server. | Do not trust client-supplied customer, seller, store or order ownership fields. |
 | Restrict product reviews to verified purchasers with up to 3 attached photos. | Only buyers with confirmed completed orders for an item can submit/edit a review, preventing review spoofing and ensuring authentic social proof. |
-| Dynamic 6-tier seller milestone hierarchy and official store verification tick. | Store ranks (Starter, Booster, Accelerator, Power, Mega, Legendary) are calculated automatically based on gross volume milestones. |
+| Dynamic 7-tier seller milestone hierarchy and official store verification tick. | Store ranks (Starter, Booster, Accelerator, Power, Mega, Legendary, and Official) are calculated automatically based on gross volume milestones. |
 | JSON-backed product variants with dedicated price modifiers and inventory. | Allows merchants to define options (Size, Color, Material) with independent stock tracking and pricing without relational database overhead. |
 | Make Elasticsearch optional and retain a database search fallback. | Local development can run without search, while indexing failures do not become the only path to catalog results. |
 | Separate application database from logging infrastructure. | Application emits structured JSON to stdout; Grafana Alloy ships logs to Loki for aggregation in Grafana. |
@@ -121,6 +121,7 @@ is ready for production:
 | ClickBank affiliate partner coexistence with attribution HopLink tracking. | External ClickBank products exist alongside standard listings; cart addition is blocked and outbound HopLinks route through `/api/affiliates/clickbank/outbound/<id>` with secure TID tracking, while the Next.js proxy transparently passes HTTP 302 redirects. |
 | Hybrid destination sales tax engine (local DB rules with Stripe Tax fallback). | Destination state and ZIP jurisdiction rates, digital exemptions, and shipping fee taxability are calculated accurately and snapshotted per order. |
 | Use SQLite for direct local development/tests and PostgreSQL for Compose/production. | Direct setup is lightweight; production data must use persistent managed storage. |
+| Enforce disciplined error sanitization and sensitive data protection across client and server. | Stack traces, SQL queries, database schemas, secrets, and raw Python/DRF representations are strictly logged on the server. End users receive clean, human-readable guidance without sensitive leaks or code syntax. |
 
 ## Deployment boundary
 

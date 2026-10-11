@@ -9,9 +9,11 @@ from .views import (
     OrderRefundView, OrderCancelView, OrderTrackingView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
     OrdersView, ProductDetailView, ProductsView, PublicStoreView, PublicStoreImageView, PublicUserImageView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
     CouponValidateView, TaxJurisdictionAdminView, TaxJurisdictionDetailAdminView, TaxJurisdictionSeedDefaultsAdminView,
+    WalletCheckoutCancelView, WalletTopupCancelView, StripeWebhookView,
 )
 from store.views import StoreReviewViewSet
 from staff.views import StaffViewSet
+from affiliates.workspace import ReferralWorkspaceView, AffiliateOperatorView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -26,6 +28,7 @@ urlpatterns = [
     path('api/v1/wallet/', UserWalletView.as_view()),
     path('api/v1/wallet/topup-session/', WalletTopupSessionView.as_view()),
     path('api/v1/wallet/topup-confirm/', WalletTopupConfirmView.as_view()),
+    path('api/v1/wallet/topup-cancel/', WalletTopupCancelView.as_view()),
     path('api/v1/products/', ProductsView.as_view()),
     path('api/v1/products/<int:pk>/', ProductDetailView.as_view()),
     path('api/v1/products/<int:pk>/reviews/', ReviewsView.as_view()),
@@ -41,6 +44,11 @@ urlpatterns = [
     path('api/v1/checkout/shipping-rates/', ShippingRatesView.as_view()),
     path('api/v1/checkout/wallet-session/', WalletCheckoutSessionView.as_view()),
     path('api/v1/checkout/wallet-confirm/', WalletCheckoutConfirmView.as_view()),
+    path('api/v1/checkout/wallet-cancel/', WalletCheckoutCancelView.as_view()),
+    path('api/v1/checkout/stripe-webhook/', StripeWebhookView.as_view()),
+    path('api/v1/stripe/webhook/', StripeWebhookView.as_view()),
+    path('api/v1/affiliates/workspace/', ReferralWorkspaceView.as_view()),
+    path('api/v1/admin/affiliates/', AffiliateOperatorView.as_view()),
     path('api/v1/affiliates/', include('affiliates.urls')),
     path('api/v1/admin/coupons/', CouponAdminView.as_view()),
     path('api/v1/admin/taxes/', TaxJurisdictionAdminView.as_view()),

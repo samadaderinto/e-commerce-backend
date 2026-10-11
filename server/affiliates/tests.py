@@ -137,6 +137,27 @@ class AffiliateRegistrationTests(TestCase):
         response = AuthView.as_view()(request, action="register")
 
         self.assertEqual(response.status_code, 201, response.data)
+        # Deferred until email verification to protect against unverified email abuse
+        self.assertFalse(AffiliateWallet.objects.filter(user=referrer).exists())
+        self.assertEqual(Referral.objects.count(), 0)
+
+        # Parse verification token from queued delivery
+        from notification.models import NotificationDelivery
+        import re
+        delivery = NotificationDelivery.objects.get(recipient_email="new-referred@test.com")
+        match = re.search(r"token=([^\s\"'>]+)", delivery.body)
+        self.assertIsNotNone(match)
+        token = match.group(1)
+
+        # Verify email
+        verify_req = factory.post(
+            "/api/v1/auth/verify/",
+            {"token": token},
+            format="json",
+        )
+        verify_resp = AuthView.as_view()(verify_req, action="verify")
+        self.assertEqual(verify_resp.status_code, 200, verify_resp.data)
+
         self.assertEqual(AffiliateWallet.objects.get(user=referrer).balance, Decimal("25.00"))
         self.assertEqual(Referral.objects.count(), 1)
 
@@ -366,5 +387,66 @@ class ClickBankOutboundTests(TestCase):
         self.assertIn(p_std.id, product_ids)
         self.assertNotIn(p_aff.id, product_ids)
 
+    def test_affiliate_clickbank_product_sale_price_never_discounts(self):
+        from product.models import Product
+        p_aff = Product.objects.create(
+            store=self.store,
+            title="Keto Diet Plan",
+            description="Guide.",
+            price=Decimal("49.99"),
+            discount=25,
+            available=999,
+            category="books",
+            product_type=Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK,
+            affiliate_hoplink="https://hop.clickbank.net/?affiliate=proace&vendor=test",
+            visibility=True,
+        )
+        self.assertEqual(p_aff.sale_price, "49.99")
 
+    def test_merchant_product_serializer_rejects_discount_and_flash_sale_for_clickbank(self):
+        from store.serializers import MerchantProductSerializer
+        from django.utils import timezone
+        data = {
+            "title": "Discounted Affiliate Guide",
+            "description": "Some description.",
+            "price": "39.99",
+            "discount": 20,
+            "category": "books",
+            "product_type": "affiliate_clickbank",
+            "affiliate_hoplink": "https://hop.clickbank.net/?affiliate=proace&vendor=test",
+        }
+        serializer = MerchantProductSerializer(data=data, context={"store": self.store})
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("discount", serializer.errors)
 
+        data_flash = {
+            "title": "Flash Affiliate Guide",
+            "description": "Some description.",
+            "price": "39.99",
+            "discount": 0,
+            "flash_sale_end": timezone.now().isoformat(),
+            "category": "books",
+            "product_type": "affiliate_clickbank",
+            "affiliate_hoplink": "https://hop.clickbank.net/?affiliate=proace&vendor=test",
+        }
+        serializer_flash = MerchantProductSerializer(data=data_flash, context={"store": self.store})
+        self.assertFalse(serializer_flash.is_valid())
+        self.assertIn("flash_sale_end", serializer_flash.errors)
+
+    def test_coupon_admin_serializer_rejects_clickbank_product(self):
+        from storefront.serializers import CouponAdminSerializer
+        from payment.models import Coupon
+        from django.utils import timezone
+        data = {
+            "code": "CLICK20",
+            "discount": 20,
+            "coupon_type": Coupon.PRODUCT,
+            "product": self.affiliate_product.id,
+            "valid_from": timezone.now(),
+            "valid_to": timezone.now() + timezone.timedelta(days=7),
+            "num_available": 10,
+        }
+        serializer = CouponAdminSerializer(data=data)
+        self.assertFalse(serializer.is_valid())
+        self.assertIn("product", serializer.errors)
+        self.assertIn("ClickBank affiliate partner products", str(serializer.errors["product"]))

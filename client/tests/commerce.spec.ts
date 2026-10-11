@@ -93,7 +93,7 @@ test('guest bag merges on sign-in and wallet checkout creates an order', async (
   await expect(page).toHaveURL(/\/orders\/\d+\?placed=true/, { timeout: 30000 });
   const orderId: string = new URL(page.url()).pathname.split('/').at(-1)!;
   await expect(page.getByRole('heading', {name: 'It’s on the list.'})).toBeVisible();
-  await expect(page.getByText('ProAce Wallet Balance (Paid)', {exact: true})).toBeVisible();
+  await expect(page.getByText('ProAce Wallet · Paid', {exact: true})).toBeVisible();
   await noOverflow(page);
   const cookies = await page.context().cookies();
   expect(cookies.find(cookie => cookie.name === 'proace_access')?.httpOnly).toBe(true);

@@ -38,6 +38,8 @@ getMessaging().then(instance => {
 
     await self.registration.showNotification(payload.data.title || 'Proace', {
       body: payload.data.body || 'You have a new notification.',
+      tag: `proace:${payload.data.recipient_id}:${payload.data.notification_id}`,
+      renotify: false,
       data: { url: payload.data.url || '/' },
     });
   });

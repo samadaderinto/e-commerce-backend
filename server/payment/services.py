@@ -34,6 +34,17 @@ ALLOWED_ORDER_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+def is_digital_only_order(order: Order) -> bool:
+    """Return True if an order contains strictly digital products and no physical delivery."""
+    if order.items_snapshot:
+        return all(bool(row.get("is_digital", False)) for row in order.items_snapshot)
+    if order.cart_id and order.cart.cart_items.exists():
+        return not order.cart.cart_items.filter(product__is_digital=False).exists()
+    if order.delivery and getattr(order.delivery, "method", "") == "digital":
+        return True
+    return False
+
+
 def call_stripe_refund(
     order: Order,
     refund: Refund | None = None,
@@ -158,6 +169,17 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund
                 failure_reason=str(exc),
                 updated=timezone.now(),
             )
+            refund.refresh_from_db()
+            if refund.order_id:
+                with transaction.atomic():
+                    from notification.domain import refund_notice
+                    refund_notice(refund, actor, refund.selected_items or refund.order.items_snapshot, decision="failed")
+                    if refund.order.user_id:
+                        create_notification(
+                            refund.order.user, f"Refund delayed for Order #{refund.order.orderId}", target=refund,
+                            description="The payment provider could not complete your refund. Support will review it.",
+                            data={"event": "refund_failed", "order_id": refund.order_id, "refund_id": refund.pk},
+                        )
         raise
 
 
@@ -437,6 +459,8 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
                 },
             )
 
+    from notification.domain import refund_notice
+    refund_notice(refund, actor, refund.selected_items or order.items_snapshot, decision="approved")
     return refund
 
 
@@ -517,6 +541,9 @@ def decline_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund
                     },
                 )
 
+        if refund.order_id:
+            from notification.domain import refund_notice
+            refund_notice(refund, actor, refund.selected_items or order.items_snapshot, decision="declined")
     return refund
 
 
@@ -592,11 +619,32 @@ def execute_order_status_transition(
             }
         )
 
+    is_digital = is_digital_only_order(order)
+    if is_digital:
+        if next_status in ("shipped", "picked up"):
+            raise ValidationError(
+                {
+                    "detail": "Digital orders have instant electronic fulfillment and cannot be transitioned to physical delivery statuses."
+                }
+            )
+        if previous == "delivered":
+            raise ValidationError(
+                {
+                    "detail": "Digital orders are fulfilled instantly upon purchase and cannot be reverted from delivered."
+                }
+            )
+
     inventory = remaining_inventory(order)
+    cancel_wallet_refund = Decimal("0.00")
+    cancel_card_refund = Decimal("0.00")
+    cancel_total_refund = Decimal("0.00")
     if next_status == "cancelled":
         remaining = order.paid_total - order.refunded_total
         if remaining > 0:
             wallet_part, card_part = refund_parts(order, remaining)
+            cancel_wallet_refund = wallet_part
+            cancel_card_refund = card_part
+            cancel_total_refund = remaining
             try:
                 if card_part > 0:
                     call_stripe_refund(
@@ -649,8 +697,10 @@ def execute_order_status_transition(
                 order.shipped_at = now
             order.delivered_at = None
         elif next_status == "delivered":
-            if not order.shipped_at:
+            if not is_digital and not order.shipped_at:
                 order.shipped_at = now
+            elif is_digital:
+                order.shipped_at = None
             if not order.delivered_at:
                 order.delivered_at = now
         elif next_status == "picked up":
@@ -703,7 +753,7 @@ def execute_order_status_transition(
                     "order_id": order.pk,
                     "status": next_status,
                     "event": "order_status_override",
-                    "email": next_status not in {"cancelled", "shipped", "delivered"},
+                    "email": next_status not in {"cancelled", "shipped", "delivered", "picked up", "confirmed"},
                 },
             )
 
@@ -733,16 +783,15 @@ def execute_order_status_transition(
         if recipient_email:
             firstname = (order.user.first_name if order.user else "")
             if next_status == "cancelled":
-                card_refund = max(Decimal("0.00"), (order.paid_total - order.wallet_paid).quantize(Decimal(".01")))
                 send_mail(
                     "order-cancelled",
                     recipient_email,
                     {
                         "firstname": firstname,
                         "orderId": order.orderId,
-                        "refund_amount": str(order.paid_total),
-                        "wallet_refund": str(order.wallet_paid),
-                        "card_refund": str(card_refund),
+                        "refund_amount": str(cancel_total_refund),
+                        "wallet_refund": str(cancel_wallet_refund),
+                        "card_refund": str(cancel_card_refund),
                         "reason": reason,
                         "subject": f"Order #{order.orderId} Cancelled",
                     },
@@ -767,9 +816,29 @@ def execute_order_status_transition(
                     {
                         "firstname": firstname,
                         "orderId": order.orderId,
-                        "carrier": order.carrier,
-                        "tracking_number": order.tracking_number,
+                        "carrier": "" if is_digital else order.carrier,
+                        "tracking_number": "" if is_digital else (order.tracking_number or ""),
                         "subject": f"Order #{order.orderId} Delivered",
+                    },
+                )
+            elif next_status == "picked up":
+                send_mail(
+                    "order-picked-up",
+                    recipient_email,
+                    {
+                        "firstname": firstname,
+                        "orderId": order.orderId,
+                        "subject": f"Order #{order.orderId} Picked Up",
+                    },
+                )
+            elif next_status == "confirmed":
+                send_mail(
+                    "order-confirm",
+                    recipient_email,
+                    {
+                        "firstname": firstname,
+                        "orderId": order.orderId,
+                        "subject": f"Order #{order.orderId} Confirmed",
                     },
                 )
 

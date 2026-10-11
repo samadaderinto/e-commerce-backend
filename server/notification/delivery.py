@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from typing import Any, Optional
 
 from django.conf import settings
@@ -64,24 +67,36 @@ def queue_email_delivery(
     if not recipient_email:
         raise ValueError("An email recipient is required.")
 
-    delivery = NotificationDelivery.objects.create(
-        channel=NotificationDelivery.CHANNEL_EMAIL,
-        notification=notification,
-        recipient=recipient,
-        recipient_email=recipient_email,
-        subject=subject,
-        body=body,
-        reply_to=reply_to,
-        is_html=is_html,
+    key = hashlib.sha256(
+        (f"notification:{notification.pk}:email" if notification else json.dumps(
+            [recipient_email, subject, body], ensure_ascii=False,
+        )).encode()
+    ).hexdigest()
+    delivery, created = NotificationDelivery.objects.get_or_create(
+        idempotency_key=key,
+        defaults=dict(
+            channel=NotificationDelivery.CHANNEL_EMAIL,
+            notification=notification,
+            recipient=recipient,
+            recipient_email=recipient_email,
+            subject=subject,
+            body=body,
+            reply_to=reply_to,
+            is_html=is_html,
+        ),
     )
-    return _schedule_delivery(delivery)
+    return _schedule_delivery(delivery) if created else delivery
 
 
 def queue_push_delivery(notification: Any) -> NotificationDelivery:
-    delivery = NotificationDelivery.objects.create(
-        channel=NotificationDelivery.CHANNEL_PUSH,
-        notification=notification,
-        recipient=notification.recipient,
+    key = hashlib.sha256(f"notification:{notification.pk}:push".encode()).hexdigest()
+    delivery, created = NotificationDelivery.objects.get_or_create(
+        idempotency_key=key,
+        defaults=dict(
+            channel=NotificationDelivery.CHANNEL_PUSH,
+            notification=notification,
+            recipient=notification.recipient,
+        ),
     )
-    return _schedule_delivery(delivery)
+    return _schedule_delivery(delivery) if created else delivery
 

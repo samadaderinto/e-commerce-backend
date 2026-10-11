@@ -59,6 +59,7 @@ export type Product = LifecycleTimestamps & {
   width?: string;
   height?: string;
   sales?: number;
+  label?: string;
   flash_sale_end?: string | null;
   variants?: ProductVariant[];
   average_rating: string;
@@ -97,6 +98,8 @@ export type User = ActivityTimestamps & {
   must_change_password: boolean;
   role: string;
   avatar_url?: string | null;
+  email_product_recommendations?: boolean;
+  email_marketing?: boolean;
 };
 
 export type StaffUser = User & {
@@ -109,8 +112,12 @@ export type StaffUser = User & {
 };
 
 export type AdminUserProfile = {
+  order_count: number;
+  total_orders: number;
+  lifetime_spent: string;
   user: StaffUser;
   wallet: {
+    count: number;
     balance: string;
     transactions: Array<{
       id: number;
@@ -135,6 +142,25 @@ export type AdminUserProfile = {
     created: string;
     level: string;
   }>;
+  referral?: {
+    id: number;
+    status: string;
+    reward_amount: string;
+    created: string;
+    referrer_name: string;
+    referrer_code: string;
+    referrer_email: string;
+    referrer_user_id: number;
+  } | null;
+  affiliate?: {
+    id: number;
+    name: string;
+    referral_code: string;
+    referral_count: number;
+    rewarded_count: number;
+    credit_earned: string;
+    created: string;
+  } | null;
 };
 
 export type Address = {
@@ -227,6 +253,7 @@ export type Order = LifecycleTimestamps & {
   delivered_at?: string | null;
   tracking_events?: TrackingEvent[];
   active_refund?: OrderActiveRefund | null;
+  claimed_product_ids?: number[];
   items: {
     product: number;
     title: string;
@@ -356,6 +383,7 @@ export type UserWalletTransaction = {
 };
 
 export type UserWallet = {
+  count?: number;
   balance: string;
   transactions: UserWalletTransaction[];
 };
@@ -517,6 +545,7 @@ export type AdminDashboardData = {
   coupons: { total: number; active: number };
   refunds: { total: number; accepted: number; declined: number; pending: number };
   marketers: { total: number };
+  referrals?: { total: number; rewarded: number; pending: number; rewarded_amount: string };
   financials: { escrow_total: string; commission_earned: string };
   pending_actions: { withdrawals: number; refunds: number };
   recent_orders: AdminOrder[];
@@ -627,3 +656,81 @@ export type AdminTaxesResponse = {
   };
   results: AdminTaxJurisdiction[];
 };
+
+
+export type AffiliateReferral = {
+  id: number;
+  status: 'pending' | 'rewarded';
+  reward_amount: string;
+  created: string;
+};
+
+export type ReferralWorkspace = {
+  enrolled: boolean;
+  name: string;
+  referral_code: string;
+  invite_url: string;
+  reward_amount: string;
+  max_rewards: number;
+  rewarded_count: number;
+  credit_earned: string;
+  count: number;
+  results: AffiliateReferral[];
+};
+
+export type AffiliateOperator = {
+  id: number;
+  user: number;
+  name: string;
+  email: string;
+  marketer_id: string;
+  is_active: boolean;
+  referral_count: number;
+  rewarded_count: number;
+  credit_earned: string | null;
+  created: string;
+};
+
+export type AdminReferral = {
+  id: number;
+  status: 'pending' | 'rewarded';
+  reward_amount: string;
+  wallet_transaction_id?: number | null;
+  created: string;
+  referred_user: {
+    id: number;
+    email: string;
+    first_name: string;
+    last_name: string;
+  };
+  marketer: {
+    id: number;
+    user_id: number;
+    name: string;
+    marketer_id: string;
+    email: string;
+  };
+};
+
+export type AffiliateOperatorSummary = {
+  total_affiliates: number;
+  total_referrals: number;
+  rewarded_referrals: number;
+  pending_referrals: number;
+  total_credit_awarded: string;
+};
+
+export type AffiliateOperatorPage = {
+  summary?: AffiliateOperatorSummary;
+  tab?: 'affiliates' | 'referrals';
+  count: number;
+  results: AffiliateOperator[];
+};
+
+export type AdminReferralPage = {
+  summary?: AffiliateOperatorSummary;
+  tab?: 'affiliates' | 'referrals';
+  count: number;
+  results: AdminReferral[];
+};
+

@@ -94,6 +94,8 @@ class UserSerializer(serializers.ModelSerializer):
             'last_login',
             'last_active_at',
             'avatar_url',
+            'email_product_recommendations',
+            'email_marketing',
         ]
         read_only_fields = [
             'id',
@@ -196,8 +198,10 @@ class CatalogSerializer(serializers.ModelSerializer):
             'price',
             'sale_price',
             'discount',
+            'visibility',
             'available',
             'sales',
+            'label',
             'flash_sale_end',
             'variants',
             'average_rating',
@@ -358,6 +362,10 @@ class AuthRequestSerializer(serializers.Serializer):
     token = serializers.CharField(required=False)
     uid = serializers.CharField(required=False)
     refresh = serializers.CharField(required=False)
+    credential = serializers.CharField(required=False)
+    id_token = serializers.CharField(required=False)
+    provider = serializers.CharField(required=False)
+    user = serializers.DictField(required=False)
 
 
 class CartLineSerializer(serializers.Serializer):
@@ -446,6 +454,8 @@ class CouponAdminSerializer(serializers.ModelSerializer):
         minimum = attrs.get('minimum_quantity', getattr(self.instance, 'minimum_quantity', 1))
         if coupon_type in (Coupon.PRODUCT, Coupon.PRODUCT_QUANTITY) and not product:
             raise serializers.ValidationError({'product': 'This coupon type requires a product.'})
+        if product and product.product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
+            raise serializers.ValidationError({'product': 'Coupons cannot be created for ClickBank affiliate partner products because orders are fulfilled externally by the vendor.'})
         if coupon_type == Coupon.CATEGORY and not category:
             raise serializers.ValidationError({'category': 'This coupon type requires a category.'})
         if coupon_type != Coupon.PRODUCT_QUANTITY and minimum != 1:
@@ -505,6 +515,9 @@ class OrderSerializer(serializers.Serializer):
     address = OrderAddressSnapshotSerializer()
     tax_snapshot = serializers.JSONField(required=False, default=dict)
     active_refund = serializers.JSONField(required=False, allow_null=True)
+    claimed_product_ids = serializers.ListField(
+        child=serializers.IntegerField(), required=False, default=list
+    )
 
 
 class ProductIdRequestSerializer(serializers.Serializer):

@@ -1,10 +1,11 @@
+from core.listing_filters import ListingQuerySerializer, filter_records, record_page
 from zoneinfo import ZoneInfo
-from rest_framework import serializers
 from core.access import IsBusinessAdmin, is_admin, is_backoffice
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
+from django.utils.dateparse import parse_date, parse_datetime
 from django.db import transaction
 from django.db.models import Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum
 from django.db.models.functions import TruncDate
@@ -56,8 +57,12 @@ def invalidate_store_products(store):
 class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     queryset = Store.objects.none()
     serializer_class = StoreSerializer
-    permission_classes = [IsBusinessAdmin]
     pagination_class = MerchantPagination
+
+    def get_permissions(self):
+        if self.action in ("approve",):
+            return [IsBusinessAdmin()]
+        return [IsAdminUser()]
 
     def get_queryset(self):
         stores = Store.objects.select_related('user', 'verified_by', 'blocked_by')
@@ -98,10 +103,15 @@ class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
 
     @transaction.atomic
     def block(self, request: Request, pk: str | None = None) -> Response:
+        store = get_object_or_404(Store.objects.select_for_update(), pk=pk)
+        if store.is_official:
+            return Response(
+                {"detail": "Official company stores cannot be blocked."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         reason = serializers.CharField(allow_blank=False, trim_whitespace=True).run_validation(
             request.data.get('reason')
         )
-        store = get_object_or_404(Store.objects.select_for_update(), pk=pk)
         if store.status == Store.STATUS_BLOCKED and store.blocked_reason == reason:
             return Response(StoreSerializer(store).data)
         store.status = Store.STATUS_BLOCKED
@@ -325,7 +335,72 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                     Q(fulfillments__store=store, fulfillments__status=order_status)
                     | Q(fulfillments__isnull=True, status=order_status)
                 ).exclude(status__in=['cancelled', 'refunded'])
-        orders = orders.select_related('user').prefetch_related(Prefetch(
+
+        search = str(request.query_params.get('search') or '').strip()
+        if search:
+            orders = orders.filter(
+                Q(orderId__icontains=search)
+                | Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(buyer_email__icontains=search)
+                | Q(buyer_phone__icontains=search)
+                | Q(tracking_number__icontains=search)
+                | Q(fulfillments__tracking_number__icontains=search)
+                | Q(cart__cart_items__product__title__icontains=search)
+            )
+
+        carrier = str(request.query_params.get('carrier') or '').strip()
+        if carrier:
+            orders = orders.filter(
+                Q(fulfillments__store=store, fulfillments__carrier__iexact=carrier)
+                | Q(fulfillments__isnull=True, carrier__iexact=carrier)
+            )
+
+        delivery_method = str(request.query_params.get('delivery_method') or '').strip()
+        if delivery_method:
+            orders = orders.filter(delivery__method__iexact=delivery_method)
+
+        days = request.query_params.get('days')
+        if days:
+            try:
+                num_days = int(days)
+                if num_days > 0:
+                    orders = orders.filter(created__gte=timezone.now() - timedelta(days=num_days))
+            except (ValueError, TypeError):
+                pass
+
+        date_from = str(request.query_params.get('date_from') or '').strip()
+        if date_from:
+            dt_from = parse_datetime(date_from)
+            if not dt_from:
+                d_from = parse_date(date_from)
+                if d_from:
+                    dt_from = timezone.make_aware(datetime.combine(d_from, datetime.min.time()))
+            if dt_from:
+                orders = orders.filter(created__gte=dt_from)
+
+        date_to = str(request.query_params.get('date_to') or '').strip()
+        if date_to:
+            dt_to = parse_datetime(date_to)
+            if not dt_to:
+                d_to = parse_date(date_to)
+                if d_to:
+                    dt_to = timezone.make_aware(datetime.combine(d_to, datetime.max.time()))
+            if dt_to:
+                orders = orders.filter(created__lte=dt_to)
+
+        ordering = str(request.query_params.get('ordering') or '-created').strip()
+        allowed_orderings = {
+            '-created': ('-created', '-pk'),
+            'created': ('created', 'pk'),
+            '-updated': ('-updated', '-pk'),
+            'updated': ('updated', 'pk'),
+        }
+        order_by_fields = allowed_orderings.get(ordering, ('-created', '-pk'))
+        orders = orders.distinct().order_by(*order_by_fields)
+
+        orders = orders.select_related('user', 'delivery').prefetch_related(Prefetch(
             'cart__cart_items', queryset=CartItem.objects.filter(product__store=store)
             .select_related('product'), to_attr='merchant_items',
         ))
@@ -372,11 +447,24 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                 },
                 "created": order.created,
                 "ordered": order.ordered,
+                "has_physical_items": (
+                    any(
+                        not bool(it.get("is_digital"))
+                        for it in (order.items_snapshot or [])
+                        if not it.get("store") or str(it.get("store")) == str(store.pk)
+                    )
+                    if order.items_snapshot
+                    else any(
+                        not getattr(item.product, "is_digital", False)
+                        for item in getattr(order.cart, "merchant_items", [])
+                    )
+                ),
                 "items": [
                     {
                         "product": item.product_id,
                         "title": item.product.title,
                         "quantity": item.quantity,
+                        "is_digital": getattr(item.product, "is_digital", False),
                     }
                     for item in getattr(order.cart, "merchant_items", [])
                 ]
@@ -385,9 +473,10 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                         "product": it.get("product", 0),
                         "title": it.get("title", "Item"),
                         "quantity": it.get("quantity", 1),
+                        "is_digital": bool(it.get("is_digital")),
                     }
                     for it in (order.items_snapshot or [])
-                    if not it.get("store") or it.get("store") == store.pk
+                    if not it.get("store") or str(it.get("store")) == str(store.pk)
                 ],
             }
             for order in page
@@ -425,6 +514,10 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         serializer = MerchantTrackingSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
+        from payment.fulfillment import ensure_fulfillments
+        ensure_fulfillments(order)
+        current = order.fulfillments.get(store=store)
+        previous = (current.status, current.carrier, current.tracking_number)
         fulfillment = update_fulfillment(
             order,
             store,
@@ -432,6 +525,11 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             data["carrier"],
             data["tracking_number"],
         )
+        last_event = (order.tracking_events or [{}])[-1]
+        if previous == (fulfillment.status, fulfillment.carrier, fulfillment.tracking_number) and (
+            not data["event_description"] or last_event.get("description") == data["event_description"]
+        ):
+            return Response({"id": order.pk, "reference": order.orderId, "status": order.status})
         event_description = data["event_description"]
         if event_description or data["tracking_number"] or data.get("status"):
             events = list(order.tracking_events or [])
@@ -465,10 +563,16 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             actor=store.user,
             target=order,
             verb=f"Order #{order.orderId} — {store.name} {fulfillment.status.title()}",
-            description=f"Your {store.name} shipment is {fulfillment.status}. Carrier: {fulfillment.carrier}, Tracking #{fulfillment.tracking_number or 'N/A'}",
+            description=(
+                f"Your {store.name} shipment is {fulfillment.status}. Carrier: {fulfillment.carrier}, Tracking #{fulfillment.tracking_number}"
+                if fulfillment.carrier and fulfillment.tracking_number
+                else f"Your {store.name} shipment is {fulfillment.status}. Tracking #{fulfillment.tracking_number}"
+                if fulfillment.tracking_number
+                else f"Your {store.name} shipment is {fulfillment.status}."
+            ),
             data={
                 "event": "order_tracking_update",
-                "email": fulfillment.status not in {"shipped", "delivered"},
+                "email": fulfillment.status not in {"shipped", "delivered", "picked up", "confirmed"},
                 "order_id": order.pk,
                 "store_id": store.pk,
                 "tracking_number": fulfillment.tracking_number,
@@ -504,6 +608,30 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                     "tracking_number": fulfillment.tracking_number,
                     "store_name": store.name,
                     "subject": f"Order #{order.orderId} Delivered",
+                },
+            )
+        elif recipient_email and fulfillment.status == "picked up":
+            from utils.functions import send_mail
+            send_mail(
+                "order-picked-up",
+                recipient_email,
+                {
+                    "firstname": (order.user.first_name if order.user else ""),
+                    "orderId": order.orderId,
+                    "store_name": store.name,
+                    "subject": f"Order #{order.orderId} Picked Up",
+                },
+            )
+        elif recipient_email and fulfillment.status == "confirmed":
+            from utils.functions import send_mail
+            send_mail(
+                "order-confirm",
+                recipient_email,
+                {
+                    "firstname": (order.user.first_name if order.user else ""),
+                    "orderId": order.orderId,
+                    "store_name": store.name,
+                    "subject": f"Order #{order.orderId} Confirmed",
                 },
             )
 
@@ -594,7 +722,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         return Response(MerchantWalletSerializer(data).data)
 
     @action(detail=False, methods=['get'], url_path='wallet/ledger')
-    def merchant_ledger(self, request):
+    @extend_schema(parameters=[ListingQuerySerializer], responses=StoreEarningsLedgerSerializer(many=True))
+    def merchant_ledger(self, request: Request) -> Response:
         """
         Granular ledger entries for all stores owned by the merchant.
         Supports query params: ?store_id=X, ?status=pending|available|completed|reversed, ?entry_type=sale|payout|fee|refund
@@ -614,6 +743,11 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         if entry_type_filter:
             entries = entries.filter(entry_type=entry_type_filter)
 
+        entries = filter_records(
+            entries.order_by("-created", "-pk"), request.query_params,
+            search_fields=("reference", "description", "store__name"),
+            fields={"status": "status", "entry_type": "entry_type"}, amount_field="net_amount",
+        )
         page = self.paginate_queryset(entries)
         serializer = StoreEarningsLedgerSerializer(page, many=True)
         return self.get_paginated_response(serializer.data)
@@ -685,12 +819,20 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
 
     @action(detail=True, methods=['get', 'post'], url_path='payouts')
     @transaction.atomic
-    def payouts(self, request, pk=None):
+    @extend_schema(methods=["GET"], parameters=[ListingQuerySerializer], responses=StorePayoutSerializer(many=True))
+    def payouts(self, request: Request, pk: str | None = None) -> Response:
         store = self.get_object()
         if request.method == 'GET':
-            payouts = store.payouts.all()
-            serializer = StorePayoutSerializer(payouts, many=True)
-            return Response(serializer.data)
+            payouts = filter_records(
+                store.payouts.order_by("-created", "-pk"), request.query_params,
+                search_fields=("reference", "notes", "payout_method"),
+                fields={"status": "status", "payout_method": "payout_method"}, amount_field="amount",
+            )
+            if request.query_params.get("paginated") == "1":
+                count, page = record_page(payouts, request.query_params)
+                serializer = StorePayoutSerializer(page, many=True)
+                return Response({"count": count, "results": serializer.data})
+            return Response(StorePayoutSerializer(payouts, many=True).data)
 
         if store.is_official:
             raise ValidationError({
@@ -771,6 +913,10 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         products = Product.objects.filter(store=self.get_store()).prefetch_related('tags', 'images').select_related('specification')
+        products = filter_records(
+            products, self.request.query_params,
+            fields={"is_digital": "is_digital", "product_type": "product_type"},
+        )
         if self.action in {'update', 'partial_update'}:
             # Lock only the product: the optional specification uses an outer join.
             products = products.select_for_update(of=('self',))
@@ -867,15 +1013,38 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
             from django.core.files.storage import default_storage
             from django.http import HttpResponseRedirect
             from urllib.parse import urlparse
-            path = urlparse(product.digital_file_url or '').path.lstrip('/')
+            raw = (product.digital_file_url or '').strip()
+            path = urlparse(raw).path.lstrip('/')
             bucket = getattr(settings, 'MINIO_BUCKET_NAME', 'commerce-images')
-            for prefix in (f'{bucket}/media/', f'{bucket}/', 'media/'):
+            known_prefixes = (
+                f'{bucket}/media/',
+                f'{bucket}/',
+                'commerce-images/media/',
+                'commerce-images/',
+                'commerce-media/media/',
+                'commerce-media/',
+                'media/',
+            )
+            for prefix in known_prefixes:
                 if path.startswith(prefix):
                     path = path[len(prefix):]
                     break
-            if not path or not default_storage.exists(path):
+
+            variants = [path]
+            if path.startswith('media/'):
+                variants.append(path[len('media/'):])
+            else:
+                variants.append(f'media/{path}')
+
+            resolved_path = None
+            for candidate in variants:
+                if candidate and default_storage.exists(candidate):
+                    resolved_path = candidate
+                    break
+
+            if not resolved_path:
                 return Response({'detail': 'This product has no uploaded digital file.'}, status=404)
-            response = HttpResponseRedirect(default_storage.url(path))
+            response = HttpResponseRedirect(default_storage.url(resolved_path))
             response['Cache-Control'] = 'private, no-store'
             return response
         file_obj = request.FILES.get('file')
@@ -902,7 +1071,15 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         image_exts = ('.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.avif', '.bmp', '.tiff')
         clean_name = file_obj.name.lower()
         update_fields = ['is_digital', 'digital_file_url', 'weight', 'updated']
-        if not clean_name.endswith(image_exts):
+        if clean_name.endswith(image_exts):
+            raw_url = default_storage.url(saved_path)
+            public_image_url = normalize_media_url(request.build_absolute_uri(raw_url) if request else raw_url)
+            if not product.image_url:
+                product.image_url = public_image_url
+                update_fields.append('image_url')
+            product.digital_preview_watermark = True
+            update_fields.append('digital_preview_watermark')
+        else:
             product.digital_preview_watermark = False
             update_fields.append('digital_preview_watermark')
         product.save(update_fields=update_fields)
@@ -910,6 +1087,8 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
 
         return Response({
             'digital_file_url': file_url,
+            'image_url': product.image_url,
+            'digital_preview_watermark': product.digital_preview_watermark,
             'file_name': file_obj.name,
             'file_size': file_obj.size,
         }, status=status.HTTP_200_OK)

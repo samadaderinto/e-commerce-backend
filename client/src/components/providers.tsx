@@ -18,6 +18,7 @@ import { Check, X, AlertCircle } from 'lucide-react';
 import { ThemeProvider } from './theme';
 import { api, ApiError } from '@/lib/api';
 import type { Cart, CartLine, Product, User } from '@/lib/types';
+import { presentNotificationOnce } from '@/lib/notification-presentation';
 import { unregisterPushDevice } from '@/lib/firebase-messaging';
 
 type Context = {
@@ -32,6 +33,7 @@ type Context = {
   setQuantity: (product: Product, quantity: number) => Promise<void>;
   toggleSave: (product: Product) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
+  socialLogin: (provider: 'google' | 'apple', payload: Record<string, any>) => Promise<User>;
   logout: () => Promise<void>;
 };
 
@@ -142,14 +144,18 @@ function ShopProvider({ children }: { children: ReactNode }) {
     const seen = new Set<number>();
     const receive = (message: MessageEvent) => {
       try {
-        const event = JSON.parse(message.data);
+        const event: {
+          event?: string;
+          title?: string;
+          notification_id?: number;
+        } = JSON.parse(message.data);
         refresh();
-        if (event.event === 'notification.created' && event.title && !seen.has(event.notification_id)) {
+        if (event.event === 'notification.created' && event.title && event.notification_id && !seen.has(event.notification_id)) {
           seen.add(event.notification_id);
           if (seen.size > 200) {
             seen.delete(seen.values().next().value!);
           }
-          notify(event.title);
+          presentNotificationOnce(user.id, event.notification_id, event.title, notify);
         }
       } catch {
         /* Ignore malformed events; reconnect resynchronizes durable state. */
@@ -318,14 +324,15 @@ function ShopProvider({ children }: { children: ReactNode }) {
     notify(exists ? 'Removed from saved items' : 'Saved for later');
   }
 
-  async function login(email: string, password: string) {
-    const result = await api<{ user: User }>('auth/login', 'POST', { email, password });
-    client.setQueryData(['me'], result.user);
-    if (result.user.is_staff || result.user.is_superuser || result.user.is_business_admin) {
+  async function syncGuestSession(user: User): Promise<CartLine[]> {
+    await client.cancelQueries();
+    client.clear();
+    client.setQueryData(['me'], user);
+    if (user.is_staff || user.is_superuser || user.is_business_admin) {
       setGuest([]);
       setGuestSaved([]);
       await client.invalidateQueries({ queryKey: ['stores'] });
-      return;
+      return [];
     }
 
     const remaining: CartLine[] = [];
@@ -348,11 +355,37 @@ function ShopProvider({ children }: { children: ReactNode }) {
     setGuestSaved([]);
     await client.invalidateQueries();
     await client.invalidateQueries({ queryKey: ['saved'] });
+    return remaining;
+  }
+
+  async function login(email: string, password: string) {
+    const result = await api<{ user: User }>('auth/login', 'POST', { email, password });
+    const remaining = await syncGuestSession(result.user);
     notify(
       remaining.length
         ? 'Signed in. Some guest items could not be added because they are unavailable or belong to your own store.'
         : `Welcome back, ${result.user.first_name}`
     );
+  }
+
+  async function socialLogin(
+    provider: 'google' | 'apple',
+    payload: Record<string, any>
+  ): Promise<User> {
+    const result = await api<{ user: User; is_new_user?: boolean; provider?: string }>(
+      `auth/${provider}`,
+      'POST',
+      payload
+    );
+    const remaining = await syncGuestSession(result.user);
+    notify(
+      remaining.length
+        ? 'Signed in. Some guest items could not be added because they are unavailable or belong to your own store.'
+        : result.is_new_user
+          ? `Welcome to ProAce, ${result.user.first_name}!`
+          : `Welcome back, ${result.user.first_name}`
+    );
+    return result.user;
   }
 
   async function logout() {
@@ -388,6 +421,7 @@ function ShopProvider({ children }: { children: ReactNode }) {
         setQuantity,
         toggleSave,
         login,
+        socialLogin,
         logout,
       }}
     >

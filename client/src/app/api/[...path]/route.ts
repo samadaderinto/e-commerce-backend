@@ -243,7 +243,7 @@ async function handler(
             .catch(() => ({ detail: 'The server could not process this request.' }));
 
     const loginTokens =
-      ['auth/login', 'password/change'].includes(route) && upstream.ok
+      ['auth/login', 'password/change', 'auth/google', 'auth/apple', 'auth/social'].includes(route) && upstream.ok
         ? { access: data.access, refresh: data.refresh }
         : null;
 

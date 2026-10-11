@@ -1,3 +1,4 @@
+from core.listing_filters import ListingQuerySerializer, filter_records, record_page
 from zoneinfo import ZoneInfo
 import logging
 from datetime import timedelta
@@ -25,7 +26,7 @@ from rest_framework.generics import ListAPIView
 from rest_framework.pagination import LimitOffsetPagination
 
 
-from affiliates.models import Marketer
+from affiliates.models import Marketer, Referral
 from affiliates.serializers import MarketerSerializer
 from notification.views import (
     create_notification,
@@ -56,6 +57,7 @@ from staff.serializers import (
     StaffPermissionSerializer,
     StaffUserSerializer,
     StaffUserDetailSerializer,
+    StaffUserOrderQuerySerializer,
     StoreModerationSerializer,
     StoreAuditProductSerializer,
 )
@@ -105,7 +107,16 @@ class StaffViewSet(viewsets.GenericViewSet):
     serializer_class = StaffUserSerializer
     filter_backends = [SearchFilter, OrderingFilter]
 
-    admin_only_actions = {"staffs", "staff_detail", "block_staff", "unblock_staff", "resend_staff_verification", "block_store", "unblock_store", "process_payout", "commission_wallet", "withdraw_commission"}
+    admin_only_actions = {
+        "staffs",
+        "staff_detail",
+        "block_staff",
+        "unblock_staff",
+        "resend_staff_verification",
+        "process_payout",
+        "commission_wallet",
+        "withdraw_commission",
+    }
 
     def get_permissions(self):
         permission_classes = (
@@ -187,6 +198,15 @@ class StaffViewSet(viewsets.GenericViewSet):
                     "pending": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
                 },
                 "marketers": {"total": Marketer.objects.count()},
+                "referrals": {
+                    "total": Referral.objects.count(),
+                    "rewarded": Referral.objects.filter(status=Referral.REWARDED).count(),
+                    "pending": Referral.objects.filter(status=Referral.PENDING).count(),
+                    "rewarded_amount": format(
+                        Referral.objects.filter(status=Referral.REWARDED).aggregate(total=Sum("reward_amount"))["total"] or 0,
+                        ".2f",
+                    ),
+                },
                 "recent_orders": BackofficeOrderSerializer(
                     Order.objects.select_related("user").order_by("-created", "-pk")[:10],
                     many=True,
@@ -261,6 +281,10 @@ class StaffViewSet(viewsets.GenericViewSet):
                     | Q(first_name__icontains=search)
                     | Q(last_name__icontains=search)
                 )
+            staff_users = filter_records(
+                staff_users, request.query_params, date_field="date_joined",
+                fields={"is_active": "is_active", "staff_email_verified": "staff_email_verified"},
+            )
             return self.paginate_response(staff_users, StaffUserSerializer)
 
         serializer = StaffCreateSerializer(data=request.data)
@@ -321,11 +345,16 @@ class StaffViewSet(viewsets.GenericViewSet):
         return Response({"detail": "A fresh verification email has been queued.", "staff": StaffUserSerializer(staff_user).data})
 
     @extend_schema(request=StaffPermissionSerializer, responses=StaffUserSerializer, methods=["PATCH"])
-    @extend_schema(responses=StaffUserDetailSerializer, methods=["GET"])
+    @extend_schema(parameters=[StaffUserOrderQuerySerializer], responses=StaffUserDetailSerializer, methods=["GET"])
     @action(detail=False, methods=["get", "patch"], url_path=r"users/(?P<user_pk>\d+)")
     @transaction.atomic
     def user_detail(self, request: Request, user_pk: str | None = None) -> Response:
         user = get_object_or_404(User, pk=user_pk)
+        if (user.is_superuser or user.is_business_admin) and not is_admin(request.user):
+            return Response(
+                {"detail": "Staff accounts cannot inspect administrator profile details."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         if request.method == "GET":
             wallet = get_or_create_user_wallet(user)
             ledger = wallet.transactions.order_by('-created')
@@ -335,22 +364,87 @@ class StaffViewSet(viewsets.GenericViewSet):
                 ledger = ledger.filter(Q(description__icontains=ledger_search) | Q(reference__icontains=ledger_search) | Q(source__icontains=ledger_search))
             if ledger_type in {'credit', 'debit'}:
                 ledger = ledger.filter(transaction_type=ledger_type)
-            orders = Order.objects.filter(user=user, ordered=True).order_by('-created')
-            order_search = request.query_params.get('order_search', '').strip()
-            order_status = request.query_params.get('order_status', '').strip()
-            if order_search:
-                orders = orders.filter(orderId__icontains=order_search)
-            if order_status:
-                orders = orders.filter(status=order_status)
+            ledger_params = {
+                key.removeprefix("ledger_"): value
+                for key, value in request.query_params.items() if key.startswith("ledger_")
+            }
+            ledger = filter_records(
+                ledger, ledger_params, search_fields=("description", "reference", "source"),
+                fields={"type": "transaction_type", "source": "source"}, amount_field="amount",
+            )
+            ledger_count, ledger = record_page(ledger, ledger_params)
+            filters = StaffUserOrderQuerySerializer(data=request.query_params)
+            filters.is_valid(raise_exception=True)
+            criteria = filters.validated_data
+            all_orders = Order.objects.filter(user=user, ordered=True)
+            from django.db.models import Sum
+
+            lifetime_spent = all_orders.exclude(status="cancelled").aggregate(value=Sum("total"))["value"] or 0
+            orders = all_orders.order_by(criteria["order_ordering"], "-pk")
+            if criteria["order_search"]:
+                search = criteria["order_search"].strip()
+                orders = orders.filter(
+                    Q(orderId__icontains=search)
+                    | Q(coupon_code__icontains=search)
+                    | Q(carrier__icontains=search)
+                    | Q(tracking_number__icontains=search)
+                    | Q(fulfillments__carrier__icontains=search)
+                ).distinct()
+            if criteria["order_status"]:
+                orders = orders.filter(status=criteria["order_status"])
+            if criteria["order_payment"]:
+                orders = orders.filter(payment_type=criteria["order_payment"])
+            if criteria["order_carrier"]:
+                orders = orders.filter(
+                    Q(carrier__iexact=criteria["order_carrier"])
+                    | Q(fulfillments__carrier__iexact=criteria["order_carrier"])
+                ).distinct()
+            offset = criteria["order_offset"]
             activities = Notification.objects.filter(recipient=user).order_by('-timestamp')[:30]
+
+            referral_record = Referral.objects.select_related("marketer__user").filter(referred_user=user).first()
+            referral_data = None
+            if referral_record:
+                referral_data = {
+                    "id": referral_record.id,
+                    "status": referral_record.status,
+                    "reward_amount": format(referral_record.reward_amount, ".2f"),
+                    "created": referral_record.created.isoformat(),
+                    "referrer_name": referral_record.marketer.name,
+                    "referrer_code": referral_record.marketer.marketer_id,
+                    "referrer_email": referral_record.marketer.user.email,
+                    "referrer_user_id": referral_record.marketer.user_id,
+                }
+
+            marketer_record = Marketer.objects.filter(user=user).first()
+            affiliate_data = None
+            if marketer_record:
+                affiliate_referrals = Referral.objects.filter(marketer=marketer_record)
+                rewarded_count = affiliate_referrals.filter(status=Referral.REWARDED).count()
+                credit_earned = affiliate_referrals.filter(status=Referral.REWARDED).aggregate(total=Sum("reward_amount"))["total"] or 0
+                affiliate_data = {
+                    "id": marketer_record.id,
+                    "name": marketer_record.name,
+                    "referral_code": marketer_record.marketer_id,
+                    "referral_count": affiliate_referrals.count(),
+                    "rewarded_count": rewarded_count,
+                    "credit_earned": format(credit_earned, ".2f"),
+                    "created": marketer_record.created.isoformat(),
+                }
+
             return Response(StaffUserDetailSerializer({
                 'user': user,
-                'wallet': {'balance': format(wallet.balance, '.2f'), 'transactions': [
+                'wallet': {'balance': format(wallet.balance, '.2f'), 'count': ledger_count, 'transactions': [
                     {'id': tx.pk, 'type': tx.transaction_type, 'source': tx.source, 'amount': format(tx.amount, '.2f'), 'description': tx.description, 'created': tx.created}
-                    for tx in ledger[:100]
+                    for tx in ledger
                 ]},
-                'orders': [{'id': order.pk, 'reference': order.orderId, 'created': order.created, 'updated': order.updated, 'status': order.status, 'total': format(order.total, '.2f')} for order in orders[:100]],
+                'order_count': orders.count(),
+                'total_orders': all_orders.count(),
+                'lifetime_spent': lifetime_spent,
+                'orders': [{'id': order.pk, 'reference': order.orderId, 'created': order.created, 'updated': order.updated, 'status': order.status, 'total': format(order.total, '.2f')} for order in orders[offset:offset + 15]],
                 'activity': [{'id': item.pk, 'verb': item.verb, 'description': item.description, 'created': item.timestamp.isoformat(), 'level': item.level} for item in activities],
+                'referral': referral_data,
+                'affiliate': affiliate_data,
             }).data)
         if not is_admin(request.user):
             return Response(
@@ -382,6 +476,10 @@ class StaffViewSet(viewsets.GenericViewSet):
         if ordering not in allowed_ordering:
             return Response({"ordering": "Order by created, name, or status."}, status=status.HTTP_400_BAD_REQUEST)
         stores = stores.order_by(ordering, "-pk")
+        stores = filter_records(
+            stores, request.query_params,
+            fields={"is_official": "is_official"},
+        )
         return self.paginate_response(stores, BackofficeStoreSerializer)
 
     @action(detail=False, methods=["get", "patch"], url_path=r"stores/(?P<store_pk>\d+)")
@@ -426,6 +524,7 @@ class StaffViewSet(viewsets.GenericViewSet):
         ordering = request.query_params.get("ordering")
         if ordering in ("created", "-created", "title", "-title", "price", "-price"):
             products = products.order_by(ordering, "-pk")
+        products = filter_records(products, request.query_params, fields={"category": "category"})
         return self.paginate_response(products, StoreAuditProductSerializer)
 
     @action(detail=False, methods=["get"], url_path=r"products/(?P<product_pk>\d+)/digital-asset")
@@ -437,6 +536,11 @@ class StaffViewSet(viewsets.GenericViewSet):
     @transaction.atomic
     def block_store(self, request: Request, store_pk: str | None = None) -> Response:
         store = get_object_or_404(Store.objects.select_for_update(), pk=store_pk)
+        if store.is_official:
+            return Response(
+                {"detail": "Official company stores cannot be blocked."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         serializer = StoreModerationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         if store.status == Store.STATUS_BLOCKED and store.blocked_reason == serializer.validated_data.get("reason", ""):
@@ -475,6 +579,11 @@ class StaffViewSet(viewsets.GenericViewSet):
         payment_type = request.query_params.get("payment_type")
         if payment_type:
             orders = orders.filter(payment_type=payment_type)
+        carrier = request.query_params.get("carrier") or request.query_params.get("courier")
+        if carrier:
+            orders = orders.filter(
+                Q(carrier__iexact=carrier) | Q(fulfillments__carrier__iexact=carrier)
+            ).distinct()
         search = request.query_params.get("search")
         if search:
             orders = orders.filter(
@@ -482,8 +591,10 @@ class StaffViewSet(viewsets.GenericViewSet):
                 | Q(user__email__icontains=search)
                 | Q(buyer_email__icontains=search)
                 | Q(coupon_code__icontains=search)
+                | Q(carrier__icontains=search)
+                | Q(fulfillments__carrier__icontains=search)
                 | Q(tracking_number__icontains=search)
-            )
+            ).distinct()
         return self.paginate_response(orders, BackofficeOrderSerializer)
 
     @action(detail=False, methods=["post"], url_path=r"orders/(?P<order_pk>\d+)/status")
@@ -510,7 +621,21 @@ class StaffViewSet(viewsets.GenericViewSet):
                 coupons = coupons.filter(active=False)
             search = request.query_params.get("search")
             if search:
-                coupons = coupons.filter(code__icontains=search)
+                coupons = coupons.filter(Q(code__icontains=search) | Q(created_by__email__icontains=search))
+            coupons = filter_records(
+                coupons, request.query_params,
+                fields={"type": "type", "created_by": "created_by__email"},
+            )
+            validity = request.query_params.get("validity", "")
+            if validity == "expired":
+                coupons = coupons.filter(valid_to__lt=timezone.now())
+            elif validity == "current":
+                coupons = coupons.filter(valid_from__lte=timezone.now(), valid_to__gte=timezone.now())
+            elif validity == "upcoming":
+                coupons = coupons.filter(valid_from__gt=timezone.now())
+            elif validity:
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({"validity": "Choose current, expired or upcoming."})
             return self.paginate_response(coupons, BackofficeCouponSerializer)
         serializer = BackofficeCouponSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -578,15 +703,23 @@ class StaffViewSet(viewsets.GenericViewSet):
             return Response({"detail": "Refund request declined.", "refund": RefundsSerializer(refund).data})
 
     @action(detail=False, methods=["get"], url_path="payouts")
-    def payouts(self, request):
+    @extend_schema(parameters=[ListingQuerySerializer], responses=StorePayoutSerializer(many=True))
+    def payouts(self, request: Request) -> Response:
         payouts = StorePayout.objects.select_related("store", "store__user", "wallet").order_by("-created", "-pk")
         payout_status = request.query_params.get("status")
         if payout_status:
             payouts = payouts.filter(status=payout_status)
+        payouts = filter_records(
+            payouts, request.query_params,
+            search_fields=("reference", "store__name", "store__user__email", "wallet__user__email", "payout_method"),
+            fields={"status": "status", "payout_method": "payout_method"},
+            amount_field="amount",
+        )
         return self.paginate_response(payouts, StorePayoutSerializer)
 
     @action(detail=False, methods=["get"], url_path="commission-wallet")
-    def commission_wallet(self, request):
+    @extend_schema(parameters=[ListingQuerySerializer], responses=dict)
+    def commission_wallet(self, request: Request) -> Response:
         commission_earned = StoreEarningsLedger.objects.filter(
             status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
             store__is_official=False,
@@ -597,13 +730,20 @@ class StaffViewSet(viewsets.GenericViewSet):
         ).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
         earned = commission_earned + official_store_earned
         withdrawn = PlatformCommissionWithdrawal.objects.exclude(status=PlatformCommissionWithdrawal.STATUS_FAILED).aggregate(total=Sum("amount"))["total"] or Decimal("0")
-        rows = PlatformCommissionWithdrawal.objects.select_related('requested_by').order_by('-created')[:50]
+        rows = filter_records(
+            PlatformCommissionWithdrawal.objects.select_related('requested_by').order_by('-created', '-pk'),
+            request.query_params,
+            search_fields=("reference", "payout_method", "requested_by__email"),
+            fields={"status": "status", "payout_method": "payout_method"}, amount_field="amount",
+        )
+        withdrawal_count, rows = record_page(rows, request.query_params)
         return Response({
             "earned": format(earned, '.2f'),
             "marketplace_commission": format(commission_earned, '.2f'),
             "official_stores_revenue": format(official_store_earned, '.2f'),
             "withdrawn_or_pending": format(withdrawn, '.2f'),
             "available": format(max(Decimal('0'), earned - withdrawn), '.2f'),
+            "withdrawal_count": withdrawal_count,
             "withdrawals": [
                 {
                     "id": row.pk,
@@ -647,6 +787,12 @@ class StaffViewSet(viewsets.GenericViewSet):
             requested_by=request.user,
             reference=f'PCW-{generate(size=12)}'
         )
+        from notification.events import operators
+        for recipient in operators(admins_only=True):
+            create_notification(
+                recipient, f"Treasury withdrawal requested: {row.reference}", target=row,
+                data={"event": "treasury_withdrawal_requested", "withdrawal_id": row.pk, "amount": str(row.amount)},
+            )
         return Response({'id': row.pk, 'reference': row.reference, 'status': row.status}, status=201)
 
     @action(detail=False, methods=["post"], url_path=r"payouts/(?P<payout_pk>\d+)/process")
@@ -710,368 +856,3 @@ class StaffViewSet(viewsets.GenericViewSet):
                 )
             return Response({"detail": "Payout marked as rejected.", "payout": StorePayoutSerializer(payout).data})
 
-
-
-def create_staff(request):
-    if request.method == methods["post"]:
-        data = JSONParser().parse(request)
-        if User.objects.filter(email=data["email"]).exists():
-            return Response(
-                {"error": "Email already registered"},
-                status=status.HTTP_400_BAD_REQUEST)
-        else:
-            user = User.objects.create_staffuser(**data)
-            serializer = StaffSerializer(user)
-
-            uidb64 = urlsafe_base64_encode(force_bytes(user.id))
-            token = TokenGenerator().make_token(user)
-            current_site = get_current_site(request).domain
-            relativeLink = reverse(
-                "activate", kwargs={"uidb64": uidb64, "token": token}
-            )
-            absolute_url = f"http://{current_site}{relativeLink}"
-
-            token = auth_token(user)
-            send_mail("onboarding-user", user.email,
-                      data={"firstname": user.first_name, "absolute_url": absolute_url})
-
-            return Response(
-                serializer.data,
-                headers={"Authorization": token},
-                status=status.HTTP_201_CREATED,
-            )
-
-
-
-def create_admin(request):
-    if request.method == methods["post"]:
-        data = JSONParser().parse(request)
-        if User.objects.filter(email=data["email"]).exists():
-            return Response(
-                {"error": "Email already registered"},
-                status=status.HTTP_400_BAD_REQUEST)
-        else:
-            user = User.objects.create_superuser(**data)
-            serializer = AdminSerializer(user)
-
-            uidb64 = urlsafe_base64_encode(force_bytes(user.id))
-            token = TokenGenerator().make_token(user)
-            current_site = get_current_site(request).domain
-            relativeLink = reverse(
-                "activate", kwargs={"uidb64": uidb64, "token": token}
-            )
-            absolute_url = f"http://{current_site}{relativeLink}"
-
-            token = auth_token(user)
-            # send_mail("onboarding-user", user.email,
-            #           data={"firstname": user.first_name, "absolute_url": absolute_url})
-
-            return Response(
-                serializer.data,
-                headers={"Authorization": token},
-                status=status.HTTP_201_CREATED,
-            )
-
-
-
-def give_staff_permission(request):
-    data = JSONParser().parse(request)
-    serializer = UserSerializer(data=data)
-    serializer.is_valid(raise_exception=True)
-    email = serializer.validated_data["email"]
-
-    try:
-        user = User.objects.get(email=email, is_staff=True)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    
-    # user.has_perm = True
-    user.save()
-    return Response({"success": "Permission granted for this staff member"}, status=status.HTTP_200_OK)
-
-
-
-def edit_staff_detail(request, userId):
-    data = JSONParser().parse(request)
-
-    try:
-        user = User.objects.get(
-            pk=userId, email=data.get("email"), is_staff=True)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["post"]:
-        serializer = UserSerializer(user, data=data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-
-
-
-
-def delete_staff_account_by_admin(request):
-    if request.method == methods["delete"]:
-        data = JSONParser().parse(request)
-        serializer = UserSerializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        serializer.delete()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-
-
-
-def revoke_staff_permission(request):
-    data = JSONParser().parse(request)
-        
-    try:
-        staff = User.objects.get(email=data.get("email"),is_staff=True)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    
-    staff.is_active = False
-    staff.save()
-    return Response({"success": "Permission revoked for this staff member"}, status=status.HTTP_200_OK)
-
-
-
-def get_staffs(request):
-    
-    staffs = User.objects.filter(is_staff=True).order_by("created").reverse()
-    serializer = StaffSerializer(staffs, many=True)
-    return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-def get_staff(request, staffId):
-    
-    try:
-        staff = User.objects.get(id=staffId, is_staff=True)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["get"]:
-        
-        serializer = UserSerializer(staff)
-        
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-
-def get_coupons(request):
-    try:
-        coupons = Coupon.objects.all()
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["get"]:
-        serializer = CouponSerializer(coupons, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-def delete_coupon(request, codeId):
-    try:
-        coupons = Coupon.objects.get(pk=codeId)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["delete"]:
-        coupons.delete()
-    return Response(status=status.HTTP_202_ACCEPTED)
-
-
-
-def create_coupon(request):
-    
-    if request.method == methods["post"]:
-        data = JSONParser().parse(request)
-        serializer = CouponSerializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-
-def edit_coupon(request, couponId):
-    if request.method == methods["put"]:
-        coupon = Coupon.objects.get(code=couponId)
-        serializer = CouponSerializer(coupon )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-       
-
-
-
-def get_users(request):
-    try:
-        users = User.objects.all().order_by("created").reverse()
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["get"]:
-        serializer = UserSerializer(users, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-def get_refunds(request):
-    try:
-        refunds = Refund.objects.all().order_by("created").reverse()
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["get"]:
-        serializer = RefundsSerializer(refunds, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-def get_refund(request, refundId):
-    try:
-        refunds = Refund.objects.get(id=refundId)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["get"]:
-        serializer = RefundsSerializer(refunds)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-def refund_response(request,orderId, userId):
-    if request.method == methods["post"]:
-        user = User.objects.get(id=userId)
-     
-        data = {
-            "firstname": user.first_name,
-            "orderId": orderId,
-            "message": "",
-        }
-        send_mail("refund-response", user.email, data=data)
-        return Response(status=status.HTTP_200_OK)
-
-
-
-def get_marketers(request):
-    try:
-        marketer = Marketer.objects.all().order_by("created").reverse()
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-
-    if request.method == methods["get"]:
-        serializer = MarketerSerializer(marketer, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-def get_marketer(request, marketerId):
-    try:
-       marketer = Marketer.objects.get(id=marketerId)
-    except:   
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    
-    if request.method == methods["get"]:
-        
-        serializer = MarketerSerializer(marketer)
-       
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
-
-def suspend_marketer(request, marketerId):
-    try:
-       marketer = Marketer.objects.get(id=marketerId)
-    except:   
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    
-    if request.method == methods["get"]:
-        
-        serializer = MarketerSerializer(marketer)
-       
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-def delete_marketer_account_by_staff(request,marketerId):
-    try:
-       marketer = Marketer.objects.get(id=marketerId)
-    except:   
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    
-    if request.method == methods["delete"]:
-
-        marketer.delete()
-        return Response(status=status.HTTP_202_ACCEPTED)
-           
-
-class GetOrders(ListAPIView):
-   
-
-    serializer_class = OrdersSerializer
-           
-
-    search_field = (
-        "id",
-        "status",
-        "orderId",
-        "ordered",
-        "payment_type",
-        "ordered_date",
-    )
-
-    filter_backends = [SearchFilter, OrderingFilter]
-    ordering_fields = ["orderId","ordered_date"]
-
-
-    def get_queryset(self):
-        return Order.objects.all()
-
-    def get_serializer_context(self):
-        return {"request": self.request}
-
-
-class CommentList(ListCreateAPIView):
-    queryset = Comment.objects.all()
-    serializer_class = CommentSerializer
-
-    def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
-
-
-class CommentDetail(RetrieveUpdateDestroyAPIView):
-    queryset = Comment.objects.all()
-    serializer_class = CommentSerializer
-
-
-
-def get_stores(request):
-    try:
-        store = Store.objects.all().order_by("user").reverse()
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    if request.method == methods["get"]:
-        serializer = StoreSerializer(store, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-
-def get_store_by_staff(request, storeId):
-    try:
-        store = Store.objects.filter(id=storeId)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    if request.method == methods["get"]:
-        serializer_context = {"request": request}
-        serializer = StoreSerializer(store, context=serializer_context, many=True)
-        return Response(serializer.data,status=status.HTTP_200_OK)
-    
-    
-
-def get_store_addresses_by_staff(request, storeId):
-    try:
-        store = StoreAddress.objects.filter(store=storeId)
-    except:
-        return Response(status=status.HTTP_404_NOT_FOUND)
-    
-    if request.method == methods["get"]:
-     
-        serializer = StoreAddressSerializer(store, many=True)
-        return Response(serializer.data,status=status.HTTP_200_OK)

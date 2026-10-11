@@ -9,10 +9,11 @@ from payment.models import ShippingQuote
 
 def fingerprint(cart, address):
     from storefront.serializers import AddressSerializer, unit_price
+    has_physical = any(not item.product.is_digital for item in cart.cart_items.select_related('product').all())
     rows = [(item.product_id, item.variant, item.quantity, str(unit_price(item.product, item.variant)),
              str(item.product.weight), item.product.is_digital, item.product.store_id)
             for item in cart.cart_items.select_related('product').order_by('product_id')]
-    payload = {'cart': cart.pk, 'rows': rows, 'address': AddressSerializer(address).data if address else None}
+    payload = {'cart': cart.pk, 'rows': rows, 'address': AddressSerializer(address).data if (address and has_physical) else None}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 

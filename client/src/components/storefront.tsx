@@ -1,8 +1,11 @@
 "use client";
 
-import { activityDate } from './activity';
+import { CollectionCount, CollectionFilters, CollectionPagination, financialFields, useCollectionFilters, useDebouncedValue } from './collection-filters';
+
+
+import { DateStamp, activityDate } from './activity';
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { FormEvent, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -31,6 +34,29 @@ import {
   Trash2,
   X,
   ShoppingBag,
+  Blocks,
+  Baby,
+  House,
+  CookingPot,
+  Sparkles,
+  Activity,
+  PawPrint,
+  Gamepad2,
+  Tablet,
+  Fish,
+  Coffee,
+  Flower2,
+  Car,
+  Gem,
+  AppWindow,
+  GraduationCap,
+  FileText,
+  Palette,
+  Camera,
+  Music,
+  Briefcase,
+  Wrench,
+  Share2,
 } from "lucide-react";
 import { api, ApiError, categories, money } from "@/lib/api";
 import type { Page, Product, PublicStore, Review } from "@/lib/types";
@@ -57,6 +83,29 @@ const categoryIcons = [
   Laptop,
   Dumbbell,
   BookOpen,
+  Blocks,
+  Baby,
+  House,
+  CookingPot,
+  Sparkles,
+  Activity,
+  PawPrint,
+  Gamepad2,
+  Tablet,
+  Fish,
+  Shirt,
+  Coffee,
+  Flower2,
+  Car,
+  Gem,
+  AppWindow,
+  GraduationCap,
+  FileText,
+  Palette,
+  Camera,
+  Music,
+  Briefcase,
+  Wrench,
 ];
 
 export function HomePage() {
@@ -97,7 +146,7 @@ export function HomePage() {
       </section>
       <div className="category-tiles container">
         {categories.map((category, index) => {
-          const Icon = categoryIcons[index];
+          const Icon = categoryIcons[index] ?? ShoppingBag;
           return (
             <Link href={`/shop?category=${category.key}`} key={category.key}>
               <span className={`category-symbol symbol-${index}`}>
@@ -175,11 +224,18 @@ export function HomePage() {
 export function ShopPage() {
   const params = useSearchParams();
   const { user } = useShop();
-  const router = useRouter();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const query = params.toString();
   const products = useQuery({
-    queryKey: ["products", query],
+    queryKey: ["products", query, user?.id],
+    placeholderData: (previousData, previousQuery) => {
+      const previousParams = new URLSearchParams(String(previousQuery?.queryKey[1] ?? ""));
+      return previousQuery?.queryKey[2] === user?.id
+        && previousParams.get("store") === params.get("store")
+        && previousParams.get("preview") === params.get("preview")
+        ? previousData
+        : undefined;
+    },
     queryFn: () => api<Page<Product>>(`products?${query}`),
   });
   const category = categories.find(
@@ -187,7 +243,7 @@ export function ShopPage() {
   );
   const storeId = params.get("store");
   const storeQuery = useQuery({
-    queryKey: ["public-store", storeId],
+    queryKey: ["public-store", storeId, user?.id],
     queryFn: () => api<PublicStore>(`stores/${storeId}/public`),
     enabled: !!storeId && /^\d+$/.test(storeId),
   });
@@ -217,7 +273,17 @@ export function ShopPage() {
     if (value) next.set(key, value);
     else next.delete(key);
     if (key !== "page") next.delete("page");
-    router.push(`/shop?${next}`, { scroll: false });
+    window.history.pushState(null, "", `/shop?${next}`);
+  }
+
+  function resetFilters(): void {
+    const next = new URLSearchParams();
+    if (storeId) next.set("store", storeId);
+    if (storeId && params.get("preview") === "1") {
+      next.set("preview", "1");
+    }
+    const queryString: string = next.toString();
+    window.history.pushState(null, "", queryString ? `/shop?${queryString}` : "/shop");
   }
 
   return (
@@ -461,10 +527,7 @@ export function ShopPage() {
                 <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
                   <Calendar size={14} />
                   Joined{" "}
-                  {new Date(storeData.created).toLocaleDateString("en-US", {
-                    month: "short",
-                    year: "numeric"
-                  })}
+                  <DateStamp value={storeData.created} dateOnly />
                 </span>
               )}
               <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", fontWeight: 600, color: "var(--ink)" }}>
@@ -533,7 +596,7 @@ export function ShopPage() {
             <h3>Filters</h3>
             <button
               className="text-button"
-              onClick={() => router.push("/shop")}
+              onClick={resetFilters}
             >
               Reset
             </button>
@@ -564,6 +627,17 @@ export function ShopPage() {
               {item.name}
             </label>
           ))}
+          <h4>Product type</h4>
+          <select aria-label="Filter delivery type" value={params.get('is_digital') || ''} onChange={event => update('is_digital', event.target.value)}>
+            <option value="">All delivery types</option>
+            <option value="true">Digital</option>
+            <option value="false">Physical</option>
+          </select>
+          <select aria-label="Filter listing type" value={params.get('product_type') || ''} onChange={event => update('product_type', event.target.value)}>
+            <option value="">All listing types</option>
+            <option value="standard">Standard listings</option>
+            <option value="affiliate_clickbank">Partner listings</option>
+          </select>
           <h4>Price range</h4>
           <div className="price-inputs">
             <label>
@@ -641,6 +715,9 @@ export function ShopPage() {
               </select>
             </label>
           </div>
+          {products.isFetching && !products.isLoading && (
+            <p role="status" aria-live="polite">Updating results…</p>
+          )}
           {products.isLoading ? (
             <Loading cards />
           ) : products.error ? (
@@ -671,7 +748,7 @@ export function ProductPage({ id }: { id: string }) {
   const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const client = useQueryClient();
   const productQuery = useQuery({
-    queryKey: ["product", id],
+    queryKey: ["product", id, user?.id],
     queryFn: () => api<Product>(`products/${id}`),
   });
   const reviews = useQuery({
@@ -711,10 +788,17 @@ export function ProductPage({ id }: { id: string }) {
     );
   }
   const product = productQuery.data!;
+  const isAffiliate = product.product_type === "affiliate_clickbank";
+  const isSoldOut = !product.is_digital && !isAffiliate && (product.available <= 0 || product.label === "sold out");
   const activeVariant = product.variants && product.variants.length > 0 ? product.variants[selectedVariantIdx] : null;
-  const effectiveStock = product.is_digital ? 99 : activeVariant && typeof activeVariant.available === 'number' ? activeVariant.available : product.available;
+  const variantStock = activeVariant && typeof activeVariant.available === "number"
+    ? Math.min(product.available, activeVariant.available)
+    : product.available;
+  const effectiveStock = product.is_digital ? 99 : isSoldOut ? 0 : Math.max(0, variantStock);
   const variantPriceDelta = activeVariant?.price_delta ? Number(activeVariant.price_delta) : 0;
-  const effectiveSalePrice = (Number(product.sale_price) + variantPriceDelta).toFixed(2);
+  const effectiveSalePrice = isAffiliate
+    ? Number(product.price).toFixed(2)
+    : (Number(product.sale_price) + variantPriceDelta).toFixed(2);
   const effectiveOriginalPrice = (Number(product.price) + variantPriceDelta).toFixed(2);
   const liked = saved.some((row) => row.id === product.id);
   async function review(event: FormEvent<HTMLFormElement>) {
@@ -756,6 +840,48 @@ export function ProductPage({ id }: { id: string }) {
       notify((error as Error).message, true);
     }
   }
+
+  const [copied, setCopied] = useState(false);
+
+  async function handleShare() {
+    const url = typeof window !== 'undefined' ? window.location.href : `/products/${id}`;
+    const shareData = {
+      title: product.title,
+      text: `Check out ${product.title} on ProAce!`,
+      url,
+    };
+
+    let shared = false;
+    if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+      try {
+        await navigator.share(shareData);
+        shared = true;
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+      }
+    }
+
+    if (!shared) {
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+          await navigator.clipboard.writeText(url);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = url;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+        setCopied(true);
+        notify('Product link copied to clipboard!');
+        setTimeout(() => setCopied(false), 2500);
+      } catch {
+        notify('Failed to copy link', true);
+      }
+    }
+  }
+
   return (
     <div className="container product-page">
       <div className="breadcrumb">
@@ -765,7 +891,7 @@ export function ProductPage({ id }: { id: string }) {
         <ChevronRight size={12} />
         <span>{product.title}</span>
       </div>
-      {(product.store_verified === false || preview || !product.visibility) && (
+      {(product.store_verified === false || preview || product.visibility === false) && (
         <div className="storefront-preview-banner">
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <span style={{ fontSize: "20px" }}>🔒</span>
@@ -776,18 +902,29 @@ export function ProductPage({ id }: { id: string }) {
               <div className="storefront-preview-desc">
                 {product.store_verified === false
                   ? "This product belongs to an unverified store. It is visible only to you and staff, and is hidden from public shoppers."
-                  : !product.visibility
+                  : product.visibility === false
                     ? "This product listing is an unpublished draft. It is visible only to you and staff, and is hidden from marketplace shoppers."
                     : "This listing is being viewed in operator preview mode. Purchase actions are disabled for backoffice staff."}
               </div>
             </div>
           </div>
-          <Link
-            href="/merchant"
-            className="button secondary storefront-preview-button"
-          >
-            Store Manager
-          </Link>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="button secondary storefront-preview-button"
+              onClick={handleShare}
+              title="Copy preview link"
+            >
+              {copied ? <Check size={14} /> : <Share2 size={14} />}
+              {copied ? "Link copied" : "Share preview"}
+            </button>
+            <Link
+              href="/merchant"
+              className="button secondary storefront-preview-button"
+            >
+              Store Manager
+            </Link>
+          </div>
         </div>
       )}
       <div className="product-detail">
@@ -800,7 +937,7 @@ export function ProductPage({ id }: { id: string }) {
               ...(product.variants || []).map((variant) => variant.image_url || ""),
             ]}
             title={product.title}
-            discount={product.discount}
+            discount={isAffiliate ? 0 : product.discount}
             activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? product.image}
             onImageChange={setSelectedGalleryImage}
           />
@@ -824,36 +961,23 @@ export function ProductPage({ id }: { id: string }) {
           )}
         </div>
         <div className="product-information">
-          {product.product_type === "affiliate_clickbank" ? (
-            <span
-              className="eyebrow partner-eyebrow"
-            >
-              <span>Curated Partner Offer</span>
-              <span
-                className="seller-tier-pill partner-pill"
-              >
-                ClickBank
-              </span>
-            </span>
-          ) : (
-            <span
-              className="eyebrow green"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-              }}
-            >
-              {product.brand || product.store_name}
-              {product.store_verified !== false && (
-                <VerifiedBadge
-                  tier={product.is_official_store ? "official" : "starter"}
-                  tierData={product.seller_tier}
-                  size={14}
-                />
-              )}
-            </span>
-          )}
+          <span
+            className="eyebrow green"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            {product.brand || product.store_name || product.category}
+            {product.store_verified !== false && (
+              <VerifiedBadge
+                tier={product.is_official_store ? "official" : "starter"}
+                tierData={product.seller_tier}
+                size={14}
+              />
+            )}
+          </span>
           <h1>{product.title}</h1>
           <div className="rating-line" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -876,10 +1000,27 @@ export function ProductPage({ id }: { id: string }) {
                 </span>
               </>
             )}
+            <span style={{ color: "var(--line)" }}>•</span>
+            <button
+              type="button"
+              className="text-button"
+              onClick={handleShare}
+              title="Copy product link"
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}
+            >
+              {copied ? <Check size={14} style={{ color: "var(--green)" }} /> : <Share2 size={14} />}
+              <span style={{ color: copied ? "var(--green)" : "inherit", fontWeight: copied ? 600 : "normal" }}>
+                {copied ? "Link copied" : "Share"}
+              </span>
+            </button>
           </div>
           <div className="detail-price" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <strong>{money(effectiveSalePrice)}</strong>
-            {product.discount > 0 && (
+            {isAffiliate ? (
+              <span className="partner-price-note">Price available on partner site</span>
+            ) : (
+              <strong>{money(effectiveSalePrice)}</strong>
+            )}
+            {!isAffiliate && product.discount > 0 && (
               <>
                 <del>{money(effectiveOriginalPrice)}</del>
                 <span>
@@ -888,7 +1029,7 @@ export function ProductPage({ id }: { id: string }) {
                 </span>
               </>
             )}
-            {product.flash_sale_end && (
+            {!isAffiliate && product.flash_sale_end && (
               <FlashCountdown end={product.flash_sale_end} />
             )}
           </div>
@@ -910,6 +1051,7 @@ export function ProductPage({ id }: { id: string }) {
                       onClick={() => {
                         setSelectedVariantIdx(idx);
                         setSelectedGalleryImage(variant.image_url || product.image);
+                        setQuantity(1);
                       }}
                       style={{
                         padding: "6px 14px",
@@ -932,7 +1074,7 @@ export function ProductPage({ id }: { id: string }) {
                           ({variant.price_delta.startsWith("+") || variant.price_delta.startsWith("-") ? variant.price_delta : `+$${variant.price_delta}`})
                         </span>
                       )}
-                      {typeof variant.available === "number" && variant.available <= 0 && (
+                      {!product.is_digital && ((typeof variant.available === "number" && variant.available <= 0) || isSoldOut) && (
                         <span style={{ fontSize: "11px", color: "var(--muted)" }}>(Sold out)</span>
                       )}
                     </button>
@@ -954,19 +1096,24 @@ export function ProductPage({ id }: { id: string }) {
                 ? `Only ${effectiveStock} left in stock`
                 : "Currently out of stock"}
           </div>
-          {!product.is_digital && product.product_type !== 'affiliate_clickbank' && <label className="field">
-            <span>Quantity</span>
-            <Quantity
-              value={quantity}
-              max={effectiveStock}
-              onChange={setQuantity}
-            />
-          </label>}
+          {!product.is_digital && product.product_type !== 'affiliate_clickbank' && (
+            <label className="field">
+              <span>Quantity</span>
+              <Quantity
+                value={effectiveStock <= 0 ? 0 : quantity}
+                max={effectiveStock}
+                onChange={setQuantity}
+                disabled={effectiveStock <= 0}
+              />
+            </label>
+          )}
           <div className="purchase-actions">
             <AddToBagButton quantity={quantity} product={{ ...product, selected_variant: activeVariant?.name || '', available: effectiveStock, title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title, sale_price: effectiveSalePrice, price: effectiveOriginalPrice }} />
             <button
+              type="button"
               className={`button secondary ${liked ? "saved" : ""}`}
-              aria-label="Save product"
+              aria-label={liked ? "Remove from saved items" : "Save product"}
+              title={liked ? "Saved for later" : "Save for later"}
               disabled={preview}
               onClick={() =>
                 toggleSave(product).catch((error) =>
@@ -976,34 +1123,33 @@ export function ProductPage({ id }: { id: string }) {
             >
               <Heart size={20} fill={liked ? "currentColor" : "none"} />
             </button>
+            <button
+              type="button"
+              className={`button secondary ${copied ? "copied" : ""}`}
+              aria-label="Share product"
+              title={copied ? "Link copied!" : "Share product link"}
+              onClick={handleShare}
+            >
+              {copied ? <Check size={20} style={{ color: "var(--green)" }} /> : <Share2 size={20} />}
+            </button>
           </div>
           <div className="delivery-note">
             <Truck size={21} />
             <div>
-              {product.product_type === 'affiliate_clickbank' ? (
-                <>
-                  <strong>Official Brand Partner Delivery</strong>
-                  <p>
-                    Fulfilled and shipped directly by official partner ({product.affiliate_vendor_nickname || 'ClickBank Vendor'}). Access links and shipping tracking will be emailed directly upon completion.
-                  </p>
-                </>
-              ) : product.is_digital ? (
-                <>
-                  <strong>Worldwide digital download</strong>
-                  <p>
-                    Your download link appears in your order after checkout. No
-                    shipping fee.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <strong>US delivery only</strong>
-                  <p>
-                    Physical products are currently delivered only within the
-                    United States.
-                  </p>
-                </>
-              )}
+              <strong>
+                {product.product_type === 'affiliate_clickbank'
+                  ? 'Fulfilled by partner'
+                  : product.is_digital
+                    ? 'Worldwide digital download'
+                    : 'US delivery only'}
+              </strong>
+              <p>
+                {product.product_type === 'affiliate_clickbank'
+                  ? 'Order processing and shipping are handled directly by ClickBank and the partner vendor.'
+                  : product.is_digital
+                    ? 'Your download link appears in your order after checkout. No shipping fee.'
+                    : 'Physical products are currently delivered only within the United States.'}
+              </p>
             </div>
           </div>
           <div className="delivery-note">
@@ -1017,49 +1163,7 @@ export function ProductPage({ id }: { id: string }) {
               </p>
             </div>
           </div>
-          {product.product_type === 'affiliate_clickbank' ? (
-            <div
-              className="seller-link"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "12px 16px",
-                background: "var(--soft)",
-                border: "1px solid var(--line)",
-                borderRadius: "10px",
-                marginTop: "16px"
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div
-                  style={{
-                    width: "36px",
-                    height: "36px",
-                    borderRadius: "50%",
-                    background: "var(--partner-surface)",
-                    display: "grid",
-                    placeItems: "center",
-                    color: "var(--partner-ink)",
-                    flexShrink: 0
-                  }}
-                >
-                  <ShieldCheck size={18} />
-                </div>
-                <div>
-                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "13px" }}>
-                    Platform Curated · <strong style={{ color: "var(--ink)" }}>ProAce Network</strong>
-                  </span>
-                  <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
-                    {product.affiliate_vendor_nickname ? `Fulfilled on ClickBank by ${product.affiliate_vendor_nickname}` : 'External verified partner offer'}
-                  </p>
-                </div>
-              </div>
-              <span className="seller-tier-pill partner-pill">
-                ClickBank Partner
-              </span>
-            </div>
-          ) : (
+          {product.store ? (
             <Link
               className="seller-link"
               href={`/shop?store=${product.store}`}
@@ -1073,7 +1177,7 @@ export function ProductPage({ id }: { id: string }) {
                 borderRadius: "10px",
                 textDecoration: "none",
                 color: "inherit",
-                marginTop: "16px"
+                marginTop: "16px",
               }}
             >
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1086,14 +1190,14 @@ export function ProductPage({ id }: { id: string }) {
                     display: "grid",
                     placeItems: "center",
                     color: product.is_official_store ? "#d97706" : "var(--green)",
-                    flexShrink: 0
+                    flexShrink: 0,
                   }}
                 >
                   <StoreIcon size={18} />
                 </div>
                 <div>
                   <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "13px" }}>
-                    Sold by <strong style={{ color: "var(--ink)" }}>{product.store_name}</strong>
+                    Sold by <strong style={{ color: "var(--ink)" }}>{product.store_name || product.brand || "Store"}</strong>
                     <VerifiedBadge
                       tier={product.is_official_store ? "official" : "starter"}
                       tierData={product.seller_tier}
@@ -1101,12 +1205,53 @@ export function ProductPage({ id }: { id: string }) {
                     />
                   </span>
                   <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
-                    @{product.store_username || "store"} · Visit store & all listings
+                    {product.store_username ? `@${product.store_username} · Visit store & all listings` : "Visit store & all listings"}
                   </p>
                 </div>
               </div>
               <ArrowUpRight size={18} className="muted" />
             </Link>
+          ) : (
+            <div
+              className="seller-link"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "12px 16px",
+                background: "var(--soft)",
+                border: "1px solid var(--line)",
+                borderRadius: "10px",
+                marginTop: "16px",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div
+                  style={{
+                    width: "36px",
+                    height: "36px",
+                    borderRadius: "50%",
+                    background: "var(--green-light)",
+                    display: "grid",
+                    placeItems: "center",
+                    color: "var(--green)",
+                    flexShrink: 0,
+                  }}
+                >
+                  <StoreIcon size={18} />
+                </div>
+                <div>
+                  <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: "13px" }}>
+                    Sold by <strong style={{ color: "var(--ink)" }}>{product.store_name || product.brand || "Store"}</strong>
+                    <VerifiedBadge tier="starter" size={16} />
+                  </span>
+                  <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
+                    Official marketplace seller
+                  </p>
+                </div>
+              </div>
+              <ArrowUpRight size={18} className="muted" />
+            </div>
           )}
         </div>
       </div>
@@ -1289,7 +1434,7 @@ export function ProductPage({ id }: { id: string }) {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "8px" }}>
                         <small>
                           {item.author || "ProAce customer"} ·{" "}
-                          {new Date(item.created).toLocaleDateString()}{item.is_edited && <small> · Edited {activityDate(item.updated)}</small>}
+                          <DateStamp value={item.created} dateOnly />{item.is_edited && <DateStamp value={item.updated} label="Edited" />}
                         </small>
                         {(item.can_moderate || item.is_own_review) && (
                           <button
@@ -1396,6 +1541,18 @@ export function ProductPage({ id }: { id: string }) {
 
 export function SavedPage() {
   const { saved } = useShop();
+  const filters = useCollectionFilters();
+  const criteria = new URLSearchParams(filters.query);
+  const search: string = (criteria.get('search') || '').toLowerCase();
+  const items: Product[] = saved.filter(product => {
+    const category: string = criteria.get('category') || '';
+    const digital: string = criteria.get('is_digital') || '';
+    const type: string = criteria.get('product_type') || '';
+    return `${product.title} ${product.brand || ''} ${product.store_name || ''}`.toLowerCase().includes(search)
+      && (!category || product.category === category)
+      && (!digital || Boolean(product.is_digital) === (digital === 'true'))
+      && (!type || product.product_type === type);
+  });
   return (
     <div className="container section">
       <div className="section-heading">
@@ -1405,12 +1562,23 @@ export function SavedPage() {
         </div>
         <span className="muted">{saved.length} favourites</span>
       </div>
-      {saved.length ? (
-        <ProductGrid products={saved} />
+      <CollectionFilters filters={filters} label="saved products" fields={[
+        { key: 'category', label: 'Category', options: categories.map(category => ({ value: category.key, label: category.name })) },
+        { key: 'is_digital', label: 'Delivery type', options: [{ value: 'true', label: 'Digital' }, { value: 'false', label: 'Physical' }] },
+        { key: 'product_type', label: 'Listing type', options: [{ value: 'standard', label: 'Standard' }, { value: 'affiliate_clickbank', label: 'Partner' }] },
+      ]} />
+      {filters.active && (
+        <CollectionCount count={items.length} label="saved items" />
+      )}
+      {items.length ? (
+        <>
+          <ProductGrid products={items.slice(filters.offset, filters.offset + 20)} />
+          <CollectionPagination filters={filters} count={items.length} />
+        </>
       ) : (
         <Empty
-          title="Your favourites live here"
-          text="Tap the heart on something you love. We'll keep it here for you."
+          title={filters.active ? "No saved products match your filters" : "Your favourites live here"}
+          text={filters.active ? "Reset filters to see your saved products." : "Tap the heart on something you love. We'll keep it here for you."}
           icon={<Heart size={38} />}
         />
       )}

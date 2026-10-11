@@ -13,13 +13,30 @@ from rest_framework.views import exception_handler
 logger = logging.getLogger("codematics.api")
 
 
+import re
+
+
+def _clean_text(val: Any) -> Any:
+    if not isinstance(val, str):
+        return val
+    match = re.search(r"ErrorDetail\(string=['\"](.*?)['\"],\s*code=['\"].*?['\"]\)", val)
+    if match:
+        return match.group(1)
+    py_dict_match = re.search(r"^\{['\"][^'\"]+['\"]:\s*['\"](.*?)['\"]\}$", val.strip())
+    if py_dict_match:
+        return py_dict_match.group(1)
+    return val
+
+
 def _stringify_details(detail: Any) -> Any:
     if isinstance(detail, ErrorDetail):
-        return str(detail)
+        return _clean_text(str(detail))
     if isinstance(detail, list):
         return [_stringify_details(item) for item in detail]
     if isinstance(detail, dict):
         return {key: _stringify_details(value) for key, value in detail.items()}
+    if isinstance(detail, str):
+        return _clean_text(detail)
     return detail
 
 
@@ -29,7 +46,7 @@ def _default_message(details: Any) -> str:
         if detail:
             return str(detail)
         return "Request validation failed."
-    if isinstance(details, list):
+    if isinstance(details, (list, tuple)):
         return "Request validation failed."
     return str(details)
 

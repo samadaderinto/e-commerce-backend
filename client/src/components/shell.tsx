@@ -1,5 +1,7 @@
 'use client';
 
+import { presentNotificationOnce } from '@/lib/notification-presentation';
+
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, FormEvent, ReactNode } from 'react';
@@ -21,7 +23,16 @@ export function Shell({ children }: { children: ReactNode }) {
   const [search, setSearch] = useState('');
   const [menu, setMenu] = useState(false);
   const router = useRouter();
-  function submit(event: FormEvent) { event.preventDefault(); router.push(`/shop${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''}`); setMenu(false); }
+  function submit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const target: string = `/shop${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''}`;
+    if (path === '/shop') {
+      window.history.pushState(null, '', target);
+    } else {
+      router.push(target);
+    }
+    setMenu(false);
+  }
   const backoffice = !!(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const previewMode = backoffice && (params.get('preview') === '1' || (path === '/shop' && Boolean(params.get('store')))) && (path === '/shop' || path.startsWith('/products/'));
   const consumerRoute = !previewMode && (
@@ -45,6 +56,7 @@ export function Shell({ children }: { children: ReactNode }) {
       { href: '/admin/stores', label: 'Stores', icon: StoreIcon },
       { href: '/admin/payouts', label: 'Payouts', icon: DollarSign },
       { href: '/admin/users', label: 'Users', icon: UserRound },
+      { href: '/admin/affiliates', label: 'Affiliates', icon: UsersRound },
       ...((user?.is_superuser || user?.is_business_admin)
         ? [{ href: '/admin/commission', label: 'Commission', icon: DollarSign }]
         : []),
@@ -341,13 +353,13 @@ function NotificationCenter() {
   const notifyRef = useRef(notify);
   const client = useQueryClient();
   const counts = useQuery({
-    queryKey: ['notifications', 'counts'],
+    queryKey: ['notifications', 'counts', user?.id],
     queryFn: () => api<NotificationCounts>('notifications/counts'),
     refetchInterval: open ? false : 45000,
   });
 
   const list = useQuery({
-    queryKey: ['notifications', 'popup-global'],
+    queryKey: ['notifications', 'popup-global', user?.id],
     queryFn: () => api<Page<NotificationItem>>('notifications?limit=8&ordering=-timestamp'),
     enabled: open,
   });
@@ -382,6 +394,14 @@ function NotificationCenter() {
           setPushStatus('unsupported');
           return;
         }
+        if (
+          user?.id && Notification.permission === 'granted'
+          && localStorage.getItem('proace-fcm-token')
+          && localStorage.getItem('proace-fcm-owner') === String(user.id)
+        ) {
+          await registerPushDevice(user.id);
+          if (!active) return;
+        }
         setPushStatus(Notification.permission === 'denied'
           ? 'blocked'
           : localStorage.getItem('proace-fcm-token')
@@ -392,7 +412,15 @@ function NotificationCenter() {
         unsubscribe = onMessage(messaging, payload => {
           if (payload.data?.recipient_id !== String(client.getQueryData<User>(['me'])?.id)) return;
           void refresh();
-          if (payload.data.title) notifyRef.current(payload.data.title);
+          const recipient = client.getQueryData<User>(['me']);
+          if (recipient && payload.data.title && payload.data.notification_id) {
+            presentNotificationOnce(
+              recipient.id,
+              payload.data.notification_id,
+              payload.data.title,
+              notifyRef.current,
+            );
+          }
         });
       } catch (error) {
         if (active) {

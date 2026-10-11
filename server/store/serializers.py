@@ -211,8 +211,18 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     'affiliate_hoplink': 'Provide a valid web address starting with http:// or https://.'
                 })
+            if attrs.get('discount') and int(attrs['discount']) > 0:
+                raise serializers.ValidationError({
+                    'discount': 'ClickBank affiliate partner offers cannot have platform discounts. All promotional pricing and discounts are controlled externally by the partner vendor.'
+                })
+            if attrs.get('flash_sale_end'):
+                raise serializers.ValidationError({
+                    'flash_sale_end': 'Flash deals cannot be scheduled for ClickBank affiliate partner offers.'
+                })
             attrs['product_type'] = Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
             attrs['affiliate_hoplink'] = hoplink
+            attrs['discount'] = 0
+            attrs['flash_sale_end'] = None
             attrs['is_digital'] = False
             attrs['digital_file_url'] = ''
             attrs['variants'] = []
@@ -246,7 +256,6 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             attrs['width'] = None
             attrs['height'] = None
             attrs['available'] = 0
-            attrs['variants'] = []
             if not file_url:
                 raise serializers.ValidationError({
                     'digital_file_url': 'Add a download URL for a digital product.',
@@ -256,6 +265,17 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             is_image_asset = clean_path.endswith(image_exts)
             if not is_image_asset:
                 attrs['digital_preview_watermark'] = False
+            elif 'digital_preview_watermark' not in attrs and not getattr(self.instance, 'digital_preview_watermark', False):
+                attrs['digital_preview_watermark'] = True
+
+            price = attrs.get('price', getattr(self.instance, 'price', Decimal('0')))
+            discount = attrs.get('discount', getattr(self.instance, 'discount', 0))
+            for option in attrs.get('variants', getattr(self.instance, 'variants', [])):
+                if price * (100 - discount) / 100 + Decimal(str(option.get('price_delta') or '0')) <= 0:
+                    raise serializers.ValidationError({'variants': 'Each option must have a positive price.'})
+
+            if is_image_asset and not attrs.get('image_url') and not getattr(self.instance, 'image_url', '') and not file_url.startswith('https://minio.local/pending-asset-'):
+                attrs['image_url'] = normalize_media_url(file_url)
         else:
             price = attrs.get('price', getattr(self.instance, 'price', Decimal('0')))
             discount = attrs.get('discount', getattr(self.instance, 'discount', 0))

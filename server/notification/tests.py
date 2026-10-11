@@ -497,7 +497,7 @@ class NotificationApiTests(TestCase):
         self.assertIn("affiliates", cat_ids)
         self.assertTrue(any(s["id"] == store.pk for s in res.data["stores"]))
 
-    def test_super_admin_notification_filters_only_shows_official_stores(self):
+    def test_super_admin_notification_filters_include_received_independent_stores(self):
         from store.models import Store
         from core.models import User
 
@@ -526,7 +526,7 @@ class NotificationApiTests(TestCase):
 
         store_ids = [s["id"] for s in res.data["stores"]]
         self.assertIn(official_store.pk, store_ids)
-        self.assertNotIn(third_party_store.pk, store_ids)
+        self.assertIn(third_party_store.pk, store_ids)
 
     def test_elasticsearch_notification_document_mapping(self):
         from notification.search import notification_document
@@ -545,7 +545,7 @@ class NotificationApiTests(TestCase):
         self.assertEqual(doc["id"], notif.id)
         self.assertEqual(doc["recipient_id"], self.user.id)
         self.assertEqual(doc["verb"], "Item Purchased")
-        self.assertEqual(doc["category"], "store")
+        self.assertEqual(doc["category"], "order")
         self.assertEqual(doc["store_id"], store.pk)
         self.assertEqual(doc["store_name"], "ES Store")
         self.assertTrue(doc["unread"])
@@ -596,6 +596,10 @@ class EmailTemplateRenderingTests(TestCase):
             "onboarding-staff",
             "onboarding-user",
             "order-cancelled",
+            "order-confirm",
+            "order-confirmation",
+            "order-picked-up",
+            "order-pickup",
             "order-shipped",
             "order-summary",
             "password-reset",
@@ -863,8 +867,9 @@ class EmailTemplateRenderingTests(TestCase):
         self.assertEqual(aff_resp.status_code, 201)
         aff_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
         self.assertTrue(aff_delivery.is_html)
-        self.assertIn("Welcome to the ProAce Affiliate Partner Program", aff_delivery.subject)
-        self.assertIn("Monetize traffic", aff_delivery.body)
+        self.assertIn("Welcome to the ProAce Referral Program", aff_delivery.subject)
+        self.assertIn("Welcome To The Referral Program", aff_delivery.body)
+        self.assertIn("store credit", aff_delivery.body.lower())
 
         # 2. Merchant shipment tracking update -> order-shipped
         merchant_user = User.objects.create_user(

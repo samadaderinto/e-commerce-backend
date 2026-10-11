@@ -22,8 +22,7 @@
 :root[data-theme='dark'] p { color: var(--muted); }
 :root[data-theme='dark'] input, :root[data-theme='dark'] select, :root[data-theme='dark'] textarea { background-color: var(--paper); border-color: var(--line); }
 :root[data-theme='dark'] .button, :root[data-theme='dark'] .pagination button.active,
-:root[data-theme='dark'] .bag-link b, :root[data-theme='dark'] .skip-link,
-:root[data-theme='dark'] .order-progress>div.done>span, :root[data-theme='dark'] .onboarding-steps>span.active b { color: var(--button-text); }
+:root[data-theme='dark'] .bag-link b, :root[data-theme='dark'] .skip-link { color: var(--button-text); }
 :root[data-theme='dark'] .button:hover:not(:disabled) { background: var(--button-hover); }
 :root[data-theme='dark'] .button.secondary { color: var(--ink); border-color: var(--line); }
 :root[data-theme='dark'] .button.secondary:hover { background: var(--soft); }
@@ -105,7 +104,6 @@
 :root[data-theme='dark'] .auth-story { background:var(--soft); }
 :root[data-theme='dark'] .order-summary { background:var(--soft); }
 :root[data-theme='dark'] .select-address.selected { background:var(--soft); }
-:root[data-theme='dark'] .order-progress>div>span { background:var(--soft); color:var(--muted); }
 :root[data-theme='dark'] .merchant-shell { background:var(--paper); }
 :root[data-theme='dark'] .merchant-sidebar { background:var(--soft); }
 :root[data-theme='dark'] .store-select>select { background:var(--paper); }
@@ -121,7 +119,8 @@
 :root[data-theme='dark'] .stock-number { background:var(--soft); }
 :root[data-theme='dark'] .stock-row>span { background:var(--soft); color:var(--muted); }
 :root[data-theme='dark'] .publish-toggle>span:after { background:var(--paper); }
-:root[data-theme='dark'] .onboarding-steps b { background:var(--soft); }
+:root[data-theme='dark'] .onboarding-steps b { background:var(--soft); color:var(--muted); }
+:root[data-theme='dark'] .onboarding-steps>span.active b { background:var(--green); color:var(--button-text); }
 :root[data-theme='dark'] .editor-aside>section { background:var(--soft); }
 :root[data-theme='dark'] .asset-gallery button { background:var(--paper); }
 :root[data-theme='dark'] .mobile-drawer { background:var(--paper); }

@@ -93,6 +93,8 @@ class User(AbstractUser):
     password = models.CharField(max_length=128)
     avatar_url = models.URLField(max_length=1000, null=True, blank=True)
     avatar_image = models.ImageField(upload_to='user-profiles/avatars/', blank=True, default='')
+    email_product_recommendations = models.BooleanField(default=True)
+    email_marketing = models.BooleanField(default=False)
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['first_name', 'last_name', 'gender', 'phone1']

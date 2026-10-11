@@ -9,8 +9,10 @@ import {
   useState,
 } from 'react';
 import { Moon, Sun } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useShop } from './providers';
-import { UserAvatarUpload } from './user-avatar';
+import { api } from '@/lib/api';
+import type { User } from '@/lib/types';
 
 type Theme = 'light' | 'dark' | 'system';
 type Appearance = 'light' | 'dark';
@@ -167,21 +169,118 @@ export function AppearanceSettings() {
   );
 }
 
+export function EmailPreferencesSettings() {
+  const { user, notify } = useShop();
+  const queryClient = useQueryClient();
+  const [recommendations, setRecommendations] = useState(
+    user?.email_product_recommendations ?? true
+  );
+  const [marketing, setMarketing] = useState(
+    user?.email_marketing ?? false
+  );
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (user) {
+      setRecommendations(user.email_product_recommendations ?? true);
+      setMarketing(user.email_marketing ?? false);
+    }
+  }, [user?.email_product_recommendations, user?.email_marketing]);
+
+  if (!user) return null;
+
+  async function updatePreference(
+    key: 'email_product_recommendations' | 'email_marketing',
+    nextValue: boolean
+  ) {
+    const prevRec = recommendations;
+    const prevMkt = marketing;
+
+    if (key === 'email_product_recommendations') setRecommendations(nextValue);
+    if (key === 'email_marketing') setMarketing(nextValue);
+    setSavingKey(key);
+
+    try {
+      const updated = await api<User>('me', 'PATCH', { [key]: nextValue });
+      queryClient.setQueryData(['me'], updated);
+      notify(
+        key === 'email_product_recommendations'
+          ? nextValue
+            ? 'Product recommendation emails enabled.'
+            : 'Product recommendation emails disabled.'
+          : nextValue
+            ? 'Marketing and promotional emails enabled.'
+            : 'Marketing and promotional emails disabled.'
+      );
+    } catch (error) {
+      if (key === 'email_product_recommendations') setRecommendations(prevRec);
+      if (key === 'email_marketing') setMarketing(prevMkt);
+      notify((error as Error).message, true);
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  return (
+    <section
+      className="appearance-settings email-preferences-settings"
+      aria-label="Email and marketing preferences"
+    >
+      <h2>Email communication preferences</h2>
+      <p>
+        Choose which optional emails you would like to receive. Critical account receipts, order tracking updates, and security notices will always be sent.
+      </p>
+      <fieldset>
+        <legend className="sr-only">Email communication preferences</legend>
+        <label className={`appearance-option ${recommendations ? 'active' : ''}`}>
+          <input
+            type="checkbox"
+            name="email_product_recommendations"
+            checked={recommendations}
+            disabled={savingKey !== null}
+            onChange={(e) =>
+              void updatePreference('email_product_recommendations', e.target.checked)
+            }
+          />
+          <span>
+            <strong>Product recommendations</strong>
+            <small>
+              Curated picks, related items, and special recommendations tailored to products you view, save, or purchase.
+            </small>
+          </span>
+        </label>
+        <label className={`appearance-option ${marketing ? 'active' : ''}`}>
+          <input
+            type="checkbox"
+            name="email_marketing"
+            checked={marketing}
+            disabled={savingKey !== null}
+            onChange={(e) =>
+              void updatePreference('email_marketing', e.target.checked)
+            }
+          />
+          <span>
+            <strong>Marketing & promotions</strong>
+            <small>
+              Seasonal sales, exclusive merchant discount drops, official partner spotlights, and platform updates.
+            </small>
+          </span>
+        </label>
+      </fieldset>
+      <p className="muted">
+        Preferences take effect immediately and apply to automated emails sent to {user.email}.
+      </p>
+    </section>
+  );
+}
+
 export function AppSettings() {
   const { user } = useShop();
 
   return (
     <div className="app-settings-stack">
-      {user && (
-        <section style={{ marginBottom: '2.5rem' }}>
-          <h2>Profile picture</h2>
-          <p className="muted" style={{ marginBottom: '1.25rem' }}>
-            Personalize your account across the marketplace.
-          </p>
-          <UserAvatarUpload user={user} />
-        </section>
-      )}
       <AppearanceSettings />
+      {user && <EmailPreferencesSettings />}
     </div>
   );
 }

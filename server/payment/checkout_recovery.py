@@ -24,8 +24,16 @@ def compensate_checkout(attempt: CheckoutAttempt, session: Any, reason: str) -> 
         attempt.status = 'completed'
         attempt.save(update_fields=['status', 'updated'])
         return True
-    attempt.failure_reason = reason
     if session.get('payment_status') == 'paid':
+        from storefront.views import complete_stripe_checkout
+        try:
+            order = complete_stripe_checkout(attempt.user, session, attempt)
+            if order:
+                attempt.status = 'completed'
+                attempt.save(update_fields=['status', 'updated'])
+                return True
+        except Exception as exc:
+            logger.warning("Fulfillment recovery deferred to refund for %s: %s", attempt.checkout_key, exc)
         intent = session.get('payment_intent')
         attempt.payment_intent = str(intent.get('id', '') if isinstance(intent, dict) else intent or '')
         try:

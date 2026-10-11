@@ -27,66 +27,8 @@ def client() -> Any:
 
 
 def extract_category_and_store(notification: Notification) -> tuple[str, Optional[int], Optional[str]]:
-    data = notification.data or {}
-    event = str(data.get("event") or "").lower()
-    verb = (notification.verb or "").lower()
-    target_model = (
-        notification.target_content_type.model
-        if notification.target_content_type
-        else ""
-    ).lower()
-
-    if data.get("category"):
-        category = str(data["category"]).lower()
-    elif (
-        "referral" in event
-        or "affiliate" in event
-        or "referral" in verb
-        or "affiliate" in verb
-    ):
-        category = "affiliates"
-    elif "refund" in event or "refund" in verb or target_model == "refund":
-        category = "refund"
-    elif (
-        "payout" in event
-        or "payout" in verb
-        or "withdrawal" in event
-        or "withdrawal" in verb
-        or target_model == "storepayout"
-    ):
-        category = "payout"
-    elif "store" in event or "store" in verb or target_model == "store":
-        category = "store"
-    elif "order" in event or "order" in verb or target_model == "order":
-        category = "order"
-    else:
-        category = "general"
-
-    store_id = None
-    store_name = None
-    raw_sid = data.get("store_id") or data.get("store")
-    if raw_sid and str(raw_sid).isdigit():
-        store_id = int(raw_sid)
-    elif target_model == "store" and str(notification.target_object_id).isdigit():
-        store_id = int(notification.target_object_id)
-    elif (
-        notification.action_object_content_type
-        and notification.action_object_content_type.model == "store"
-        and str(notification.action_object_object_id).isdigit()
-    ):
-        store_id = int(notification.action_object_object_id)
-
-    if store_id:
-        try:
-            from store.models import Store
-
-            store_obj = Store.objects.filter(pk=store_id).first()
-            if store_obj:
-                store_name = store_obj.name
-        except Exception:
-            pass
-
-    return category, store_id, store_name
+    store = notification.stores.order_by("pk").first()
+    return notification.category, store.pk if store else None, store.name if store else None
 
 
 def notification_document(notification: Notification) -> dict[str, Any]:
@@ -99,6 +41,7 @@ def notification_document(notification: Notification) -> dict[str, Any]:
         "level": notification.level,
         "category": category,
         "store_id": store_id,
+        "store_ids": list(notification.stores.values_list("pk", flat=True)),
         "store_name": store_name or "",
         "unread": notification.unread,
         "deleted": notification.deleted,
@@ -132,6 +75,7 @@ def ensure_notifications_index(es: Any = None) -> bool:
                     "level": {"type": "keyword"},
                     "category": {"type": "keyword"},
                     "store_id": {"type": "integer"},
+                    "store_ids": {"type": "integer"},
                     "store_name": {"type": "text", "fields": {"keyword": {"type": "keyword"}}},
                     "unread": {"type": "boolean"},
                     "deleted": {"type": "boolean"},
@@ -241,7 +185,7 @@ def search_notification_ids(
 
     store_id = filters.get("store_id")
     if store_id is not None:
-        filter_clauses.append({"term": {"store_id": int(store_id)}})
+        filter_clauses.append({"term": {"store_ids": int(store_id)}})
 
     level = filters.get("level")
     if level:

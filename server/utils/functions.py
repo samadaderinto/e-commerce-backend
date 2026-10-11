@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from email.utils import parseaddr
 from typing import TYPE_CHECKING, Any, Optional
 
 from django.conf import settings
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from django.template.loader import get_template
 import stripe
 from rest_framework_simplejwt.tokens import RefreshToken
@@ -15,12 +18,28 @@ if TYPE_CHECKING:
     from notification.models import Notification
 
 
+def email_contact(value: str) -> str:
+    address = parseaddr(value.strip())[1]
+    try:
+        validate_email(address)
+    except ValidationError:
+        return ''
+    domain = address.rsplit('@', 1)[1].lower()
+    if domain.startswith('example.') or domain.endswith(('.local', '.test', '.invalid', '.example')):
+        return ''
+    return address
+
+
 def auth_token(user: Any) -> dict[str, str]:
     refresh = RefreshToken.for_user(user)
+    version = getattr(user, "credential_version", 0)
+    refresh["credential_version"] = version
+    access = refresh.access_token
+    access["credential_version"] = version
 
     return {
         "refresh": str(refresh),
-        "access": str(refresh.access_token),
+        "access": str(access),
     }
 
 
@@ -42,14 +61,23 @@ def send_mail(
     context.setdefault('frontend_url', frontend_url)
     context.setdefault('shop_url', f'{frontend_url}/shop')
     context.setdefault('dashboard_url', f'{frontend_url}/merchant')
-    context.setdefault('support_email', getattr(settings, 'APPLICATION_EMAIL', settings.DEFAULT_FROM_EMAIL))
+    context['support_email'] = email_contact(settings.SUPPORT_EMAIL)
+    context['order_support_email'] = email_contact(settings.ORDER_SUPPORT_EMAIL)
     context.setdefault('absolute_url', f'{frontend_url}/account/orders')
     if 'orderId' in context and 'order_url' not in context:
-        context['order_url'] = f"{frontend_url}/account/orders/{context['orderId']}"
+        from payment.models import Order
+        order = Order.objects.filter(orderId=str(context['orderId'])).first()
+        if order and recipient and order.user_id == recipient.pk:
+            context['order_url'] = f"{frontend_url}/orders/{order.pk}"
+        elif order and recipient:
+            from notification.policy import destination_for
+            context['order_url'] = frontend_url + destination_for(recipient, "order", {"order_id": order.pk})
+        else:
+            context['order_url'] = f"{frontend_url}/account/orders"
 
     html_tpl_path = f"email-templates/{file_name}.html"
     email_html_template = get_template(html_tpl_path).render(context)
-    sender = getattr(settings, "APPLICATION_EMAIL", settings.DEFAULT_FROM_EMAIL)
+    reply_to = context['order_support_email'] if file_name.startswith(('order-', 'refund-')) else context['support_email']
     subject = str(context.get('subject') or f"Proace: {file_name.replace('-', ' ').title()}")
     queue_email_delivery(
         reciever_email,
@@ -57,7 +85,7 @@ def send_mail(
         email_html_template,
         recipient=recipient,
         notification=notification,
-        reply_to=sender,
+        reply_to=reply_to,
         is_html=True,
     )
 

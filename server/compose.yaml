@@ -60,7 +60,6 @@ services:
       NOTIFICATION_DELIVERY_MAX_ATTEMPTS: ${NOTIFICATION_DELIVERY_MAX_ATTEMPTS:-8}
       NOTIFICATION_DELIVERY_STALE_SECONDS: ${NOTIFICATION_DELIVERY_STALE_SECONDS:-300}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-Proace <notifications@example.com>}
       FCM_ENABLED: ${FCM_ENABLED:-false}
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
       FIREBASE_CREDENTIALS_JSON: ${FIREBASE_CREDENTIALS_JSON:-}
@@ -80,6 +79,8 @@ services:
       - media-data:/app/media
       - prometheus-multiproc:/tmp/prometheus
     depends_on:
+      minio-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -175,6 +176,7 @@ services:
     entrypoint: ['/bin/sh', '-c']
     command:
       - >-
+        set -e;
         until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do sleep 2; done;
         mc mb --ignore-existing "local/$${MINIO_BUCKET_NAME}";
         mc admin user add local "$${MINIO_ACCESS_KEY}" "$${MINIO_SECRET_KEY}" 2>/dev/null || true;

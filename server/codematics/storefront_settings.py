@@ -143,7 +143,7 @@ SIMPLE_JWT = {
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '')
 RESEND_FROM_EMAIL = os.environ.get(
     'RESEND_FROM_EMAIL',
-    'ProAce <notifications@example.com>',
+    'ProAce <admin@proaceintl.com>',
 )
 DEFAULT_FROM_EMAIL = RESEND_FROM_EMAIL
 APPLICATION_EMAIL = RESEND_FROM_EMAIL
@@ -180,7 +180,7 @@ if FCM_ENABLED and not (FIREBASE_PROJECT_ID and (
     raise ImproperlyConfigured(
         'Set FIREBASE_PROJECT_ID and Firebase credentials when FCM_ENABLED=true.'
     )
-STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'cashapp')
+STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'card,cashapp')
 STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'usd')
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG

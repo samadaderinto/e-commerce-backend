@@ -75,7 +75,7 @@ class Coupon(DatesMixin):
         now = timezone.now()
         is_active = self.active
         is_usable = self.num_used < self.num_available
-        is_valid_date = self.valid_to >= now
+        is_valid_date = (self.valid_from <= now) and (self.valid_to >= now)
         return is_active and is_usable and is_valid_date
 
     def used(self) -> None:

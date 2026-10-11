@@ -76,7 +76,7 @@ test('store images crop, preview, retry, persist and remove without submitting o
   const original = await photo(page, 2048, 1024);
   const profilePicker = page.getByLabel('Upload profile image', { exact: true });
   await profilePicker.setInputFiles({ name: 'small.png', mimeType: 'image/png', buffer: small });
-  await expect(page.getByRole('alert')).toContainText('at least 512 × 512');
+  await expect(page.getByRole('alert').filter({ hasText: 'at least 512 × 512' })).toContainText('at least 512 × 512');
   expect(uploads).toBe(0);
 
   await profilePicker.setInputFiles({ name: 'brand.png', mimeType: 'image/png', buffer: original });

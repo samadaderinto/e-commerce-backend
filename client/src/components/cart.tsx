@@ -570,6 +570,17 @@ export function CheckoutPage() {
       .finally(() => setBusy(false));
   }, [router, search, user]);
 
+  useEffect(() => {
+    if (search.get("wallet_cancelled") === "1" && user) {
+      void api("checkout/wallet-cancel", "POST", {})
+        .then(() => {
+          notify("Checkout cancelled. Reserved store credit returned to your wallet.");
+          router.replace("/checkout");
+        })
+        .catch(() => {});
+    }
+  }, [router, search, user, notify]);
+
   async function placeOrder() {
     if (hasPhysical && !addressId) {
       setError("Choose a delivery address first.");
@@ -578,17 +589,19 @@ export function CheckoutPage() {
     setBusy(true);
     setError("");
     try {
-      if (!activeShipping?.quote_token || shippingRates.isFetching) throw new Error("Choose an available shipping service before paying.");
-      const selectedService = activeShipping.service_id;
+      if (hasPhysical && (!activeShipping?.quote_token || shippingRates.isFetching)) {
+        throw new Error("Choose an available shipping service before paying.");
+      }
+      const selectedService = hasPhysical ? (activeShipping?.service_id || "usps_ground_advantage") : "digital_delivery";
       const effectiveCoupon = appliedCoupon?.code || couponCode.trim();
       if (paymentType === "user_wallet") {
         const order = await api<Order>("checkout", "POST", {
-          ...(addressId ? { address: addressId } : {}),
+          ...(hasPhysical && addressId ? { address: addressId } : {}),
           checkout_key: checkoutKey,
           coupon: effectiveCoupon,
           payment_type: "user_wallet",
           shipping_service: selectedService,
-          shipping_quote: activeShipping?.quote_token,
+          ...(hasPhysical && activeShipping?.quote_token ? { shipping_quote: activeShipping.quote_token } : {}),
         });
         await client.invalidateQueries({ queryKey: ["cart"] });
         await client.invalidateQueries({ queryKey: ["wallet"] });
@@ -599,11 +612,11 @@ export function CheckoutPage() {
         "checkout/wallet-session",
         "POST",
         {
-          ...(addressId ? { address: addressId } : {}),
+          ...(hasPhysical && addressId ? { address: addressId } : {}),
           checkout_key: checkoutKey,
           coupon: effectiveCoupon,
           shipping_service: selectedService,
-          shipping_quote: activeShipping?.quote_token,
+          ...(hasPhysical && activeShipping?.quote_token ? { shipping_quote: activeShipping.quote_token } : {}),
           ...(walletDeduction > 0 ? { wallet_amount: walletDeduction } : {}),
         },
       );
@@ -836,13 +849,21 @@ export function CheckoutPage() {
                   onChange={() => setPaymentType("stripe_wallet")}
                 />
                 <div>
-                  <strong>Cards, Stripe & Cash App</strong>
+                  <strong>Cards, Stripe & Digital Wallets</strong>
                   <p>
-                    Fast, secure upfront payment with live buyer protection.
+                    Pay securely on Stripe with Visa, Mastercard, Amex, Apple Pay, Google Pay, or Cash App.
                   </p>
                 </div>
                 <WalletCards size={22} />
               </label>
+              {paymentType === "stripe_wallet" && (
+                <div style={{ marginTop: "0.5rem", marginBottom: "0.75rem", padding: "0.75rem 1rem", background: "var(--soft)", borderRadius: "8px", border: "1px solid var(--line)", fontSize: "0.85rem", color: "var(--muted)", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <LockKeyhole size={16} style={{ color: "var(--green)", flexShrink: 0 }} />
+                  <span>
+                    You will be redirected to Stripe to complete your payment with your card, Apple Pay, Google Pay, or supported bank.
+                  </span>
+                </div>
+              )}
               <label
                 className={`select-address ${paymentType === "user_wallet" ? "selected" : ""}`}
               >
@@ -992,7 +1013,11 @@ export function CheckoutPage() {
                 }
                 onClick={placeOrder}
               >
-                {busy ? "Redirecting to payment…" : `Pay ${money(walletDeduction > 0 ? chargeAmount : grossTotal)}`}
+                {busy
+                  ? paymentType === "stripe_wallet" ? "Redirecting to Stripe…" : "Placing order…"
+                  : paymentType === "stripe_wallet"
+                    ? `Pay ${money(walletDeduction > 0 ? chargeAmount : grossTotal)} with Stripe`
+                    : `Pay ${money(grossTotal)} from ProAce Wallet`}
                 <ArrowRight size={17} />
               </button>
               <p className="fine-print">

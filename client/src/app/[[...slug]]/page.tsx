@@ -40,6 +40,7 @@ import {
   AdminCommissionPage,
   AdminPayoutsPage,
 } from '@/components/admin';
+import { AffiliatePage } from '@/components/affiliates';
 import { NotificationsPage } from '@/components/notifications';
 
 export default async function Page({
@@ -86,6 +87,10 @@ export default async function Page({
     (!slug[1] || ['orders', 'wallet', 'addresses', 'profile'].includes(slug[1]))
   ) {
     content = <AccountPage section={slug[1]} />;
+  } else if (slug[0] === 'account' && slug[1] === 'affiliates' && slug.length === 2) {
+    content = <AffiliatePage />;
+  } else if (slug[0] === 'admin' && slug[1] === 'affiliates' && slug.length === 2) {
+    content = <AffiliatePage admin />;
   } else if (slug[0] === 'orders' && /^\d+$/.test(slug[1] || '') && slug.length === 2) {
     content = <OrderPage id={slug[1]} />;
   } else if (

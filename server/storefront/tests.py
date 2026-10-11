@@ -504,7 +504,7 @@ class StorefrontTests(TestCase):
         buyer_deliveries = NotificationDelivery.objects.filter(recipient=self.buyer)
         self.assertEqual(buyer_deliveries.count(), 1)
         self.assertTrue(buyer_deliveries.get().is_html)
-        self.assertEqual(NotificationDelivery.objects.filter(recipient=self.seller).count(), 1)
+        self.assertEqual(NotificationDelivery.objects.filter(recipient=self.seller, notification__data__order_id=response.data["id"]).count(), 1)
         self.assertEqual(response.data['total'], '17006.65')
         self.product.refresh_from_db()
         self.assertEqual(self.product.available, 3)
@@ -721,6 +721,55 @@ class StorefrontTests(TestCase):
         )
         self.assertEqual(non_pending_patch.status_code, 400)
         self.assertIn('no pending refund request', non_pending_patch.data['error']['message'])
+
+    def test_order_refund_cannot_re_request_declined_product(self):
+        p2 = Product.objects.create(
+            store=self.store,
+            title='Second Physical Item',
+            price='50.00',
+            discount=0,
+            available=5,
+        )
+        self.add()
+        self.client.post('/api/v1/cart/', {'product': p2.pk, 'quantity': 1}, format='json')
+        order_resp = self.checkout()
+        self.assertEqual(order_resp.status_code, 201)
+        order_id = order_resp.data['id']
+
+        refund_resp = self.client.post(
+            f'/api/v1/orders/{order_id}/refund/',
+            {'reason': 'wrong_item_received', 'product_ids': [self.product.pk]},
+            format='json',
+        )
+        self.assertEqual(refund_resp.status_code, 201)
+        refund_id = refund_resp.data['refund_id']
+
+        refund = Refund.objects.get(pk=refund_id)
+        refund.status = Refund.STATUS_DECLINED
+        refund.save()
+
+        detail_resp = self.client.get(f'/api/v1/orders/{order_id}/')
+        self.assertEqual(detail_resp.status_code, 200)
+        self.assertIn(self.product.pk, detail_resp.data['claimed_product_ids'])
+        self.assertNotIn(p2.pk, detail_resp.data['claimed_product_ids'])
+
+        retry_resp = self.client.post(
+            f'/api/v1/orders/{order_id}/refund/',
+            {'reason': 'item_damaged', 'product_ids': [self.product.pk]},
+            format='json',
+        )
+        self.assertEqual(retry_resp.status_code, 400)
+        self.assertIn(
+            'already been requested, processed, or declined',
+            str(retry_resp.data['error']['details']['product_ids']),
+        )
+
+        p2_refund_resp = self.client.post(
+            f'/api/v1/orders/{order_id}/refund/',
+            {'reason': 'item_damaged', 'product_ids': [p2.pk]},
+            format='json',
+        )
+        self.assertEqual(p2_refund_resp.status_code, 201)
 
     def test_order_refund_fails_after_7_days(self):
         self.add()
@@ -1040,6 +1089,8 @@ class StorefrontTests(TestCase):
         response = self.checkout()
         self.assertEqual(response.status_code, 201, response.data)
         order = Order.objects.get(pk=response.data["id"])
+        self.assertEqual(order.status, "delivered")
+        self.assertIsNotNone(order.delivered_at)
         delivery = NotificationDelivery.objects.get(
             recipient=self.buyer, subject=f"ProAce Order #{order.orderId} Confirmation",
         )
@@ -1159,6 +1210,28 @@ class UnverifiedStorePreviewTests(TestCase):
         self.assertEqual(staff_resp.status_code, 200)
         self.assertEqual(staff_resp.data['count'], 1)
 
+    def test_verified_public_product_exposes_visibility(self) -> None:
+        self.unverified_store.status = Store.STATUS_ACTIVE
+        self.unverified_store.verified_at = timezone.now()
+        self.unverified_store.save()
+        url = f'/api/v1/products/{self.unverified_product.pk}/'
+        for query in ('', '?preview=1'):
+            response = self.anon_client.get(url + query)
+            self.assertEqual(response.status_code, 200)
+            self.assertIs(response.data['visibility'], True)
+            self.assertIs(response.data['store_verified'], True)
+
+    def test_hidden_product_is_private_even_with_preview_parameter(self) -> None:
+        self.unverified_store.status = Store.STATUS_ACTIVE
+        self.unverified_store.verified_at = timezone.now()
+        self.unverified_store.save()
+        self.unverified_product.visibility = False
+        self.unverified_product.save()
+        url = f'/api/v1/products/{self.unverified_product.pk}/'
+        for client in (self.anon_client, self.stranger_client, self.owner_client, self.staff_client):
+            for query in ('', '?preview=1'):
+                self.assertEqual(client.get(url + query).status_code, 404)
+
     def test_unverified_store_product_detail_is_private(self):
         url = f'/api/v1/products/{self.unverified_product.pk}/'
 
@@ -1229,9 +1302,24 @@ class ExtendedStorefrontFeatureTests(TestCase):
         self.assertTrue(resp.data['valid'])
         self.assertEqual(resp.data['discount_amount'], '20.00')
 
-        # Invalid coupon fails
+        # Invalid coupon fails with clean message
         resp = self.client.post('/api/v1/checkout/validate-coupon/', {'code': 'INVALID'}, format='json')
         self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data['error']['message'], 'This coupon code is invalid or has expired.')
+
+        # Category mismatched coupon returns clean message without Python ErrorDetail syntax
+        mismatched_coupon = Coupon.objects.create(
+            code='CLOTHES10',
+            discount=10,
+            num_available=10,
+            type=Coupon.CATEGORY,
+            category='fashion',
+            valid_from=timezone.now() - timedelta(days=1),
+            valid_to=timezone.now() + timedelta(days=1),
+        )
+        resp = self.client.post('/api/v1/checkout/validate-coupon/', {'code': 'CLOTHES10'}, format='json')
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(resp.data['error']['message'], 'This coupon does not apply to anything in your cart.')
 
     def test_self_service_order_cancellation(self):
         address = Address.objects.create(user=self.user, address='123 Main St', city='Tampa', state='FL', country='US', zip='33602')
@@ -1263,6 +1351,33 @@ class ExtendedStorefrontFeatureTests(TestCase):
         wallet = get_or_create_user_wallet(self.user)
         self.assertEqual(wallet.balance, Decimal('100.00'))
 
+    def test_digital_order_cancellation_rejected(self):
+        order = Order.objects.create(
+            user=self.user, status='confirmed', ordered=True,
+            total=Decimal('29.00'), subtotal=Decimal('29.00'),
+            paid_total=Decimal('29.00'), wallet_paid=Decimal('29.00'), payment_type='user_wallet',
+            items_snapshot=[{'product': self.product.pk, 'title': 'Software Pro', 'quantity': 1, 'unit_price': '29.00', 'is_digital': True}],
+            address_snapshot={'country': 'Worldwide', 'digital': True},
+        )
+        res = self.client.post(f'/api/v1/orders/{order.pk}/cancel/', {}, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('Digital orders are fulfilled immediately', res.data['error']['details']['detail'])
+
+    def test_order_cancellation_rejected_after_12_hours(self):
+        from datetime import timedelta
+        order = Order.objects.create(
+            user=self.user, status='confirmed', ordered=True,
+            total=Decimal('50.00'), subtotal=Decimal('50.00'),
+            paid_total=Decimal('50.00'), wallet_paid=Decimal('50.00'), payment_type='user_wallet',
+            items_snapshot=[{'product': self.product.pk, 'title': 'Smart Watch', 'quantity': 1, 'unit_price': '50.00', 'is_digital': False}],
+            address_snapshot={'address': '123 Main St'},
+        )
+        # Fast-forward created time past 12 hours
+        Order.objects.filter(pk=order.pk).update(created=timezone.now() - timedelta(hours=13))
+        res = self.client.post(f'/api/v1/orders/{order.pk}/cancel/', {}, format='json')
+        self.assertEqual(res.status_code, 400)
+        self.assertIn('only be cancelled within 12 hours', res.data['error']['details']['detail'])
+
     def test_review_creation_and_moderation(self):
         from core.models import Review
         # Buy product so user is verified
@@ -1284,6 +1399,42 @@ class ExtendedStorefrontFeatureTests(TestCase):
         self.assertEqual(del_resp.status_code, 204)
         self.assertFalse(Review.objects.filter(pk=review_id).exists())
 
+    def test_user_email_preferences_update(self):
+        self.assertTrue(self.user.email_product_recommendations)
+        self.assertFalse(self.user.email_marketing)
 
+        resp = self.client.patch(
+            '/api/v1/me/',
+            {'email_product_recommendations': False, 'email_marketing': True},
+            format='json',
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertFalse(resp.data['email_product_recommendations'])
+        self.assertTrue(resp.data['email_marketing'])
 
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.email_product_recommendations)
+        self.assertTrue(self.user.email_marketing)
 
+    def test_password_change_flow(self):
+        user = User.objects.create_user(email='pwdchange@test.com', password='Old-password-123')
+        client = APIClient()
+        client.force_authenticate(user=user)
+        response = client.post(
+            '/api/v1/password/change/',
+            {'current_password': 'Old-password-123', 'password': 'New-password-456'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
+        self.assertIn('user', response.data)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('New-password-456'))
+        self.assertEqual(user.credential_version, 1)
+
+        # Authenticate using the newly returned access token
+        new_client = APIClient()
+        new_client.credentials(HTTP_AUTHORIZATION=f"Bearer {response.data['access']}")
+        me_resp = new_client.get('/api/v1/me/')
+        self.assertEqual(me_resp.status_code, 200)

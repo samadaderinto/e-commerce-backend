@@ -1,14 +1,17 @@
 'use client';
 
+import { CollectionCount, CollectionFilters, CollectionPagination, financialFields, useCollectionFilters, useDebouncedValue } from './collection-filters';
+
+
 import { browserTimeZone, calendarDateLabel, toLocalDateTimeInput } from '@/lib/datetime';
 
-import { activityDate } from './activity';
+import { DateStamp, activityDate } from './activity';
 import { StoreBranding } from './store-branding';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { FormEvent, useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
+import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, RotateCcw, Search, Settings, Share2, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
 import type { Dashboard, MerchantProduct, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent, StoreProfile } from '@/lib/types';
 import { useShop } from './providers';
@@ -27,7 +30,8 @@ type MerchantOrder = {
   shipped_at?: string | null;
   delivered_at?: string | null;
   tracking_events?: TrackingEvent[];
-  items: { product: number; title: string; quantity: number }[];
+  has_physical_items?: boolean;
+  items: { product: number; title: string; quantity: number; is_digital?: boolean }[];
 };
 
 type PreviewProduct = {
@@ -35,6 +39,7 @@ type PreviewProduct = {
   price: number; sale_price: number; discount: number; available: number; image: string;
   variants: ProductVariant[]; digital_file_name?: string; digital_file_url?: string;
   images: string[]; flash_sale_end?: string | null; digital_preview_watermark?: boolean;
+  label?: string;
   product_type?: 'standard' | 'affiliate_clickbank';
   affiliate_hoplink?: string;
   affiliate_vendor_nickname?: string;
@@ -230,7 +235,12 @@ export function MerchantPage({ segments }: { segments: string[] }) {
           ) : section === 'products' ? (
             <MerchantProducts key={store.id} store={store} />
           ) : section === 'orders' ? (
-            <MerchantOrders key={store.id} store={store} />
+            <MerchantOrders
+              key={store.id}
+              store={store}
+              stores={stores.data?.results || []}
+              onSelectStore={selectStore}
+            />
           ) : section === 'payments' ? (
             <MerchantPayments key={store.id} store={store} />
           ) : section === 'notifications' ? (
@@ -348,7 +358,14 @@ function OnboardStore() {
 
 function MerchantDashboard({ store }: { store: Store }) {
   const [days, setDays] = useState('30'); const { user, notify } = useShop(); const client = useQueryClient();
-  const stats = useQuery({ queryKey: ['dashboard', store.id, days], queryFn: () => api<Dashboard>(`stores/${store.id}/dashboard?days=${days}&time_zone=${encodeURIComponent(browserTimeZone())}`) });
+  const stats = useQuery({
+    queryKey: ['dashboard', store.id, days],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === store.id ? previousData : undefined,
+    queryFn: () => api<Dashboard>(
+      `stores/${store.id}/dashboard?days=${days}&time_zone=${encodeURIComponent(browserTimeZone())}`,
+    ),
+  });
   const orders = useQuery({ queryKey: ['merchant-recent', store.id], queryFn: () => api<Page<MerchantOrder>>(`stores/${store.id}/orders?limit=5`) });
   const payouts = useQuery({ queryKey: ['merchant-payouts', store.id], queryFn: () => api<StorePayout[]>(`stores/${store.id}/payouts`) });
   const checklist = useQuery({ queryKey: ['onboarding', store.id], queryFn: () => api<{complete: boolean; steps: Record<string, boolean>}>(`stores/${store.id}/onboarding`) });
@@ -532,6 +549,10 @@ function MerchantDashboard({ store }: { store: Store }) {
           <option value="90">Last 90 days</option>
         </select>
       </div>
+
+      {stats.isFetching && !stats.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
 
       {stats.isLoading ? (
         <Loading />
@@ -772,6 +793,9 @@ function MerchantDashboard({ store }: { store: Store }) {
                   View all orders <ArrowRight size={16} />
                 </Link>
               </div>
+              {orders.isFetching && !orders.isLoading && (
+                <p role="status" aria-live="polite">Updating results…</p>
+              )}
               {orders.isLoading ? (
                 <Loading />
               ) : orders.error ? (
@@ -802,6 +826,9 @@ function MerchantDashboard({ store }: { store: Store }) {
                   {payouts.data?.length || 0} payout requests
                 </span>
               </div>
+              {payouts.isFetching && !payouts.isLoading && (
+                <p role="status" aria-live="polite">Updating results…</p>
+              )}
               {payouts.isLoading ? (
                 <Loading />
               ) : payouts.error ? (
@@ -813,7 +840,7 @@ function MerchantDashboard({ store }: { store: Store }) {
                   <table>
                     <thead>
                       <tr>
-                        <th>Date</th>
+                        <th>Created</th>
                         <th>Reference</th>
                         <th>Amount</th>
                         <th>Method</th>
@@ -823,7 +850,7 @@ function MerchantDashboard({ store }: { store: Store }) {
                     <tbody>
                       {payouts.data.map((p) => (
                         <tr key={p.id}>
-                          <td>{new Date(p.created).toLocaleDateString()}</td>
+                          <td><DateStamp value={p.created} dateOnly /></td>
                           <td>
                             <strong>{p.reference}</strong>
                           </td>
@@ -881,19 +908,24 @@ function exportRows(products: MerchantProduct[]) {
 function MerchantProducts({ store }: { store: Store }) {
   const [ordering, setOrdering] = useState<string>('-updated');
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
+  const extraFilters = useCollectionFilters();
+  useEffect(() => { setOffset(0); }, [extraFilters.query]);
   const [filter, setFilter] = useState('');
   const [offset, setOffset] = useState(0);
   const [busy, setBusy] = useState<number | null>(null);
   const { notify } = useShop();
   const client = useQueryClient();
 
-  const query = new URLSearchParams({ search, ordering, limit: '15', offset: String(offset) });
+  const query = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(extraFilters.query)), search: debouncedSearch, ordering, limit: '15', offset: String(offset) });
   if (filter) {
     query.set('visibility', filter);
   }
 
   const products = useQuery({
     queryKey: ['merchant-products', store.id, query.toString()],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === store.id ? previousData : undefined,
     queryFn: () => api<Page<MerchantProduct>>(`stores/${store.id}/products?${query}`),
   });
 
@@ -1134,15 +1166,32 @@ function parseCsvRows(text: string): string[][] {
         </div>
       </div>
 
+      <CollectionFilters filters={extraFilters} label="product filters" hideSearch fields={[
+        { key: 'category', label: 'Category', options: categories.map(category => ({ value: category.key, label: category.name })) },
+        { key: 'is_digital', label: 'Delivery type', options: [{ value: 'true', label: 'Digital' }, { value: 'false', label: 'Physical' }] },
+        { key: 'stock', label: 'Stock', options: [{ value: 'in', label: 'In stock' }, { value: 'low', label: 'Low stock' }, { value: 'out', label: 'Out of stock' }] },
+        { key: 'product_type', label: 'Listing type', options: [{ value: 'standard', label: 'Standard' }, { value: 'affiliate_clickbank', label: 'Partner' }] },
+      ]} />
+      <button type="button" className="button secondary" onClick={() => {
+        extraFilters.reset();
+        setSearch('');
+        setFilter('');
+        setOrdering('-updated');
+        setOffset(0);
+      }}>Reset all filters</button>
+      {products.isFetching && !products.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
+
       {products.isLoading ? (
         <Loading />
       ) : products.error ? (
         <ErrorState error={products.error} retry={() => products.refetch()} />
       ) : !products.data?.results.length ? (
         <Empty
-          title={search ? 'Nothing matches just yet' : 'Your first product starts here'}
+          title={search || filter || extraFilters.active ? 'Nothing matches just yet' : 'Your first product starts here'}
           text={
-            search
+            search || filter || extraFilters.active
               ? 'Try another search or change the filter.'
               : 'Add your first listing and give your customers something to discover.'
           }
@@ -1156,7 +1205,8 @@ function parseCsvRows(text: string): string[][] {
               <thead>
                 <tr>
                   <th>Product</th>
-                  <th>Created / Updated</th>
+                  <th>Created</th>
+                  <th>Updated</th>
                   <th>Category</th>
                   <th>Price</th>
                   <th>Inventory</th>
@@ -1198,11 +1248,8 @@ function parseCsvRows(text: string): string[][] {
                         </span>
                       </Link>
                     </td>
-                    <td>
-                      {activityDate(product.created)}
-                      <br />
-                      {activityDate(product.updated)}
-                    </td>
+                    <td><DateStamp value={product.created} /></td>
+                    <td><DateStamp value={product.updated} /></td>
                     <td>
                       {categories.find((category) => category.key === product.category)
                         ?.name || product.category}
@@ -1301,7 +1348,12 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [showDigitalUrlInput, setShowDigitalUrlInput] = useState(false);
 
-  const effectiveCoverImage = coverPreview || coverImage || product.data?.image_url || '';
+  const activeDigitalUrl = digitalUrlInput ?? product.data?.digital_file_url ?? '';
+  const isImageDigitalAsset = isDigitalImage(digitalFile, activeDigitalUrl);
+  const hasDigitalAsset = Boolean(digitalFile || (activeDigitalUrl && activeDigitalUrl.trim().length > 0));
+  const effectiveWatermark = isImageDigitalAsset ? (digitalWatermark ?? product.data?.digital_preview_watermark ?? true) : false;
+  const autoDigitalCover = (effectiveIsDigital && isImageDigitalAsset) ? (digitalPreviewUrl || (activeDigitalUrl.startsWith('http') || activeDigitalUrl.startsWith('/api') ? activeDigitalUrl : '')) : '';
+  const effectiveCoverImage = coverPreview || coverImage || product.data?.image_url || autoDigitalCover || '';
   const variantImages = [...new Set([effectiveCoverImage, ...(product.data?.images || []).map(image => image.image)].filter(Boolean))];
   const [basePrice, setBasePrice] = useState<string | null>(null);
   const [discount, setDiscount] = useState<string | null>(null);
@@ -1340,6 +1392,8 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     setDigitalFile(file);
     if (!isDigitalImage(file, null)) {
       setDigitalWatermark(false);
+    } else {
+      setDigitalWatermark(true);
     }
     if (digitalPreviewUrl) URL.revokeObjectURL(digitalPreviewUrl);
     setDigitalPreviewUrl(URL.createObjectURL(file));
@@ -1357,7 +1411,8 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     const activeFileUrl = values.digital_file_url || digitalPreviewUrl || product.data?.digital_file_url || '';
     const isImage = isDigitalImage(digitalFile, activeFileUrl);
     const galleryUrls = (product.data?.images || []).map((img) => img.image);
-    const fallbackCover = effectiveCoverImage || product.data?.image_url || 'https://placehold.co/900x900/1b2921/9bd7b5?text=Product+Preview';
+    const autoCover = (digital && isImage) ? (digitalPreviewUrl || (activeFileUrl.startsWith('http') || activeFileUrl.startsWith('/api') ? activeFileUrl : '')) : '';
+    const fallbackCover = effectiveCoverImage || autoCover || product.data?.image_url || 'https://placehold.co/900x900/1b2921/9bd7b5?text=Product+Preview';
     return {
       title: values.title?.trim() || product.data?.title || 'Untitled product',
       description: values.description?.trim() || product.data?.description || 'Product description coming soon.',
@@ -1365,10 +1420,12 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       category: values.category || product.data?.category || 'General',
       is_digital: digital,
       price: Number.isFinite(price) && price > 0 ? price : Number(product.data?.price || 0),
-      sale_price: Number.isFinite(price) && price > 0
-        ? (price * (100 - Number(values.discount || 0))) / 100
-        : (Number(product.data?.price || 0) * (100 - Number(product.data?.discount || 0))) / 100,
-      discount: Number(values.discount ?? product.data?.discount ?? 0),
+      sale_price: affiliate
+        ? (Number.isFinite(price) && price > 0 ? price : Number(product.data?.price || 0))
+        : Number.isFinite(price) && price > 0
+          ? (price * (100 - Number(values.discount || 0))) / 100
+          : (Number(product.data?.price || 0) * (100 - Number(product.data?.discount || 0))) / 100,
+      discount: affiliate ? 0 : Number(values.discount ?? product.data?.discount ?? 0),
       available: affiliate ? 999 : digital ? 0 : Number(values.available ?? product.data?.available ?? 0),
       image: fallbackCover,
       images: Array.from(
@@ -1379,16 +1436,20 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           ...effectiveVariants.map((v) => v.image_url || ''),
         ])
       ).filter((x): x is string => Boolean(x)),
-      flash_sale_end: values.flash_sale_end ? new Date(values.flash_sale_end).toISOString() : (product.data?.flash_sale_end || null),
-      digital_preview_watermark: digital && isImage && (digitalWatermark ?? (values.digital_preview_watermark === 'on')),
-      variants: digital || affiliate
+      flash_sale_end: affiliate
+        ? null
+        : values.flash_sale_end
+          ? new Date(values.flash_sale_end).toISOString()
+          : (product.data?.flash_sale_end || null),
+      digital_preview_watermark: digital && isImage && (digitalWatermark ?? (values.digital_preview_watermark === 'on' || true)),
+      variants: affiliate
         ? []
         : effectiveVariants
             .filter((v) => v.name && v.name.trim())
             .map((v) => ({
               ...v,
               price_delta: v.price_delta || '0.00',
-              available: Number(v.available || 0),
+              available: digital ? 999 : Number(v.available || 0),
             })),
       digital_file_name: digitalFile?.name || (values.digital_file_url ? 'Digital download' : undefined),
       digital_file_url: digitalPreviewUrl || values.digital_file_url || product.data?.digital_file_url || undefined,
@@ -1487,13 +1548,13 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     const affiliate = form.product_type === 'affiliate_clickbank';
     const digital = !affiliate && form.is_digital === 'on';
     const flashEnd = form.flash_sale_end ? new Date(form.flash_sale_end).toISOString() : null;
-    const validVariants = (affiliate || digital) ? [] : effectiveVariants
+    const validVariants = affiliate ? [] : effectiveVariants
       .filter(v => v.name && v.name.trim().length > 0)
       .map(v => ({
         ...v,
         name: v.name.trim(),
         price_delta: v.price_delta || '0.00',
-        available: typeof v.available === 'number' ? v.available : Number(v.available || 0),
+        available: digital ? 999 : (typeof v.available === 'number' ? v.available : Number(v.available || 0)),
       }));
 
     let fileUrl = form.digital_file_url || data?.digital_file_url || '';
@@ -1509,10 +1570,10 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       affiliate_hoplink: affiliate ? (form.affiliate_hoplink?.trim() || '') : '',
       affiliate_vendor_nickname: affiliate ? (form.affiliate_vendor_nickname?.trim() || '') : '',
       affiliate_button_text: affiliate ? (form.affiliate_button_text?.trim() || 'Buy on Partner Site') : '',
-      image_url: coverFile ? '' : (form.image_url || data?.image_url || ''),
+      image_url: coverFile ? '' : (form.image_url || coverImage || data?.image_url || ''),
       available: affiliate ? 999 : (digital ? 0 : Number(form.available)),
-      discount: Number(form.discount || 0),
-      flash_sale_end: flashEnd,
+      discount: affiliate ? 0 : Number(form.discount || 0),
+      flash_sale_end: affiliate ? null : flashEnd,
       variants: validVariants,
       weight: (affiliate || digital) ? '0.00' : (form.weight || '1.00'),
       length: (affiliate || digital) ? null : (form.length ? Number(form.length) : null),
@@ -1521,7 +1582,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       visibility: form.visibility === 'on',
       is_digital: digital,
       digital_file_url: digital ? fileUrl : '',
-      digital_preview_watermark: digital && isImage ? (digitalWatermark ?? (form.digital_preview_watermark === 'on')) : false,
+      digital_preview_watermark: digital && isImage ? (digitalWatermark ?? (form.digital_preview_watermark === 'on' || true)) : false,
       tags: form.tags ? form.tags.split(',').map(value => value.trim()).filter(Boolean) : [],
     };
     try {
@@ -1570,10 +1631,6 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   if (product.error) return <ErrorState error={product.error} />;
 
   const data = product.data;
-  const activeDigitalUrl = digitalUrlInput ?? data?.digital_file_url ?? '';
-  const isImageDigitalAsset = isDigitalImage(digitalFile, activeDigitalUrl);
-  const hasDigitalAsset = Boolean(digitalFile || (activeDigitalUrl && activeDigitalUrl.trim().length > 0));
-  const effectiveWatermark = isImageDigitalAsset ? (digitalWatermark ?? data?.digital_preview_watermark ?? false) : false;
 
   return (
     <>
@@ -1919,11 +1976,13 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     />
   </Field>
 
-  {!isAffiliate && !effectiveIsDigital && (
+  {!isAffiliate && (
     <>
       <h2>Product options &amp; variants</h2>
       <p className="fine-print">
-        Add a separate option for each color, size, or combination, such as Black / Large. Each option has its own stock and price adjustment.
+        {effectiveIsDigital
+          ? 'Offer different editions, resolutions, or formats (e.g. 4K Wallpaper, Mobile HD, Print-Ready Vector). Each option can adjust the price and map to a distinct preview image.'
+          : 'Add a separate option for each color, size, or combination, such as Black / Large. Each option has its own stock and price adjustment.'}
       </p>
       <p className="fine-print">
         The base price after the product discount is <strong>{money(salePrice)}</strong>. Enter 0 to use that price, 5 to add $5, or -5 to subtract $5. Changing the base price or discount updates every variant price.
@@ -1951,7 +2010,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
             <div className="variant-fields">
               <Field label="Variant name">
                 <input
-                  placeholder="e.g. Black / Large"
+                  placeholder={effectiveIsDigital ? 'e.g. 4K Ultra HD Wallpaper' : 'e.g. Black / Large'}
                   value={variant.name}
                   onChange={(event) => updateVariant(index, 'name', event.target.value)}
                   required
@@ -2017,23 +2076,30 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
                   />
                 </div>
               )}
-              <Field label="Variant stock">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  placeholder="Units of this option"
-                  value={variant.available ?? ''}
-                  onChange={(event) =>
-                    updateVariant(
-                      index,
-                      'available',
-                      event.target.value === '' ? '' : Number(event.target.value)
-                    )
-                  }
-                  required
-                />
-              </Field>
+              {effectiveIsDigital ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--muted)', paddingTop: '28px' }}>
+                  <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: 'var(--green)' }} />
+                  Unlimited digital inventory
+                </div>
+              ) : (
+                <Field label="Variant stock">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="Units of this option"
+                    value={variant.available ?? ''}
+                    onChange={(event) =>
+                      updateVariant(
+                        index,
+                        'available',
+                        event.target.value === '' ? '' : Number(event.target.value)
+                      )
+                    }
+                    required
+                  />
+                </Field>
+              )}
             </div>
           </fieldset>
         ))}
@@ -2052,7 +2118,9 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
 
   <h2>Product photography</h2>
   <p className="fine-print">
-    Upload a primary cover image for your product (stored directly on MinIO). Gallery photos and variant mapping can be managed below after saving.
+    {effectiveIsDigital && isImageDigitalAsset
+      ? 'Your digital artwork file is automatically used as the watermarked storefront cover image. You can optionally upload a custom promotional cover below.'
+      : 'Upload a primary cover image for your product (stored directly on MinIO). Gallery photos and variant mapping can be managed below after saving.'}
   </p>
 
   {coverPreview ? (
@@ -2075,24 +2143,40 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       </button>
     </div>
   ) : effectiveCoverImage ? (
-    <div className="upload-preview-card">
+    <div
+      className="upload-preview-card"
+      style={autoDigitalCover && !coverFile && !coverImage && !product.data?.image_url ? { border: '1px solid var(--green)' } : undefined}
+    >
       <ProductImage
         src={effectiveCoverImage}
-        alt="Current cover photo"
+        alt={autoDigitalCover && !coverImage && !product.data?.image_url ? 'Auto-generated cover from digital asset' : 'Current cover photo'}
         className="upload-preview-thumb"
       />
       <div className="upload-preview-meta">
-        <strong>Cover photo</strong>
+        <strong>
+          {autoDigitalCover && !coverFile && !coverImage && !product.data?.image_url
+            ? 'Auto-generated from digital asset'
+            : 'Cover photo'}
+        </strong>
         <span style={{ fontSize: '11px', color: 'var(--muted)', wordBreak: 'break-all' }}>
-          {normalizeImageUrl(effectiveCoverImage)}
+          {autoDigitalCover && !coverFile && !coverImage && !product.data?.image_url
+            ? 'Automatically serving as public preview with PROACE PREVIEW watermark overlay'
+            : normalizeImageUrl(effectiveCoverImage)}
         </span>
-        <span className="upload-preview-badge">Active cover</span>
+        <span
+          className="upload-preview-badge"
+          style={autoDigitalCover && !coverFile && !coverImage && !product.data?.image_url ? { background: 'var(--green-light)', color: 'var(--green)' } : undefined}
+        >
+          {autoDigitalCover && !coverFile && !coverImage && !product.data?.image_url
+            ? 'Watermarked cover preview'
+            : 'Active cover'}
+        </span>
       </div>
       <label
         className="button secondary"
         style={{ fontSize: '11px', padding: '6px 10px', cursor: 'pointer' }}
       >
-        <Upload size={13} /> Change
+        <Upload size={13} /> {autoDigitalCover && !coverImage && !product.data?.image_url ? 'Upload custom cover' : 'Change'}
         <input
           type="file"
           accept="image/jpeg,image/png,image/webp"
@@ -2147,7 +2231,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
 <aside className="editor-aside">
   <section>
     <h2>{effectiveIsDigital || isAffiliate ? 'Pricing' : 'Pricing & stock'}</h2>
-    <Field label="Price (USD)">
+    <Field label={isAffiliate ? "Vendor Reference Price (USD)" : "Price (USD)"}>
       <input
         name="price"
         type="number"
@@ -2158,47 +2242,65 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         onChange={(event) => setBasePrice(event.target.value)}
       />
     </Field>
-    <div className="form-row">
-      <Field label="Discount (%)">
-        <input
-          type="number"
-          name="discount"
-          min="0"
-          max="60"
-          step="1"
-          required
-          value={effectiveDiscount}
-          onChange={(event) => setDiscount(event.target.value)}
-        />
-      </Field>
-      {!effectiveIsDigital && !isAffiliate && (
-        <Field label="Stock quantity">
+    {isAffiliate ? (
+      <div
+        className="card-soft"
+        style={{
+          padding: '12px 14px',
+          margin: '12px 0',
+          border: '1px solid var(--border)',
+          borderRadius: '8px',
+          background: 'var(--muted-bg, rgba(0, 0, 0, 0.03))',
+        }}
+      >
+        <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600, color: 'var(--foreground)' }}>
+          Partner-Controlled Pricing & Promotions
+        </p>
+        <p className="fine-print" style={{ margin: '4px 0 0', color: 'var(--muted)', fontSize: '0.78rem', lineHeight: 1.4 }}>
+          This reference price is for internal catalog records. Shoppers see “Price available on partner site.” The vendor controls the final price, promotions, and availability. ProAce discounts and flash deal timers are unavailable for ClickBank offers.
+        </p>
+        <input type="hidden" name="discount" value="0" />
+      </div>
+    ) : (
+      <>
+        <div className="form-row">
+          <Field label="Discount (%)">
+            <input
+              type="number"
+              name="discount"
+              min="0"
+              max="60"
+              step="1"
+              required
+              value={effectiveDiscount}
+              onChange={(event) => setDiscount(event.target.value)}
+            />
+          </Field>
+          {!effectiveIsDigital && (
+            <Field label="Stock quantity">
+              <input
+                name="available"
+                type="number"
+                min="0"
+                step="1"
+                required
+                defaultValue={data?.available || 0}
+              />
+            </Field>
+          )}
+        </div>
+        {effectiveIsDigital && <input type="hidden" name="available" value="0" />}
+        <Field label="Flash Deal Expiration (Optional)">
           <input
-            name="available"
-            type="number"
-            min="0"
-            step="1"
-            required
-            defaultValue={data?.available || 0}
+            name="flash_sale_end"
+            type="datetime-local"
+            defaultValue={
+              data?.flash_sale_end ? toLocalDateTimeInput(data.flash_sale_end) : ''
+            }
           />
         </Field>
-      )}
-    </div>
-    {effectiveIsDigital && <input type="hidden" name="available" value="0" />}
-    {isAffiliate && (
-      <p className="fine-print" style={{ color: 'var(--muted)', marginTop: '4px' }}>
-        Inventory is managed directly by ClickBank partner vendor.
-      </p>
+      </>
     )}
-    <Field label="Flash Deal Expiration (Optional)">
-      <input
-        name="flash_sale_end"
-        type="datetime-local"
-        defaultValue={
-          data?.flash_sale_end ? toLocalDateTimeInput(data.flash_sale_end) : ''
-        }
-      />
-    </Field>
     <hr />
     <h3>Availability</h3>
     <label className="check-row">
@@ -2376,7 +2478,7 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
               )}
               <label className="button secondary" style={{ fontSize: '11px', padding: '6px 12px', cursor: 'pointer' }}>
                 <Upload size={14} /> {digitalUploading ? 'Uploading…' : product.digital_file_url ? 'Replace file' : 'Upload file'}
-                <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx" disabled={digitalUploading} style={{ display: 'none' }} onChange={handleDigitalUpload} />
+                <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx,.png,.jpg,.jpeg,.webp,.svg,.avif" disabled={digitalUploading} style={{ display: 'none' }} onChange={handleDigitalUpload} />
               </label>
             </div>
           </div>
@@ -2424,7 +2526,19 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
   );
 }
 
-function MerchantOrderTable({ orders, storeId, onUpdated }: { orders: MerchantOrder[]; storeId?: number; onUpdated?: () => void }) {
+function MerchantOrderTable({
+  orders,
+  storeId,
+  onUpdated,
+  isFiltered,
+  onResetFilters,
+}: {
+  orders: MerchantOrder[];
+  storeId?: number;
+  onUpdated?: () => void;
+  isFiltered?: boolean;
+  onResetFilters?: () => void;
+}) {
   const [expanded, setExpanded] = useState<number | null>(null);
   const [trackingOrder, setTrackingOrder] = useState<MerchantOrder | null>(null);
   const trackingDialogRef = useDialogFocus(!!trackingOrder, () => setTrackingOrder(null));
@@ -2468,6 +2582,25 @@ function MerchantOrderTable({ orders, storeId, onUpdated }: { orders: MerchantOr
   }
 
   if (!orders.length) {
+    if (isFiltered) {
+      return (
+        <div className="empty-state">
+          <Search size={30} />
+          <h2>No matching orders</h2>
+          <p>No orders matched your current search or filter criteria.</p>
+          {onResetFilters && (
+            <button
+              type="button"
+              className="button secondary"
+              style={{ marginTop: '0.75rem' }}
+              onClick={onResetFilters}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <div className="empty-state">
         <ShoppingBag size={30} />
@@ -2484,7 +2617,7 @@ function MerchantOrderTable({ orders, storeId, onUpdated }: { orders: MerchantOr
           <thead>
             <tr>
               <th>Order</th>
-              <th>Date</th>
+              <th>Created</th>
               <th>Products</th>
               <th>Units</th>
               <th>Tracking</th>
@@ -2495,80 +2628,95 @@ function MerchantOrderTable({ orders, storeId, onUpdated }: { orders: MerchantOr
             </tr>
           </thead>
           <tbody>
-            {orders.map((order) => (
-              <tr key={order.id}>
-                <td>
-                  <strong>{order.reference}</strong>
-                </td>
-                <td>
-                  {new Date(order.created).toLocaleDateString('en-GB', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                  })}
-                </td>
-                <td>
-                  {expanded === order.id
-                    ? order.items.map((item) => (
-                        <p key={item.product}>
-                          {item.title} × {item.quantity}
-                        </p>
-                      ))
-                    : `${order.items[0]?.title || 'Order'}${
-                        order.items.length > 1 ? ` +${order.items.length - 1}` : ''
-                      }`}
-                </td>
-                <td>
-                  {order.items.reduce((sum, item) => sum + item.quantity, 0)}
-                </td>
-                <td>
-                  {order.tracking_number ? (
-                    <small style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <Truck size={13} color="var(--green)" />
-                      {order.carrier || 'USPS'}: {order.tracking_number}
-                    </small>
-                  ) : (
-                    <span className="muted" style={{ fontSize: '0.8rem' }}>
-                      No tracking
-                    </span>
-                  )}
-                </td>
-                <td>
-                  <Status value={order.status} />
-                </td>
-                <td style={{ whiteSpace: 'nowrap' }}>
-                  <button
-                    className="icon-button"
-                    aria-label={`View items for ${order.reference}`}
-                    title="View order items"
-                    onClick={() => setExpanded(expanded === order.id ? null : order.id)}
-                  >
-                    <Eye size={17} />
-                  </button>
-                  {storeId && ['pending', 'confirmed', 'shipped'].includes(order.status) && (
+            {orders.map((order) => {
+              const isDigital =
+                order.has_physical_items === false ||
+                (order.items.length > 0 && order.items.every((it) => Boolean(it.is_digital)));
+
+              return (
+                <tr key={order.id}>
+                  <td>
+                    <strong>{order.reference}</strong>
+                  </td>
+                  <td>
+                    <DateStamp value={order.created} dateOnly />
+                  </td>
+                  <td>
+                    {expanded === order.id
+                      ? order.items.map((item) => (
+                          <p key={item.product}>
+                            {item.title} × {item.quantity}
+                          </p>
+                        ))
+                      : `${order.items[0]?.title || 'Order'}${
+                          order.items.length > 1 ? ` +${order.items.length - 1}` : ''
+                        }`}
+                  </td>
+                  <td>
+                    {order.items.reduce((sum, item) => sum + item.quantity, 0)}
+                  </td>
+                  <td>
+                    {isDigital ? (
+                      <span
+                        className="muted"
+                        style={{
+                          fontSize: '0.8rem',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}
+                      >
+                        <ArrowDownToLine size={13} color="var(--green)" />
+                        Digital delivery
+                      </span>
+                    ) : order.tracking_number ? (
+                      <small style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <Truck size={13} color="var(--green)" />
+                        {order.carrier || 'USPS'}: {order.tracking_number}
+                      </small>
+                    ) : (
+                      <span className="muted" style={{ fontSize: '0.8rem' }}>
+                        No tracking
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <Status value={order.status} />
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
                     <button
-                      className="button secondary"
-                      style={{
-                        padding: '0.25rem 0.6rem',
-                        fontSize: '0.78rem',
-                        marginLeft: '0.4rem',
-                      }}
-                      onClick={() => {
-                        setTrackingOrder(order);
-                        setTrackingNumber(order.tracking_number || '');
-                        setCarrier(order.carrier || 'USPS');
-                        setOrderStatus(order.status === 'pending' ? 'shipped' : order.status);
-                        setAllowEditTracking(!order.tracking_number);
-                        setConfirmVerified(false);
-                      }}
+                      className="icon-button"
+                      aria-label={`View items for ${order.reference}`}
+                      title="View order items"
+                      onClick={() => setExpanded(expanded === order.id ? null : order.id)}
                     >
-                      <Truck size={13} />
-                      Ship / Track
+                      <Eye size={17} />
                     </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+                    {!isDigital && storeId && ['pending', 'confirmed', 'shipped'].includes(order.status) && (
+                      <button
+                        className="button secondary"
+                        style={{
+                          padding: '0.25rem 0.6rem',
+                          fontSize: '0.78rem',
+                          marginLeft: '0.4rem',
+                        }}
+                        onClick={() => {
+                          setTrackingOrder(order);
+                          setTrackingNumber(order.tracking_number || '');
+                          setCarrier(order.carrier || 'USPS');
+                          setOrderStatus(order.status === 'pending' ? 'shipped' : order.status);
+                          setAllowEditTracking(!order.tracking_number);
+                          setConfirmVerified(false);
+                        }}
+                      >
+                        <Truck size={13} />
+                        Ship / Track
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -2728,18 +2876,65 @@ function MerchantOrderTable({ orders, storeId, onUpdated }: { orders: MerchantOr
   );
 }
 
-function MerchantOrders({ store }: { store: Store }) {
+function MerchantOrders({
+  store,
+  stores = [],
+  onSelectStore,
+}: {
+  store: Store;
+  stores?: Store[];
+  onSelectStore?: (storeId: number) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [status, setStatus] = useState('');
+  const [timeframe, setTimeframe] = useState('');
+  const [carrier, setCarrier] = useState('');
+  const [ordering, setOrdering] = useState('-created');
   const [offset, setOffset] = useState(0);
   const client = useQueryClient();
 
+  const hasActiveFilters = Boolean(
+    search.trim() || status || timeframe || carrier || ordering !== '-created'
+  );
+
+  const queryParams = new URLSearchParams({
+    limit: '20',
+    offset: String(offset),
+  });
+  if (status) queryParams.set('status', status);
+  if (search.trim()) queryParams.set('search', debouncedSearch.trim());
+  if (timeframe) queryParams.set('days', timeframe);
+  if (carrier) queryParams.set('carrier', carrier);
+  if (ordering && ordering !== '-created') queryParams.set('ordering', ordering);
+
   const orders = useQuery({
-    queryKey: ['merchant-orders', store.id, status, offset],
+    queryKey: [
+      'merchant-orders',
+      store.id,
+      status,
+      search.trim(),
+      timeframe,
+      carrier,
+      ordering,
+      offset,
+    ],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === store.id ? previousData : undefined,
     queryFn: () =>
       api<Page<MerchantOrder>>(
-        `stores/${store.id}/orders?status=${status}&limit=20&offset=${offset}`
+        `stores/${store.id}/orders?${queryParams.toString()}`
       ),
   });
+
+  function resetFilters() {
+    setSearch('');
+    setStatus('');
+    setTimeframe('');
+    setCarrier('');
+    setOrdering('-created');
+    setOffset(0);
+  }
 
   return (
     <>
@@ -2748,6 +2943,66 @@ function MerchantOrders({ store }: { store: Store }) {
           <h1>Every order, a good beginning.</h1>
           <p>Follow your customers’ finds from your store.</p>
         </div>
+        {orders.data?.count !== undefined && (
+          <span className="badge" style={{ fontSize: '0.85rem', padding: '0.35rem 0.75rem' }}>
+            {orders.data.count} {orders.data.count === 1 ? 'order' : 'orders'}
+          </span>
+        )}
+      </div>
+
+      <div
+        className="merchant-toolbar"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: '0.75rem',
+          marginBottom: '1.25rem',
+        }}
+      >
+        <div className="search-box" style={{ flex: '1 1 260px', minWidth: '220px' }}>
+          <Search size={16} />
+          <input
+            aria-label="Search orders"
+            placeholder="Search by order #, customer, email, tracking, item…"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setOffset(0);
+            }}
+          />
+          {search && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Clear search"
+              onClick={() => {
+                setSearch('');
+                setOffset(0);
+              }}
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
+
+        {stores.length > 1 && (
+          <select
+            aria-label="Filter orders by store"
+            value={store.id}
+            onChange={(event) => {
+              onSelectStore?.(Number(event.target.value));
+              setOffset(0);
+            }}
+          >
+            {stores.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
+
         <select
           aria-label="Filter orders by status"
           value={status}
@@ -2757,15 +3012,79 @@ function MerchantOrders({ store }: { store: Store }) {
           }}
         >
           <option value="">All statuses</option>
-          {['pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'].map(
-            (value) => (
-              <option key={value} value={value}>
-                {value.charAt(0).toUpperCase() + value.slice(1)}
-              </option>
-            )
-          )}
+          {[
+            ['pending', 'Pending'],
+            ['confirmed', 'Confirmed'],
+            ['shipped', 'Shipped'],
+            ['delivered', 'Delivered'],
+            ['picked up', 'Picked Up'],
+            ['cancelled', 'Cancelled'],
+            ['refunded', 'Refunded'],
+          ].map(([val, label]) => (
+            <option key={val} value={val}>
+              {label}
+            </option>
+          ))}
         </select>
+
+        <select
+          aria-label="Filter orders by timeframe"
+          value={timeframe}
+          onChange={(event) => {
+            setTimeframe(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="">All time</option>
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+
+        <select
+          aria-label="Filter orders by carrier"
+          value={carrier}
+          onChange={(event) => {
+            setCarrier(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="">All carriers</option>
+          <option value="USPS">USPS</option>
+          <option value="UPS">UPS</option>
+          <option value="FedEx">FedEx</option>
+          <option value="DHL">DHL Express</option>
+        </select>
+
+        <select
+          aria-label="Sort orders"
+          value={ordering}
+          onChange={(event) => {
+            setOrdering(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="-created">Newest first</option>
+          <option value="created">Oldest first</option>
+          <option value="-updated">Recently updated</option>
+        </select>
+
+        {hasActiveFilters && (
+          <button
+            type="button"
+            className="button secondary"
+            style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+            onClick={resetFilters}
+          >
+            <RotateCcw size={14} style={{ marginRight: '4px' }} />
+            Reset filters
+          </button>
+        )}
       </div>
+
+      {orders.isFetching && !orders.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
 
       {orders.isLoading ? (
         <Loading />
@@ -2776,6 +3095,8 @@ function MerchantOrders({ store }: { store: Store }) {
           <MerchantOrderTable
             orders={orders.data?.results || []}
             storeId={store.id}
+            isFiltered={hasActiveFilters}
+            onResetFilters={resetFilters}
             onUpdated={() => {
               client.invalidateQueries({ queryKey: ['merchant-orders', store.id] });
               client.invalidateQueries({ queryKey: ['merchant-recent', store.id] });
@@ -2821,8 +3142,9 @@ function MerchantPayments({ store }: { store: Store }) {
   const [notes, setNotes] = useState('');
   const [payoutBusy, setPayoutBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'requests' | 'ledger'>('requests');
-  const [financeSearch, setFinanceSearch] = useState('');
-  const [financeStatus, setFinanceStatus] = useState('');
+  const payoutFilters = useCollectionFilters();
+  const ledgerFilters = useCollectionFilters();
+  const filters = activeTab === 'requests' ? payoutFilters : ledgerFilters;
 
   const stats = useQuery({
     queryKey: ['dashboard', store.id, '30'],
@@ -2830,13 +3152,13 @@ function MerchantPayments({ store }: { store: Store }) {
   });
 
   const payouts = useQuery({
-    queryKey: ['merchant-payouts', store.id],
-    queryFn: () => api<StorePayout[]>(`stores/${store.id}/payouts`),
+    queryKey: ['merchant-payouts', store.id, payoutFilters.query],
+    queryFn: () => api<Page<StorePayout>>(`stores/${store.id}/payouts?paginated=1&${payoutFilters.query}`),
   });
 
   const ledger = useQuery({
-    queryKey: ['merchant-ledger', store.id],
-    queryFn: () => api<{ count: number; results: StoreEarningsLedger[] }>(`stores/wallet/ledger?store_id=${store.id}&limit=50`),
+    queryKey: ['merchant-ledger', store.id, ledgerFilters.query],
+    queryFn: () => api<{ count: number; results: StoreEarningsLedger[] }>(`stores/wallet/ledger?store_id=${store.id}&${ledgerFilters.query}`),
   });
 
   const wallet = stats.data?.wallet;
@@ -3025,68 +3347,96 @@ function MerchantPayments({ store }: { store: Store }) {
               className={activeTab === 'requests' ? 'active' : ''}
               onClick={() => setActiveTab('requests')}
             >
-              Payout Requests ({payouts.data?.length || 0})
+              Payout Requests ({payouts.data?.count || 0})
             </button>
             <button
               className={activeTab === 'ledger' ? 'active' : ''}
               onClick={() => setActiveTab('ledger')}
             >
-              Store Earnings Ledger ({ledger.data?.results?.length || 0})
+              Store Earnings Ledger ({ledger.data?.count || 0})
             </button>
           </div>
-          <div className="search-box"><Search size={16} /><input aria-label="Search payments" placeholder="Search reference or description…" value={financeSearch} onChange={event => setFinanceSearch(event.target.value)} /></div>
-          <select aria-label="Filter payment status" value={financeStatus} onChange={event => setFinanceStatus(event.target.value)}><option value="">All statuses</option><option value="pending">Pending</option><option value="available">Available</option><option value="completed">Completed</option><option value="rejected">Rejected</option><option value="reversed">Reversed</option></select>
         </div>
+        <CollectionFilters
+          filters={filters}
+          label={activeTab === 'requests' ? 'payout requests' : 'earnings ledger'}
+          fields={[
+            {
+              key: 'status', label: 'Status',
+              options: (activeTab === 'requests'
+                ? ['pending', 'completed', 'rejected']
+                : ['pending', 'available', 'completed', 'reversed'])
+                .map(value => ({ value, label: value.replaceAll('_', ' ') })),
+            },
+            activeTab === 'requests' ? {
+              key: 'payout_method', label: 'Method',
+              options: [
+                { value: 'bank_transfer', label: 'Bank transfer' },
+                { value: 'stripe_connect', label: 'Stripe Connect' },
+              ],
+            } : {
+              key: 'entry_type', label: 'Entry type',
+              options: ['sale', 'payout', 'fee', 'refund'].map(value => ({ value, label: value })),
+            },
+            ...financialFields,
+          ]}
+        />
+        {typeof (activeTab === 'requests' ? payouts.data?.count : ledger.data?.count) === 'number' && (
+          <CollectionCount count={(activeTab === 'requests' ? payouts.data?.count : ledger.data?.count) || 0} />
+        )}
 
         {activeTab === 'requests' ? (
           payouts.isLoading ? (
             <Loading />
           ) : payouts.error ? (
             <ErrorState error={payouts.error} retry={() => payouts.refetch()} />
-          ) : !payouts.data?.length ? (
+          ) : !payouts.data?.results.length ? (
             <div className="empty-state">
               <WalletCards size={36} />
-              <h2>No payout requests yet</h2>
+              <h2>{payoutFilters.active ? 'No payouts match your filters' : 'No payout requests yet'}</h2>
               <p>
-                {isOfficial
+                {payoutFilters.active ? 'Reset filters to see all payout requests.' : isOfficial
                   ? 'Official company store earnings are consolidated into the Platform Treasury. Payouts and transfers are audited at /admin/commission.'
                   : 'When you request withdrawals for cleared sales, they will be tracked here with their status and references.'}
               </p>
-              {!isOfficial && availableBal >= 5 && canWithdraw && (
+              {!payoutFilters.active && !isOfficial && availableBal >= 5 && canWithdraw && (
                 <button className="button" onClick={() => setRequestingPayout(true)}>
                   Request your first payout
                 </button>
               )}
             </div>
           ) : (
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Reference</th>
-                    <th>Amount</th>
-                    <th>Method</th>
-                    <th>Status</th>
-                    <th>Processed</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {payouts.data.filter(p => (!financeStatus || p.status === financeStatus) && `${p.reference} ${p.notes || ''} ${p.payout_method}`.toLowerCase().includes(financeSearch.toLowerCase())).map(p => (
-                    <tr key={p.id}>
-                      <td>{new Date(p.created).toLocaleDateString(undefined, { dateStyle: 'medium' })}</td>
-                      <td><strong>{p.reference}</strong></td>
-                      <td><strong style={{ color: 'var(--ink)' }}>{money(p.amount)}</strong></td>
-                      <td style={{ textTransform: 'capitalize' }}>{p.payout_method.replace('_', ' ')}</td>
-                      <td><Status value={p.status} /></td>
-                      <td className="muted">{p.processed_at ? new Date(p.processed_at).toLocaleDateString() : 'Pending review'}</td>
-                      <td className="muted">{p.notes || '—'}</td>
+            <>
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Created</th>
+                      <th>Reference</th>
+                      <th>Amount</th>
+                      <th>Method</th>
+                      <th>Status</th>
+                      <th>Processed</th>
+                      <th>Notes</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {payouts.data.results.map(p => (
+                      <tr key={p.id}>
+                        <td><DateStamp value={p.created} dateOnly /></td>
+                        <td><strong>{p.reference}</strong></td>
+                        <td><strong style={{ color: 'var(--ink)' }}>{money(p.amount)}</strong></td>
+                        <td style={{ textTransform: 'capitalize' }}>{p.payout_method.replace('_', ' ')}</td>
+                        <td><Status value={p.status} /></td>
+                        <td className="muted">{p.processed_at ? <DateStamp value={p.processed_at} dateOnly /> : 'Pending review'}</td>
+                        <td className="muted">{p.notes || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <CollectionPagination filters={filters} count={payouts.data?.count || 0} />
+            </>
           )
         ) : (
           ledger.isLoading ? (
@@ -3096,45 +3446,48 @@ function MerchantPayments({ store }: { store: Store }) {
           ) : !ledger.data?.results?.length ? (
             <div className="empty-state">
               <ShoppingBag size={36} />
-              <h2>No ledger entries yet</h2>
-              <p>As orders are placed and confirmed for {store.name}, detailed earnings, fees, and credit status will appear here.</p>
+              <h2>{ledgerFilters.active ? 'No ledger entries match your filters' : 'No ledger entries yet'}</h2>
+              <p>{ledgerFilters.active ? 'Reset filters to see all entries.' : `As orders are placed for ${store.name}, earnings and fees appear here.`}</p>
             </div>
           ) : (
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Date</th>
-                    <th>Entry Type</th>
-                    <th>Description</th>
-                    <th>Gross</th>
-                    <th>Fee</th>
-                    <th>Net Amount</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {ledger.data.results.filter(entry => (!financeStatus || entry.status === financeStatus) && `${entry.reference} ${entry.description} ${entry.entry_type}`.toLowerCase().includes(financeSearch.toLowerCase())).map(entry => (
-                    <tr key={entry.id}>
-                      <td>{new Date(entry.created).toLocaleDateString(undefined, { dateStyle: 'medium' })}</td>
-                      <td>
-                        <span className={`status status-${entry.entry_type}`} style={{ textTransform: 'uppercase', fontSize: 8 }}>
-                          {entry.entry_type}
-                        </span>
-                      </td>
-                      <td>
-                        <strong>{entry.description}</strong>
-                        {entry.reference && <small style={{ display: 'block', color: 'var(--muted)', fontSize: 9 }}>Ref: {entry.reference}</small>}
-                      </td>
-                      <td>{money(entry.gross_amount)}</td>
-                      <td className="muted">{money(entry.fee_amount)}</td>
-                      <td><strong style={{ color: Number(entry.net_amount) >= 0 ? 'var(--green)' : 'var(--red)' }}>{money(entry.net_amount)}</strong></td>
-                      <td><Status value={entry.status} /></td>
+            <>
+              <div className="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Created</th>
+                      <th>Entry Type</th>
+                      <th>Description</th>
+                      <th>Gross</th>
+                      <th>Fee</th>
+                      <th>Net Amount</th>
+                      <th>Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {ledger.data.results.map(entry => (
+                      <tr key={entry.id}>
+                        <td><DateStamp value={entry.created} dateOnly /></td>
+                        <td>
+                          <span className={`status status-${entry.entry_type}`} style={{ textTransform: 'uppercase', fontSize: 8 }}>
+                            {entry.entry_type}
+                          </span>
+                        </td>
+                        <td>
+                          <strong>{entry.description}</strong>
+                          {entry.reference && <small style={{ display: 'block', color: 'var(--muted)', fontSize: 9 }}>Ref: {entry.reference}</small>}
+                        </td>
+                        <td>{money(entry.gross_amount)}</td>
+                        <td className="muted">{money(entry.fee_amount)}</td>
+                        <td><strong style={{ color: Number(entry.net_amount) >= 0 ? 'var(--green)' : 'var(--red)' }}>{money(entry.net_amount)}</strong></td>
+                        <td><Status value={entry.status} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <CollectionPagination filters={filters} count={ledger.data?.count || 0} />
+            </>
           )
         )}
       </div>
@@ -3151,31 +3504,37 @@ function MerchantPayments({ store }: { store: Store }) {
 function MerchantNotifications({ store }: { store: Store }) {
   const { notify } = useShop();
   const client = useQueryClient();
-  const [tab, setTab] = useState<'all' | 'unread' | 'orders' | 'payouts' | 'archived'>('all');
-  const [search, setSearch] = useState('');
-  const [offset, setOffset] = useState(0);
+  const filters = useCollectionFilters();
+  const tab: string = filters.values.state || 'all';
+  const search: string = filters.search;
+  const offset: number = filters.offset;
+  const setOffset = filters.setOffset;
   const [isLive, setIsLive] = useState(true);
   const [busyAction, setBusyAction] = useState<number | null>(null);
 
-  const queryParams = new URLSearchParams({
+  const queryParams = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(filters.query)),
     store: String(store.id),
     limit: '15',
     offset: String(offset),
   });
 
+  if (tab === 'read') queryParams.set('state', 'read');
+  if (tab === 'archived') queryParams.delete('state');
   if (tab === 'unread') queryParams.set('state', 'unread');
   else if (tab === 'orders') queryParams.set('category', 'order');
   else if (tab === 'payouts') queryParams.set('category', 'payout');
   else if (tab === 'archived') queryParams.set('include_archived', 'true');
 
-  if (search.trim()) queryParams.set('search', search.trim());
+
 
   const endpoint = tab === 'archived'
     ? `notifications/archived/?${queryParams.toString()}`
     : `notifications?${queryParams.toString()}`;
 
   const notifications = useQuery({
-    queryKey: ['merchant-notifications', store.id, tab, search, offset],
+    queryKey: ['merchant-notifications', store.id, filters.query, offset],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === store.id ? previousData : undefined,
     queryFn: () => api<Page<NotificationItem>>(endpoint),
     refetchInterval: isLive ? 10000 : false,
   });
@@ -3277,52 +3636,13 @@ function MerchantNotifications({ store }: { store: Store }) {
         </div>
       </div>
 
-      <div className="merchant-toolbar" style={{ flexWrap: 'wrap', gap: 14 }}>
-        <div className="tabs" style={{ border: 0 }}>
-          {[
-            ['all', `All (${counts.data?.total || 0})`],
-            ['unread', `Unread (${counts.data?.unread || 0})`],
-            ['orders', 'Orders'],
-            ['payouts', 'Payouts'],
-            ['archived', `Archived (${counts.data?.archived || 0})`],
-          ].map(([key, label]) => (
-            <button
-              key={key}
-              className={tab === key ? 'active' : ''}
-              onClick={() => {
-                setTab(key as typeof tab);
-                setOffset(0);
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <div className="search-box" style={{ height: 36, width: 260 }}>
-          <Search size={16} />
-          <input
-            aria-label="Search store notifications"
-            placeholder="Search notifications…"
-            value={search}
-            onChange={e => {
-              setSearch(e.target.value);
-              setOffset(0);
-            }}
-          />
-          {search && (
-            <button
-              type="button"
-              aria-label="Clear search"
-              onClick={() => {
-                setSearch('');
-                setOffset(0);
-              }}
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
-      </div>
+      <CollectionFilters filters={filters} label="store notifications" fields={[
+        { key: 'state', label: 'State', options: [{ value: 'unread', label: 'Unread' }, { value: 'read', label: 'Read' }, { value: 'archived', label: 'Archived' }] },
+        { key: 'category', label: 'Category', options: ['order', 'refund', 'payout', 'wallet', 'store', 'affiliates', 'account', 'general'].map(value => ({ value, label: value })) },
+      ]} />
+      {notifications.isFetching && !notifications.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
 
       {notifications.isLoading ? (
         <Loading />
@@ -3333,8 +3653,8 @@ function MerchantNotifications({ store }: { store: Store }) {
           <Bell size={36} />
           <h2>No notifications found</h2>
           <p>
-            {search
-              ? 'No notifications match your search query. Try different keywords.'
+            {filters.active
+              ? 'No notifications match your filters. Reset filters to see all notifications.'
               : tab === 'unread'
               ? `You are completely caught up! No unread notifications for ${store.name}.`
               : `Notifications regarding orders, customer updates, and payouts for ${store.name} will be tracked here live.`}
@@ -3369,7 +3689,7 @@ function MerchantNotifications({ store }: { store: Store }) {
                 <div>
                   <div className="merchant-notif-header">
                     <span className={`notification-tag ${isOrder ? 'store' : ''}`}>{categoryLabel}</span>
-                    <span className="merchant-notif-time" title={new Date(item.timestamp).toLocaleString()}>
+                    <span className="merchant-notif-time" title={activityDate(item.timestamp)}>
                       {formatRelativeTime(item.timestamp)}
                     </span>
                   </div>
@@ -3565,11 +3885,52 @@ function MerchantSettings({ store }: { store: Store }) {
 
 
 export function ProductPreviewPage(): React.JSX.Element {
+  const { notify } = useShop();
   const [selectedVariant, setSelectedVariant] = useState<number>(0);
   const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
   const [preview, setPreview] = useState<PreviewProduct | null>(null);
   const [ready, setReady] = useState<boolean>(false);
+  const [copied, setCopied] = useState<boolean>(false);
+
+  const handleSharePreview = async () => {
+    const url = typeof window !== 'undefined' ? window.location.href : '/merchant/products/preview';
+    const shareData = {
+      title: preview?.title || 'Product Preview',
+      text: `Preview: ${preview?.title || 'Product'} on ProAce`,
+      url,
+    };
+
+    let shared = false;
+    if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+      try {
+        await navigator.share(shareData);
+        shared = true;
+      } catch (err) {
+        if ((err as Error).name === 'AbortError') return;
+      }
+    }
+
+    if (!shared) {
+      try {
+        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+          await navigator.clipboard.writeText(url);
+        } else {
+          const textarea = document.createElement('textarea');
+          textarea.value = url;
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textarea);
+        }
+        setCopied(true);
+        notify('Preview link copied to clipboard!');
+        setTimeout(() => setCopied(false), 2500);
+      } catch {
+        notify('Failed to copy preview link', true);
+      }
+    }
+  };
 
   const loadPreview = useCallback((): boolean => {
     try {
@@ -3630,7 +3991,11 @@ export function ProductPreviewPage(): React.JSX.Element {
   if (!preview) return <Empty title="No product preview available" text="Open Preview from your product editor to see your unsaved listing here." href="/merchant/products" label="Back to products" />;
   const activeVariant: ProductVariant | undefined = preview.variants[selectedVariant];
   const displayedPrice: number = preview.sale_price + Number(activeVariant?.price_delta || 0);
-  const effectiveStock: number = preview.is_digital ? 99 : typeof activeVariant?.available === 'number' ? activeVariant.available : preview.available;
+  const isSoldOut: boolean = !preview.is_digital && (preview.available <= 0 || preview.label === 'sold out');
+  const variantStock: number = typeof activeVariant?.available === 'number'
+    ? Math.min(preview.available, activeVariant.available)
+    : preview.available;
+  const effectiveStock: number = preview.is_digital ? 99 : isSoldOut ? 0 : Math.max(0, variantStock);
   const originalPrice: number = preview.price + Number(activeVariant?.price_delta || 0);
   const previewImages = [...new Set([...(preview.images.length ? preview.images : [preview.image]), preview.image, ...(preview.variants || []).map(variant => variant.image_url || '')].filter(Boolean))];
   return (
@@ -3646,6 +4011,15 @@ export function ProductPreviewPage(): React.JSX.Element {
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="button secondary storefront-preview-button"
+              onClick={handleSharePreview}
+              title="Copy preview link"
+            >
+              {copied ? <Check size={14} /> : <Share2 size={14} />}
+              {copied ? 'Link copied' : 'Share preview'}
+            </button>
             <button
               type="button"
               className="button secondary storefront-preview-button"
@@ -3673,7 +4047,7 @@ export function ProductPreviewPage(): React.JSX.Element {
                 key={preview.title + previewImages.join(',')}
                 images={previewImages}
                 title={preview.title}
-                discount={preview.discount}
+                discount={preview.product_type === 'affiliate_clickbank' ? 0 : preview.discount}
                 activeImage={selectedGalleryImage ?? activeVariant?.image_url ?? preview.image}
                 onImageChange={setSelectedGalleryImage}
               />
@@ -3690,16 +4064,33 @@ export function ProductPreviewPage(): React.JSX.Element {
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}><Star size={16} fill="currentColor" /><strong>New arrival</strong></span>
               <span style={{ color: 'var(--line)' }}>•</span>
               <button className="text-button" type="button" disabled>0 reviews</button>
+              <span style={{ color: 'var(--line)' }}>•</span>
+              <button
+                type="button"
+                className="text-button"
+                onClick={handleSharePreview}
+                title="Copy preview link"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, textDecoration: 'none' }}
+              >
+                {copied ? <Check size={14} style={{ color: 'var(--green)' }} /> : <Share2 size={14} />}
+                <span style={{ color: copied ? 'var(--green)' : 'inherit', fontWeight: copied ? 600 : 'normal' }}>
+                  {copied ? 'Link copied' : 'Share'}
+                </span>
+              </button>
             </div>
             <div className="detail-price" style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <strong>{displayedPrice > 0 ? money(displayedPrice) : 'Price TBD'}</strong>
-              {preview.discount > 0 && (
+              {preview.product_type === 'affiliate_clickbank' ? (
+                <span className="partner-price-note">Price available on partner site</span>
+              ) : (
+                <strong>{displayedPrice > 0 ? money(displayedPrice) : 'Price TBD'}</strong>
+              )}
+              {preview.product_type !== 'affiliate_clickbank' && preview.discount > 0 && (
                 <>
                   <del>{money(originalPrice)}</del>
                   <span>You save {money(originalPrice - displayedPrice)}</span>
                 </>
               )}
-              {preview.flash_sale_end && (
+              {preview.product_type !== 'affiliate_clickbank' && preview.flash_sale_end && (
                 <FlashCountdown end={preview.flash_sale_end} />
               )}
             </div>
@@ -3742,7 +4133,7 @@ export function ProductPreviewPage(): React.JSX.Element {
                           )
                         </span>
                       )}
-                      {typeof variant.available === 'number' && variant.available <= 0 && (
+                      {!preview.is_digital && ((typeof variant.available === 'number' && variant.available <= 0) || isSoldOut) && (
                         <span style={{ fontSize: '11px', color: 'var(--muted)' }}>(Sold out)</span>
                       )}
                     </button>
@@ -3819,6 +4210,15 @@ export function ProductPreviewPage(): React.JSX.Element {
                 disabled
               >
                 <Heart size={20} />
+              </button>
+              <button
+                type="button"
+                className={`button secondary ${copied ? 'copied' : ''}`}
+                aria-label="Share product preview"
+                title={copied ? 'Link copied to clipboard!' : 'Share preview link'}
+                onClick={handleSharePreview}
+              >
+                {copied ? <Check size={20} style={{ color: 'var(--green)' }} /> : <Share2 size={20} />}
               </button>
             </div>
             <div className="delivery-note">

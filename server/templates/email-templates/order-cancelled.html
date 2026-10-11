@@ -196,7 +196,7 @@
               <td align="center" valign="top" style="background: #f8faf7; border-top: 1px solid #e1e7df; padding: 24px 20px;">
                 <div class="Inter400" style="font-family: Arial, sans-serif; color: #697067; font-size: 12px; line-height: 18px; text-align: center;">
                   © 2026 ProAce International Inc. All rights reserved.<br>
-                  Need assistance? Contact us at <a href="mailto:{{support_email}}" style="color: #1f5b3a; text-decoration: underline;">{{support_email}}</a>
+                  {% if order_support_email %}Need assistance? Contact us at <a href="mailto:{{ order_support_email }}" style="color: #1f5b3a; text-decoration: underline;">{{ order_support_email }}</a>{% endif %}
                 </div>
               </td>
             </tr>

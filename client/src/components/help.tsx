@@ -18,11 +18,12 @@ export function HelpPage() {
       'What do the verified store checkmarks (ticks) and badge colors mean?',
       [
         'Every approved seller on ProAce receives a verified checkmark (tick) to signal authenticity, identity verification, and customer trust. As merchants grow their sales and maintain top review ratings, their verified tick automatically upgrades:',
-        '• Starter Seller (Blue Tick): Staff-verified active merchant.',
-        '• Booster Seller (Silver Tick): $1,000+ in verified sales.',
-        '• Accelerator Seller (Electric Violet Tick): $5,000+ in verified sales.',
-        '• Power Seller (Emerald Green Tick): $20,000+ in verified sales.',
-        '• Mega Seller (Diamond Cyan Tick): $50,000+ in verified sales.',
+        '• Starter Seller (Blue Tick): Staff-verified active merchant ($0–$4,999 in sales).',
+        '• Booster Seller (Silver Tick): $5,000+ in verified sales.',
+        '• Accelerator Seller (Electric Purple Tick): $25,000+ in verified sales.',
+        '• Power Seller (Emerald Green Tick): $100,000+ in verified sales.',
+        '• Mega Seller (Flame Orange Tick): $500,000+ in verified sales.',
+        '• Legendary Seller (Cosmic Ruby Flame Badge): $1,000,000+ in verified sales.',
         '• Official Partner (Gold Tick): ProAce flagship & official brand partner stores (0% platform commission).',
       ].join('\n'),
     ],
@@ -59,6 +60,10 @@ export function HelpPage() {
     [
       'Can digital downloads be refunded?',
       'Digital products (e-books, software, digital artwork, audio files) are sold as one customer entitlement, so the cart quantity is limited to one. After payment, you can return to your order details page and download the file again whenever needed. Digital products are non-refundable once delivered or downloaded; if a file is corrupted, contact customer support for a verified replacement.',
+    ],
+    [
+      'How does the ProAce referral program work?',
+      `Join from My account → Affiliates & referrals, then share your invite link. Your first ${business.referralRewardLimit} referred signups earn $${business.referralRewardAmount} each in non-withdrawable ProAce Wallet store credit. Further referrals are recorded without rewards. View referral history and spendable balance from your account.`,
     ],
     [
       'How do Curated Partner & ClickBank affiliate listings work?',
@@ -203,7 +208,7 @@ export function PolicyPage({ type }: { type: string }) {
             To protect buyers and ensure marketplace authenticity, all seller stores undergo mandatory onboarding
             compliance review by ProAce staff before going public. Once approved, sellers receive the{' '}
             <strong>Verified Blue Tick</strong>. Sellers automatically unlock progressive tier checkmarks
-            (Silver, Violet, Emerald, Diamond, and Gold) based on cumulative verified sales and top customer reviews.
+            (Silver, Purple, Emerald, Flame Orange, Cosmic Ruby, and Gold) based on cumulative verified sales and top customer reviews.
             Official Partner flagship stores operate with Gold Ticks and 0% platform commission. Badges remain subject
             to ongoing quality and safety audits.
           </p>

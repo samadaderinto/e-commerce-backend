@@ -24,7 +24,9 @@ class ResendEmailBackend(BaseEmailBackend):
         sent = 0
         for message in email_messages:
             try:
-                resend.Emails.send(self._build_payload(message))
+                key = message.extra_headers.get("Idempotency-Key")
+                options = {"idempotency_key": key} if key else None
+                resend.Emails.send(self._build_payload(message), options=options)
             except Exception:
                 if not self.fail_silently:
                     raise

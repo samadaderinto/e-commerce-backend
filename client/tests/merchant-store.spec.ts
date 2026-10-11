@@ -181,3 +181,39 @@ test('onboarding preview includes unsaved variants and a flash deal', async ({ p
   expect(writes).toBe(0);
   await preview.close();
 });
+
+
+test('ClickBank editor hides local promotions and previews vendor-controlled pricing', async ({ page, context }) => {
+  await context.route('**/api/**', async route => {
+    const path: string = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    let json: unknown = {};
+    if (path === '/api/me') {
+      json = { id: 7, first_name: 'Admin', email: 'admin@test.com', is_staff: true, is_superuser: true };
+    } else if (path === '/api/stores') {
+      json = { count: 1, results: [{ id: 1, name: 'Official store', status: 'active', is_official: true }] };
+    } else if (path === '/api/cart') {
+      json = { items: [], subtotal: '0', shipping: '0', total: '0' };
+    } else if (path === '/api/wishlist' || path.includes('notifications')) {
+      json = [];
+    }
+    await route.fulfill({ json });
+  });
+  await page.goto('/merchant/products/new');
+  await page.locator('input[name="title"]').fill('Partner guide');
+  await page.locator('textarea[name="description"]').fill('A guide sold by the partner.');
+  await page.locator('input[name="price"]').fill('25.00');
+  await page.locator('input[name="discount"]').fill('20');
+  await page.locator('input[name="flash_sale_end"]').fill('2030-10-10T12:00');
+  await page.locator('select[name="product_type"]').selectOption('affiliate_clickbank');
+  await expect(page.locator('input[name="discount"][type="number"]')).toHaveCount(0);
+  await expect(page.locator('input[name="flash_sale_end"]')).toHaveCount(0);
+  await expect(page.locator('input[name="discount"][type="hidden"]')).toHaveValue('0');
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByRole('button', { name: 'Preview', exact: true }).click();
+  const preview = await popupPromise;
+  await expect(preview.getByRole('heading', { name: 'Partner guide' })).toBeVisible({ timeout: 30000 });
+  await expect(preview.getByText('Check current price on partner site', { exact: true })).toBeVisible();
+  await expect(preview.locator('.detail-price del')).toHaveCount(0);
+  await expect(preview.locator('.flash-deal-badge')).toHaveCount(0);
+  await preview.close();
+});

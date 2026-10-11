@@ -15,6 +15,30 @@ test('exposes the supported storefront categories', () => {
     'computing',
     'sports',
     'books',
+    'toys',
+    'kids',
+    'home',
+    'kitchen',
+    'beauty',
+    'health',
+    'pets',
+    'games',
+    'tablets',
+    'fishing',
+    'lingerie',
+    'beverages',
+    'garden',
+    'automotive',
+    'jewelry',
+    'software',
+    'courses',
+    'templates',
+    'design_assets',
+    'photo_video',
+    'music_audio',
+    'business',
+    'digital_tools',
+
   ]);
 });
 
@@ -58,6 +82,42 @@ test('turns API validation errors into readable ApiErrors', async t => {
     error => error instanceof ApiError
       && error.status === 400
       && error.message === 'Invalid input. postal code: This field is required.',
+  );
+});
+
+test('unwraps Python ErrorDetail strings and omits technical field prefixes', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(
+    { code: "{'coupon': ErrorDetail(string='This coupon does not apply to anything in your cart.', code='invalid')}" },
+    { status: 400 },
+  ));
+
+  await assert.rejects(
+    api('checkout/validate-coupon', 'POST', {}),
+    error => error instanceof ApiError
+      && error.status === 400
+      && error.message === 'This coupon does not apply to anything in your cart.',
+  );
+});
+
+test('unwraps DRF error envelope and strips non_field_errors prefix', async t => {
+  t.mock.method(globalThis, 'fetch', async () => Response.json(
+    {
+      error: {
+        code: 'invalid',
+        message: 'Request validation failed.',
+        details: {
+          non_field_errors: ['Unable to log in with provided credentials.'],
+        },
+      },
+    },
+    { status: 400 },
+  ));
+
+  await assert.rejects(
+    api('auth/login', 'POST', {}),
+    error => error instanceof ApiError
+      && error.status === 400
+      && error.message === 'Unable to log in with provided credentials.',
   );
 });
 

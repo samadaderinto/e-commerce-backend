@@ -7,6 +7,10 @@ from typing import Any
 
 
 class Notification(models.Model):
+    event_key = models.CharField(max_length=64, null=True, blank=True)
+    category = models.CharField(max_length=20, default="general", db_index=True)
+    stores = models.ManyToManyField("store.Store", related_name="inbox_notifications", blank=True)
+
     def save(self, *args: Any, **kwargs: Any) -> None:
         if kwargs.get('update_fields'):
             kwargs['update_fields'] = set(kwargs['update_fields']) | {'updated_at'}
@@ -78,7 +82,11 @@ class Notification(models.Model):
         verbose_name = "Notification"
         verbose_name_plural = "Notifications"
         ordering = ("-timestamp",)
+        constraints = [
+            models.UniqueConstraint(fields=["recipient", "event_key"], name="notif_rec_event_unique"),
+        ]
         indexes = [
+            models.Index(fields=["recipient", "category", "timestamp"], name="notif_rec_category_time_idx"),
             models.Index(fields=["recipient", "unread"], name="notif_rec_unread_idx"),
         ]
 
@@ -118,6 +126,8 @@ class PushDevice(models.Model):
 
 
 class NotificationDelivery(models.Model):
+    idempotency_key = models.CharField(max_length=64, unique=True, null=True, blank=True)
+
     CHANNEL_EMAIL = "email"
     CHANNEL_PUSH = "push"
     CHANNELS = (

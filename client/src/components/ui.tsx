@@ -351,6 +351,7 @@ export function ProductCard({ product }: { product: Product }) {
   const params = useSearchParams();
   const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const isAffiliate = product.product_type === 'affiliate_clickbank';
+  const isSoldOut = !product.is_digital && !isAffiliate && (product.available <= 0 || product.label === 'sold out');
   const productHref = `/products/${product.id}${preview ? '?preview=1' : ''}`;
   const liked = saved.some((item) => item.id === product.id);
   return (
@@ -362,17 +363,22 @@ export function ProductCard({ product }: { product: Product }) {
         >
           <ProductImage src={product.image} alt={product.title} />
         </Link>
-        {(product.flash_sale_end || product.discount > 0 || isAffiliate) && (
+        {(isAffiliate || isSoldOut || (!isAffiliate && (product.flash_sale_end || product.discount > 0))) && (
           <div className="product-badges">
             {isAffiliate && (
               <span className="discount partner-badge">
                 Partner Offer
               </span>
             )}
-            {product.flash_sale_end && (
+            {isSoldOut && (
+              <span className="discount sold-out-badge">
+                Sold Out
+              </span>
+            )}
+            {!isAffiliate && !isSoldOut && product.flash_sale_end && (
               <FlashCountdown end={product.flash_sale_end} />
             )}
-            {product.discount > 0 && (
+            {!isAffiliate && !isSoldOut && product.discount > 0 && (
               <span className="discount">−{product.discount}%</span>
             )}
           </div>
@@ -419,8 +425,8 @@ export function ProductCard({ product }: { product: Product }) {
         {product.title}
       </Link>
       <div className="price">
-        <strong>{money(product.sale_price)}</strong>
-        {product.discount > 0 && <del>{money(product.price)}</del>}
+        <strong>{isAffiliate ? "Check price on partner site" : money(product.sale_price)}</strong>
+        {!isAffiliate && product.discount > 0 && <del>{money(product.price)}</del>}
       </div>
     </article>
   );
@@ -480,22 +486,31 @@ export function Empty({
   href = "/shop",
   label = "Explore the shop",
   icon,
+  onAction,
 }: {
   title: string;
   text: string;
   href?: string;
   label?: string;
   icon?: ReactNode;
+  onAction?: () => void;
 }) {
   return (
     <div className="empty-state">
       {icon || <ShoppingBag size={36} strokeWidth={1.3} />}
       <h2>{title}</h2>
       <p>{text}</p>
-      <Link className="button" href={href}>
-        {label}
-        <ArrowRight size={16} />
-      </Link>
+      {onAction ? (
+        <button type="button" className="button" onClick={onAction}>
+          {label}
+          <ArrowRight size={16} />
+        </button>
+      ) : (
+        <Link className="button" href={href}>
+          {label}
+          <ArrowRight size={16} />
+        </Link>
+      )}
     </div>
   );
 }
@@ -636,7 +651,7 @@ export function AddToBagButton({
   // If this is an external affiliate product, render direct outbound link to ClickBank tracking endpoint
   if (product.product_type === "affiliate_clickbank") {
     const outboundUrl = `/api/affiliates/clickbank/outbound/${product.id}`;
-    const label = product.affiliate_button_text || "Buy on Official Site";
+    const label = product.affiliate_button_text || "Buy on Partner Site";
     return (
       <a
         href={outboundUrl}
@@ -649,11 +664,15 @@ export function AddToBagButton({
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          gap: "6px",
+          gap: "8px",
+          background: "#ea580c",
+          borderColor: "#ea580c",
+          color: "#ffffff",
+          fontWeight: 600,
         }}
       >
+        <ArrowUpRight size={16} />
         <span>{label}</span>
-        <ArrowUpRight size={15} />
       </a>
     );
   }
@@ -689,13 +708,15 @@ export function AddToBagButton({
     }
   }
 
+  const isSoldOut = !product.is_digital && (!product.available || product.available <= 0 || product.label === "sold out");
+
   const label = preview
     ? "Preview only"
     : product.is_own_store
       ? "Your listing"
       : product.store_verified === false
         ? "Preview only"
-        : !product.is_digital && !product.available
+        : isSoldOut
           ? "Out of stock"
           : busy
             ? "Adding…"
@@ -713,7 +734,8 @@ export function AddToBagButton({
     cartLoading ||
     !!cartError ||
     committed ||
-    (!product.is_digital && (!product.available || quantity > product.available)) ||
+    isSoldOut ||
+    (!product.is_digital && quantity > product.available) ||
     product.is_own_store ||
     product.store_verified === false;
 

@@ -4,6 +4,7 @@ from django.conf import settings
 
 from utils.mixins import DatesMixin
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 from phonenumber_field.modelfields import PhoneNumberField
 from nanoid import generate
 
@@ -45,8 +46,15 @@ class Store(DatesMixin):
         blank=True,
         related_name="blocked_stores",
     )
+
+    def clean(self) -> None:
+        super().clean()
+        if self.is_official and self.status == self.STATUS_BLOCKED:
+            raise ValidationError("Official company stores cannot be blocked.")
     
     def save(self, *args, **kwargs) -> None:
+        if self.is_official and self.status == self.STATUS_BLOCKED:
+            raise ValidationError("Official company stores cannot be blocked.")
         if not self.username:
             self.username = self._generate_unique_username()
         if self.user_id:

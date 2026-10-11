@@ -405,18 +405,18 @@ def request_merchant_payout(
         notes=notes,
     )
 
-    if store:
-        StoreEarningsLedger.objects.create(
-            wallet=wallet,
-            store=store,
-            entry_type=StoreEarningsLedger.TYPE_PAYOUT,
-            gross_amount=amount,
-            fee_amount=Decimal('0.00'),
-            net_amount=-amount,
-            status=StoreEarningsLedger.STATUS_PENDING,
-            description=f"Payout withdrawal request ({reference}) for store '{store.name}'",
-            reference=reference,
-        )
+    StoreEarningsLedger.objects.create(
+        wallet=wallet,
+        store=store,
+        entry_type=StoreEarningsLedger.TYPE_PAYOUT,
+        gross_amount=amount,
+        fee_amount=Decimal("0.00"),
+        net_amount=-amount,
+        status=StoreEarningsLedger.STATUS_PENDING,
+        description=f"Payout withdrawal request ({reference})"
+        + (f" for store '{store.name}'" if store else " (unified merchant balance)"),
+        reference=reference,
+    )
 
     return payout
 

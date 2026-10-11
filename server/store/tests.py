@@ -208,6 +208,18 @@ class MerchantTests(TestCase):
         self.assertEqual(order.tracking_number, '9400200000000000000000')
 
     @override_settings(ROOT_URLCONF='store.test_urls')
+    def test_repeated_tracking_save_does_not_repeat_notices_or_emails(self) -> None:
+        from notification.models import Notification, NotificationDelivery
+        order = self.make_order()
+        payload = {"carrier": "USPS", "tracking_number": "9400100000000000000000", "status": "shipped"}
+        url = self.url + f"orders/{order.pk}/tracking/"
+        self.assertEqual(self.client.post(url, payload, format="json").status_code, 200)
+        notices = Notification.objects.count()
+        deliveries = NotificationDelivery.objects.count()
+        self.assertEqual(self.client.post(url, payload, format="json").status_code, 200)
+        self.assertEqual(Notification.objects.count(), notices)
+        self.assertEqual(NotificationDelivery.objects.count(), deliveries)
+
     def test_tracking_update_rejects_unsupported_carriers_and_foreign_orders(self):
         order = self.make_order()
         response = self.client.post(self.url + f'orders/{order.pk}/tracking/', {
@@ -270,6 +282,25 @@ class MerchantTests(TestCase):
         self.assertEqual(product.sales, 0)
         self.assertFalse(product.sponsored)
         self.assertEqual(list(product.tags.names()), ['audio'])
+
+    def test_digital_categories_accept_creation_and_catalog_filtering(self) -> None:
+        categories: list[str] = ["software", "courses", "templates", "design_assets", "photo_video", "music_audio", "business", "digital_tools"]
+        for category in categories:
+            with self.subTest(category=category):
+                response = self.client.post(
+                    self.products_url,
+                    self.product_payload(
+                        category=category, is_digital=True,
+                        digital_file_url="https://example.com/test-download.zip",
+                    ),
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 201, response.data)
+                self.assertEqual(response.data["category"], category)
+                listing = self.client.get(self.products_url, {"category": category})
+                self.assertEqual(listing.status_code, 200, listing.data)
+                self.assertEqual(listing.data["count"], 1)
+                self.assertEqual(listing.data["results"][0]["id"], response.data["id"])
 
     def test_invalid_products_rejected(self):
         for invalid in [{'price': '-1'}, {'price': '0'}, {'discount': 61},
@@ -459,6 +490,39 @@ class MerchantTests(TestCase):
         self.assertEqual(row['customer']['phone'], '+12025550123')
         self.assertEqual(self.client.get(self.url + 'orders/', {'status': 'invalid'}).status_code, 400)
 
+    def test_order_list_search_and_filters(self):
+        order1 = self.make_order(status='confirmed')
+        order2 = self.make_order(status='picked up')
+        order2.orderId = 'ORD-PICKUP-99'
+        order2.buyer_email = 'pickup_buyer@example.com'
+        order2.save()
+
+        # Search by orderId
+        res = self.client.get(self.url + 'orders/', {'search': 'PICKUP'})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 1)
+        self.assertEqual(res.data['results'][0]['reference'], 'ORD-PICKUP-99')
+
+        # Search by buyer_email
+        res = self.client.get(self.url + 'orders/', {'search': 'pickup_buyer'})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 1)
+
+        # Filter by status 'picked up'
+        res = self.client.get(self.url + 'orders/', {'status': 'picked up'})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 1)
+        self.assertEqual(res.data['results'][0]['status'], 'picked up')
+
+        # Filter by days
+        res = self.client.get(self.url + 'orders/', {'days': '30'})
+        self.assertEqual(res.status_code, 200)
+        self.assertGreaterEqual(res.data['count'], 2)
+
+        # Ordering
+        res = self.client.get(self.url + 'orders/', {'ordering': 'created'})
+        self.assertEqual(res.status_code, 200)
+
     def test_schedule_ownership_and_validation(self):
         future = (timezone.now() + timedelta(days=1)).isoformat()
         response = self.client.post('/stores/schedules/', {'product': self.product.pk, 'store': self.other_store.pk, 'make_visible_at': future}, format='json')
@@ -596,6 +660,55 @@ class MerchantTests(TestCase):
         self.assertEqual(response.status_code, 200, response.data)
         product.refresh_from_db()
         self.assertTrue(product.digital_preview_watermark)
+
+    def test_merchant_upload_digital_image_auto_sets_cover_and_watermark(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Digital Landscape Artwork',
+            description='Original digital illustration',
+            category='books',
+            price='35.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='',
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='purple').save(image_bytes, format='PNG')
+        fake_img = SimpleUploadedFile('artwork.png', image_bytes.getvalue(), content_type='image/png')
+        url = f'{self.products_url}{product.id}/digital-file/'
+        response = self.client.post(url, {'file': fake_img}, format='multipart')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertTrue(response.data['image_url'])
+        self.assertTrue(response.data['digital_preview_watermark'])
+
+        product.refresh_from_db()
+        self.assertTrue(product.digital_preview_watermark)
+        self.assertTrue(product.image_url)
+        self.assertIn('artwork.png', product.digital_file_url)
+
+    def test_digital_product_with_variants_preserves_options_and_validates_prices(self):
+        payload = {
+            'title': '4K Wallpaper Pack',
+            'description': 'High-resolution digital desktop backgrounds',
+            'category': 'books',
+            'price': '10.00',
+            'discount': 0,
+            'is_digital': True,
+            'digital_file_url': 'https://downloads.proace.local/art/wallpaper.png',
+            'variants': [
+                {'name': '4K Ultra HD', 'price_delta': '5.00'},
+                {'name': 'Standard 1080p', 'price_delta': '0.00'},
+            ],
+        }
+        response = self.client.post(self.products_url, payload, format='json')
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(len(response.data['variants']), 2)
+        self.assertEqual(response.data['variants'][0]['name'], '4K Ultra HD')
+
+        product = Product.objects.get(pk=response.data['id'])
+        self.assertTrue(product.is_digital)
+        self.assertEqual(len(product.variants), 2)
 
     def test_merchant_upload_image_sets_cover_image(self):
         product = Product.objects.create(

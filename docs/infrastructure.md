@@ -253,7 +253,9 @@ Messaging config:
 | `NOTIFICATION_DELIVERY_MAX_ATTEMPTS` | Maximum attempts before a delivery is marked failed | `8` |
 | `NOTIFICATION_DELIVERY_STALE_SECONDS` | Age after which an in-flight delivery is recovered | `300` |
 | `RESEND_API_KEY` | Resend API key used by the custom Django email backend | unset; required to send |
-| `RESEND_FROM_EMAIL` | Verified sender name/address used for outgoing email | `Proace <notifications@example.com>` |
+| `SUPPORT_EMAIL` | Customer support contact and general reply address | `admin@proaceintl.com` |
+| `ORDER_SUPPORT_EMAIL` | Orders and refund support/reply address | `productace@proaceintl.com` |
+| `RESEND_FROM_EMAIL` | Verified sender name/address used for outgoing email | `ProAce <admin@proaceintl.com>` |
 | `FCM_ENABLED` | Enables Firebase Cloud Messaging push delivery | `false` locally |
 
 ## Nginx
@@ -324,3 +326,10 @@ See [role matrix, staff activation, and operator setup](access-control.md) and
 [multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).
 
 The API image creates `/app/media` owned by the non-root `app` user before Docker initializes the media volume. Existing volumes created with root ownership can be repaired without deleting uploads: `docker compose -f server/compose.yaml exec --user root api chown -R app:app /app/media`.
+
+Agent workflow: after verified implementation changes, agents automatically rebuild and recreate only the affected local Docker services (`client`, `api`, and affected `notification-worker`/`celery-beat` consumers) using Compose `up -d --build --no-deps`, then check startup and health. Documentation-only changes require no rebuild. See `AGENTS.md` for the standing authorization and service scope rules.
+
+Local backend Compose startup now starts MinIO and waits for `minio-init` to finish provisioning the media bucket and application credentials before starting API/worker/scheduler consumers. This also applies when starting a backend service individually without `--no-deps`; targeted `--no-deps` refreshes assume dependencies are already running. The initializer fails on required bucket/policy setup errors. Existing storage volumes are preserved.
+
+
+Notification remediation (11 October 2026): one canonical event identity per recipient, recipient-scoped multi-store associations, canonical categories and archived/list filters, selected-store refund reviewer routing, treasury/affiliate/review coverage, transactional inbox/outbox writes, credential outbox delivery, stable email/push queue keys and provider idempotency, shared SSE/FCM toast deduplication, and numeric order-detail links. Apply notification migrations before using the updated API and restart API, notification-worker and celery-beat together. Migration backfills do not send messages; duplicate legacy order-created notices are archived rather than deleted. Local test mode intentionally retains console email and disabled FCM; external provider delivery has not been verified. See the notification audit for channel policy and regression coverage.

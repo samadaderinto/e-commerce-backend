@@ -28,7 +28,23 @@ class Product(DatesMixin):
         ('computing', 'computing'),
         ('lingerie', 'lingerie'),
         ('books', 'books'),
-        ('beverages', 'beverages')
+        ('beverages', 'beverages'),
+        ('kids', 'Kids & baby'),
+        ('home', 'Home & living'),
+        ('kitchen', 'Kitchen & dining'),
+        ('beauty', 'Beauty & personal care'),
+        ('health', 'Health & wellness'),
+        ('garden', 'Garden & tools'),
+        ('automotive', 'Automotive'),
+        ('jewelry', 'Jewelry & watches'),
+        ('software', 'Software & apps'),
+        ('courses', 'Courses & learning'),
+        ('templates', 'Templates & planners'),
+        ('design_assets', 'Design assets'),
+        ('photo_video', 'Photos & video'),
+        ('music_audio', 'Music & audio'),
+        ('business', 'Business resources'),
+        ('digital_tools', 'Digital tools & presets'),
     )
 
     LABEL_CHOICE = (
@@ -131,6 +147,8 @@ class Product(DatesMixin):
 
     @property
     def sale_price(self) -> str:
+        if self.product_type == self.PRODUCT_TYPE_AFFILIATE_CLICKBANK:
+            return str(self.price)
         from decimal import Decimal, ROUND_HALF_UP
         discounted = self.price * (100 - self.discount) / Decimal('100')
         return str(discounted.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))

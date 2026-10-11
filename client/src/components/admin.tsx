@@ -1,9 +1,12 @@
 'use client';
 
+import { CollectionCount, CollectionFilters, CollectionPagination, financialFields, useCollectionFilters, useDebouncedValue } from './collection-filters';
+
+
 import { browserTimeZone } from '@/lib/datetime';
 
-import { ActivityDetails, activityDate } from './activity';
-import { FormEvent, useRef, useState } from 'react';
+import { ActivityDetails, DateStamp, activityDate } from './activity';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -23,6 +26,7 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Share2,
   ShieldAlert,
   ShoppingBag,
   Store,
@@ -34,7 +38,7 @@ import {
   UsersRound,
   X,
 } from 'lucide-react';
-import { api, money } from '@/lib/api';
+import { api, categories, money } from '@/lib/api';
 import type { AdminCoupon, AdminDashboardData, AdminOrder, AdminRefund, AdminTaxJurisdiction, AdminTaxesResponse, AdminUserProfile, Page, StaffUser, StorePayout } from '@/lib/types';
 import { useShop } from './providers';
 import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, Status, VerifiedBadge } from './ui';
@@ -45,6 +49,30 @@ type ActionDialogRequest = {
   confirmLabel?: string;
   reasonLabel?: string;
 };
+
+function isOrderAllDigital(order: { items_snapshot?: Array<Record<string, unknown>> }): boolean {
+  return Boolean(
+    order.items_snapshot &&
+    order.items_snapshot.length > 0 &&
+    order.items_snapshot.every((item) => Boolean(item.is_digital))
+  );
+}
+
+function getOrderOverrideOptions(status: string, isAllDigital: boolean): string[] {
+  if (isAllDigital) {
+    if (status === 'pending') return ['pending', 'cancelled'];
+    if (status === 'confirmed') return ['confirmed', 'cancelled'];
+    if (status === 'shipped') return ['shipped', 'delivered'];
+    if (status === 'delivered') return ['delivered'];
+    return [status];
+  }
+  if (status === 'pending') return ['pending', 'confirmed', 'cancelled'];
+  if (status === 'confirmed') return ['confirmed', 'shipped', 'picked up', 'cancelled'];
+  if (status === 'shipped') return ['shipped', 'delivered', 'confirmed', 'cancelled'];
+  if (status === 'delivered') return ['delivered', 'shipped'];
+  if (status === 'picked up') return ['picked up', 'confirmed'];
+  return [status];
+}
 
 function useActionDialog() {
   const [request, setRequest] = useState<ActionDialogRequest | null>(null);
@@ -151,7 +179,9 @@ export function AdminDashboardPage() {
   const actionDialog = useActionDialog();
   const [detail, setDetail] = useState<{ title: string; rows: Array<[string, string]> } | null>(null);
   const dashboard = useQuery({
-    queryKey: ['admin', 'dashboard', days],
+    queryKey: ['admin', 'dashboard', days, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
     queryFn: () => api<AdminDashboardData>(`admin/staff/dashboard?days=${days}&time_zone=${encodeURIComponent(browserTimeZone())}`),
     enabled: !!(user?.is_staff || (user?.is_superuser || user?.is_business_admin)),
   });
@@ -181,7 +211,11 @@ export function AdminDashboardPage() {
     try {
       if (action === 'delete') {
         if (isUsed) {
-          notify(`Coupon ${coupon.code} has recorded customer redemptions and cannot be deleted to preserve order history. Keep it deactivated instead.`, true);
+          await actionDialog.ask({
+            title: 'Coupon Cannot Be Deleted',
+            message: `Coupon "${coupon.code}" has recorded customer redemptions (${coupon.num_used} used in orders). To preserve historical order records and financial audit trails, used coupons cannot be deleted from the database. Keeping the coupon deactivated ensures it can never be used again.`,
+            confirmLabel: 'Understood',
+          });
           return;
         }
         if (await actionDialog.ask({ title: 'Delete coupon', message: `Permanently delete unused coupon ${coupon.code}?`, confirmLabel: 'Delete' }) === null) return;
@@ -243,6 +277,10 @@ export function AdminDashboardPage() {
           <option value="365">Last 365 days</option>
         </select>
       </div>
+
+      {dashboard.isFetching && !dashboard.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
 
       {dashboard.isLoading ? (
         <Loading />
@@ -450,7 +488,8 @@ export function AdminDashboardPage() {
                       <th>Status</th>
                       <th>Shipping / Tracking</th>
                       <th>Total</th>
-                      <th>Date</th>
+                      <th>Created</th>
+                      <th>Updated</th>
                       <th>Action</th>
                       <th>Emergency action</th>
                     </tr>
@@ -472,31 +511,35 @@ export function AdminDashboardPage() {
                           )}
                         </td>
                         <td><strong>{money(order.total)}</strong></td>
-                        <td>{new Date(order.created).toLocaleDateString()}<small style={{ display: 'block' }}>Updated {activityDate(order.updated)}</small></td>
+                        <td><DateStamp value={order.created} /></td>
+                        <td><DateStamp value={order.updated} /></td>
                         <td>
                           <button
                             type="button"
                             className="button secondary"
                             aria-label={`View details for order ${order.orderId}`}
-                            onClick={() => setDetail({title: `Order #${order.orderId}`, rows: [['Buyer', order.buyer_email || 'Guest'], ['Status', order.status], ['Total', money(order.total)], ['Created', new Date(order.created).toLocaleString()], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)], ['Tracking', order.tracking_number || 'Not assigned']]})}
+                            onClick={() => setDetail({title: `Order #${order.orderId}`, rows: [['Buyer', order.buyer_email || 'Guest'], ['Status', order.status], ['Total', money(order.total)], ['Created', activityDate(order.created)], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)], ['Tracking', order.tracking_number || 'Not assigned']]})}
                           >
                             Details
                           </button>
                         </td>
                         <td>
-                          <select
-                            aria-label={`Override status for order ${order.orderId}`}
-                            value={order.status}
-                            disabled={order.status === 'refunded' || order.status === 'cancelled'}
-                            onChange={event => void overrideOrder(order, event.target.value)}
-                          >
-                            {((order.status === 'pending' ? ['pending', 'confirmed', 'cancelled']
-                              : order.status === 'confirmed' ? ['confirmed', 'shipped', 'picked up', 'cancelled']
-                              : order.status === 'shipped' ? ['shipped', 'delivered', 'confirmed', 'cancelled']
-                              : order.status === 'delivered' ? ['delivered', 'shipped']
-                              : order.status === 'picked up' ? ['picked up', 'confirmed']
-                              : [order.status]) as string[]).map(value => <option value={value} key={value}>{value}</option>)}
-                          </select>
+                          {(() => {
+                            const isDigital = isOrderAllDigital(order);
+                            return (
+                              <select
+                                aria-label={`Override status for order ${order.orderId}`}
+                                value={order.status}
+                                disabled={order.status === 'refunded' || order.status === 'cancelled' || (isDigital && order.status === 'delivered')}
+                                title={isDigital && order.status === 'delivered' ? 'Digital orders are delivered electronically' : undefined}
+                                onChange={event => void overrideOrder(order, event.target.value)}
+                              >
+                                {getOrderOverrideOptions(order.status, isDigital).map(value => (
+                                  <option value={value} key={value}>{value}</option>
+                                ))}
+                              </select>
+                            );
+                          })()}
                         </td>
                       </tr>
                     ))}
@@ -515,6 +558,9 @@ export function AdminDashboardPage() {
                   <Link href="/admin/coupons" className="button secondary">View all coupons &rarr;</Link>
                 </div>
               </div>
+              {coupons.isFetching && !coupons.isLoading && (
+                <p role="status" aria-live="polite">Updating results…</p>
+              )}
               {coupons.isLoading ? (
                 <Loading />
               ) : coupons.error ? (
@@ -542,9 +588,9 @@ export function AdminDashboardPage() {
                             rows: [
                               ['Status', coupon.active ? 'Active' : 'Inactive'],
                               ['Discount', `${coupon.discount}%`],
-                              ['Created by', coupon.created_by || 'Staff Backoffice'],
-                              ['Valid from', new Date(coupon.valid_from).toLocaleString()],
-                              ['Valid to', new Date(coupon.valid_to).toLocaleString()],
+                              ['Created by', coupon.created_by || 'Not recorded'],
+                              ['Valid from', activityDate(coupon.valid_from)],
+                              ['Valid to', activityDate(coupon.valid_to)],
                               ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
                               ...(coupon.redemptions?.length
                                 ? ([['Redemptions', `${coupon.redemptions.length} orders redeemed`]] as [string, string][])
@@ -562,19 +608,18 @@ export function AdminDashboardPage() {
                         {coupon.active ? 'Deactivate' : 'Reactivate'}
                       </button>
                       <button
+                        type="button"
                         className="icon-button"
                         aria-label={
                           coupon.num_used > 0
-                            ? `Coupon ${coupon.code} cannot be deleted (used in orders)`
-                            : `Delete coupon ${coupon.code}`
+                            ? `Used coupon ${coupon.code} cannot be deleted (click to see reason)`
+                            : `Delete unused coupon ${coupon.code}`
                         }
                         title={
                           coupon.num_used > 0
-                            ? 'Used coupons cannot be deleted to preserve redemption history. Keep deactivated.'
+                            ? 'Used coupons cannot be deleted to preserve order records. Click for details.'
                             : 'Delete unused coupon'
                         }
-                        disabled={coupon.num_used > 0}
-                        style={coupon.num_used > 0 ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}
                         onClick={() => void setCoupon(coupon, 'delete')}
                       >
                         <Trash2 size={16} />
@@ -597,6 +642,9 @@ export function AdminDashboardPage() {
                   </Link>
                 </div>
               </div>
+              {refunds.isFetching && !refunds.isLoading && (
+                <p role="status" aria-live="polite">Updating results…</p>
+              )}
               {refunds.isLoading ? (
                 <Loading />
               ) : refunds.error ? (
@@ -633,7 +681,7 @@ export function AdminDashboardPage() {
                               ...(refund.failure_reason
                                 ? ([['Failure Details', refund.failure_reason]] as [string, string][])
                                 : []),
-                              ['Created', new Date(refund.created).toLocaleString()],
+                              ['Created', activityDate(refund.created)],
                             ],
                           })
                         }
@@ -662,6 +710,52 @@ export function AdminDashboardPage() {
               )}
             </section>
           </div>
+
+          <section className="analytics-panel" style={{ marginTop: '2rem' }}>
+            <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h2>Affiliate & referral promotions</h2>
+                <p>Customer acquisition invites, enrolled marketers, and wallet rewards.</p>
+              </div>
+              <Link href="/admin/affiliates" className="button secondary">
+                View affiliates & referrals &rarr;
+              </Link>
+            </div>
+            <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginTop: '1rem' }}>
+              <div className="stat-item stat-0">
+                <div>
+                  <span>Total Referrals</span>
+                  <UserRound size={19} />
+                </div>
+                <strong>{data.referrals?.total ?? 0}</strong>
+                <small>Referred customer signups</small>
+              </div>
+              <div className="stat-item stat-1">
+                <div>
+                  <span>Rewarded Signups</span>
+                  <Check size={19} />
+                </div>
+                <strong>{data.referrals?.rewarded ?? 0}</strong>
+                <small>{data.referrals?.pending ?? 0} signups pending</small>
+              </div>
+              <div className="stat-item stat-2">
+                <div>
+                  <span>Promotional Credit Awarded</span>
+                  <DollarSign size={19} />
+                </div>
+                <strong>{money(data.referrals?.rewarded_amount ?? '0')}</strong>
+                <small>Store credit in wallets</small>
+              </div>
+              <div className="stat-item stat-3">
+                <div>
+                  <span>Enrolled Affiliates</span>
+                  <Share2 size={19} />
+                </div>
+                <strong>{data.marketers?.total ?? 0}</strong>
+                <small>Active program marketers</small>
+              </div>
+            </div>
+          </section>
 
           <DashboardDetailDialog detail={detail} onClose={() => setDetail(null)} />
           {actionDialog.dialog}
@@ -730,20 +824,15 @@ export function AdminDashboardPage() {
 
 export function AdminUsersPage() {
   const { user, sessionLoading, notify } = useShop();
-  const [search, setSearch] = useState('');
-  const [role, setRole] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const filters = useCollectionFilters();
   const actionDialog = useActionDialog();
   const client = useQueryClient();
 
-  const query = new URLSearchParams();
-  if (search.trim()) query.set('search', search.trim());
-  if (role) query.set('role', role);
-  if (statusFilter) query.set('is_active', statusFilter);
-
   const users = useQuery({
-    queryKey: ['admin', 'users', search, role, statusFilter],
-    queryFn: () => api<Page<StaffUser>>(`admin/staff/users?${query}`),
+    queryKey: ['admin', 'users', filters.query, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
+    queryFn: () => api<Page<StaffUser>>(`admin/staff/users?${filters.query}`),
     enabled: Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin),
   });
 
@@ -784,100 +873,88 @@ export function AdminUsersPage() {
         <Link className="button secondary" href="/admin">Platform Dashboard</Link>
       </div>
 
-      <div className="admin-staff-toolbar" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div className="search-box">
-          <Search size={17} />
-          <input
-            aria-label="Search users"
-            placeholder="Search by name, email, or phone…"
-            value={search}
-            onChange={event => setSearch(event.target.value)}
-          />
-        </div>
-        <div className="filter-group" style={{ display: 'flex', gap: '0.5rem' }}>
-          <select aria-label="Filter user role" value={role} onChange={e => setRole(e.target.value)}>
-            <option value="">All roles</option>
-            <option value="customer">Customers</option>
-            <option value="staff">Staff</option>
-            <option value="admin">Admins</option>
-          </select>
-          <select aria-label="Filter account status" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
-            <option value="">All statuses</option>
-            <option value="true">Active only</option>
-            <option value="false">Blocked / Deactivated</option>
-          </select>
-        </div>
-        <span>{users.data?.count || 0} users</span>
-      </div>
+      <CollectionFilters filters={filters} label="users" fields={[
+        { key: 'role', label: 'Role', options: [{ value: 'customer', label: 'Customer' }, { value: 'staff', label: 'Staff' }, { value: 'admin', label: 'Admin' }] },
+        { key: 'is_active', label: 'Account state', options: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Blocked' }] },
+      ]} />
+      {typeof users.data?.count === 'number' && (
+        <CollectionCount count={users.data.count} />
+      )}
+      {users.isFetching && !users.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
 
       {users.isLoading ? (
         <Loading />
       ) : users.error ? (
         <ErrorState error={users.error} retry={() => users.refetch()} />
       ) : !results.length ? (
-        <Empty title="No users found" text="No accounts match your current search or filters." />
+        <Empty title="No users found" text={filters.active ? "No accounts match your filters." : "No accounts registered yet."} />
       ) : (
-        <div className="admin-staff-table table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>User</th>
-                <th>Phone</th>
-                <th>Role</th>
-                <th>Joined</th><th>Last active</th><th>Last login</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map(member => (
-                <tr key={member.id}>
-                  <td>
-                    <div className="admin-staff-person">
-                      {member.avatar_url ? (
-                        <img
-                          src={member.avatar_url}
-                          alt={member.first_name || member.email}
-                          style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
-                        />
-                      ) : (
-                        <span>{member.first_name?.[0] || member.email[0]}</span>
-                      )}
-                      <div>
-                        <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Unnamed user'}</strong>
-                        <small>{member.email}</small>
-                      </div>
-                    </div>
-                  </td>
-                  <td>{member.phone1 || '—'}</td>
-                  <td><span className="status">{member.role.replace('_', ' ')}</span></td>
-                  <td>{new Date(member.date_joined).toLocaleDateString()}</td><td>{activityDate(member.last_active_at)}</td><td>{activityDate(member.last_login)}</td>
-                  <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
-                  <td>
-                    <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
-                      <Link className="button secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }} href={`/admin/users/${member.id}`}>
-                        View profile
-                      </Link>
-                      {(user.is_superuser || user.is_business_admin) && (
-                        <button
-                          className="button secondary"
-                          style={{
-                            padding: '0.3rem 0.65rem',
-                            fontSize: '0.8rem',
-                            color: member.is_active ? 'var(--red, #e11d48)' : 'var(--green, #10b981)',
-                          }}
-                          onClick={() => toggleStatus(member)}
-                        >
-                          {member.is_active ? 'Block' : 'Activate'}
-                        </button>
-                      )}
-                    </div>
-                  </td>
+        <>
+          <div className="admin-staff-table table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>User</th>
+                  <th>Phone</th>
+                  <th>Role</th>
+                  <th>Joined</th><th>Last active</th><th>Last login</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {results.map(member => (
+                  <tr key={member.id}>
+                    <td>
+                      <div className="admin-staff-person">
+                        {member.avatar_url ? (
+                          <img
+                            src={member.avatar_url}
+                            alt={member.first_name || member.email}
+                            style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                          />
+                        ) : (
+                          <span>{member.first_name?.[0] || member.email[0]}</span>
+                        )}
+                        <div>
+                          <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Unnamed user'}</strong>
+                          <small>{member.email}</small>
+                        </div>
+                      </div>
+                    </td>
+                    <td>{member.phone1 || '—'}</td>
+                    <td><span className="status">{member.role.replace('_', ' ')}</span></td>
+                    <td><DateStamp value={member.date_joined} dateOnly /></td><td><DateStamp value={member.last_active_at} /></td><td><DateStamp value={member.last_login} /></td>
+                    <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
+                    <td>
+                      <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
+                        <Link className="button secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }} href={`/admin/users/${member.id}`}>
+                          View profile
+                        </Link>
+                        {(user.is_superuser || user.is_business_admin) && (
+                          <button
+                            className="button secondary"
+                            style={{
+                              padding: '0.3rem 0.65rem',
+                              fontSize: '0.8rem',
+                              color: member.is_active ? 'var(--red, #e11d48)' : 'var(--green, #10b981)',
+                            }}
+                            onClick={() => toggleStatus(member)}
+                          >
+                            {member.is_active ? 'Block' : 'Activate'}
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <CollectionPagination filters={filters} count={users.data?.count || 0} />
+        </>
       )}
 
       {actionDialog.dialog}
@@ -889,20 +966,57 @@ export function AdminUserDetailPage({ id }: { id: string }) {
   const { user, sessionLoading, notify } = useShop();
   const client = useQueryClient();
   const actionDialog = useActionDialog();
-  const [ledgerSearch, setLedgerSearch] = useState('');
-  const [ledgerType, setLedgerType] = useState('');
+  const ledgerFilters = useCollectionFilters();
   const [orderSearch, setOrderSearch] = useState('');
   const [orderStatus, setOrderStatus] = useState('');
 
+  const [orderCarrier, setOrderCarrier] = useState<string>('');
+  const [orderPayment, setOrderPayment] = useState<string>('');
+  const [orderOrdering, setOrderOrdering] = useState<string>('-created');
+  const [orderOffset, setOrderOffset] = useState<number>(0);
+  const [debouncedOrderSearch, setDebouncedOrderSearch] = useState<string>('');
+
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      setDebouncedOrderSearch(orderSearch.trim());
+      setOrderOffset(0);
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [orderSearch]);
+
+  const orderFiltersActive: boolean = Boolean(orderSearch || orderStatus || orderCarrier || orderPayment || orderOrdering !== '-created');
+
+  function resetOrderFilters(): void {
+    setOrderSearch('');
+    setDebouncedOrderSearch('');
+    setOrderStatus('');
+    setOrderCarrier('');
+    setOrderPayment('');
+    setOrderOrdering('-created');
+    setOrderOffset(0);
+  }
+
   const query = new URLSearchParams({
-    ledger_search: ledgerSearch,
-    ledger_type: ledgerType,
-    order_search: orderSearch,
+
+    order_search: debouncedOrderSearch,
+    order_carrier: orderCarrier,
+    order_payment: orderPayment,
+    order_ordering: orderOrdering,
+    order_offset: String(orderOffset),
     order_status: orderStatus,
   });
 
+  for (const [key, value] of new URLSearchParams(ledgerFilters.query)) {
+    query.set(`ledger_${key}`, value);
+  }
+
   const profile = useQuery({
-    queryKey: ['admin', 'user', id, ledgerSearch, ledgerType, orderSearch, orderStatus],
+    queryKey: ['admin', 'user', id, ledgerFilters.query, debouncedOrderSearch, orderStatus, orderCarrier, orderPayment, orderOrdering, orderOffset, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === id
+        && previousQuery.queryKey.at(-1) === user?.id
+        ? previousData
+        : undefined,
     queryFn: () => api<AdminUserProfile>(`admin/staff/users/${id}?${query}`),
     enabled: Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin),
   });
@@ -933,19 +1047,21 @@ export function AdminUserDetailPage({ id }: { id: string }) {
   if (profile.error) return <ErrorState error={profile.error} retry={() => profile.refetch()} />;
 
   const data = profile.data!;
-  const lifetimeSpent = (data.orders || [])
-    .filter(o => o.status !== 'cancelled')
-    .reduce((sum, o) => sum + Number(o.total || 0), 0);
+
 
   return (
-    <div className="container admin-staff-page section">
+    <div className="container admin-staff-page admin-user-detail section">
       <Link className="text-link" href="/admin/users">
         <ArrowLeft size={16} />
         All users
       </Link>
 
-      <div className="admin-staff-heading" style={{ marginTop: '1.5rem', flexWrap: 'wrap', gap: '1.25rem', alignItems: 'center' }}>
-        <div style={{ display: 'flex', gap: '1.25rem', alignItems: 'center' }}>
+      {profile.isFetching && !profile.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
+
+      <section className="admin-profile-card">
+        <div className="admin-profile-identity">
           {data.user.avatar_url ? (
             <img
               src={data.user.avatar_url}
@@ -960,11 +1076,10 @@ export function AdminUserDetailPage({ id }: { id: string }) {
           <div>
             <span className="eyebrow green">USER PROFILE</span>
             <h1>{`${data.user.first_name} ${data.user.last_name}`.trim() || data.user.email}</h1>
-            <p>{data.user.email} · {data.user.role.replace('_', ' ')} · Joined {new Date(data.user.date_joined).toLocaleDateString()}</p>
-            <ActivityDetails {...data.user} />
+            <p>{data.user.email} · {data.user.role.replace('_', ' ')} · Joined <DateStamp value={data.user.date_joined} dateOnly /></p>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+        <div className="admin-profile-actions">
           <Status value={data.user.is_active ? 'active' : 'blocked'} />
           {(user.is_superuser || user.is_business_admin) && (
             <button
@@ -976,9 +1091,17 @@ export function AdminUserDetailPage({ id }: { id: string }) {
             </button>
           )}
         </div>
-      </div>
+        <div className="admin-profile-details">
+          <ActivityDetails {...data.user} />
+          <div className="admin-profile-contact">
+            <span>Contact number</span>
+            <strong>{data.user.phone1 || 'Not provided'}</strong>
+            {data.user.phone2 && <small>Alternate: {data.user.phone2}</small>}
+          </div>
+        </div>
+      </section>
 
-      <div className="stats-grid">
+      <div className="stats-grid admin-profile-stats">
         <div className="stat-item stat-0">
           <span>Wallet balance</span>
           <strong>{money(data.wallet.balance)}</strong>
@@ -986,48 +1109,87 @@ export function AdminUserDetailPage({ id }: { id: string }) {
         </div>
         <div className="stat-item stat-1">
           <span>Total orders placed</span>
-          <strong>{data.orders.length}</strong>
+          <strong>{data.total_orders}</strong>
           <small>Recorded checkout orders</small>
         </div>
         <div className="stat-item stat-2">
           <span>Estimated lifetime spend</span>
-          <strong>{money(lifetimeSpent)}</strong>
+          <strong>{money(data.lifetime_spent)}</strong>
           <small>Excluding cancelled orders</small>
-        </div>
-        <div className="stat-item stat-3">
-          <span>Phone number</span>
-          <strong>{data.user.phone1 || 'Not provided'}</strong>
-          <small>{data.user.phone2 ? `Alt: ${data.user.phone2}` : 'Single contact'}</small>
         </div>
       </div>
 
-      <div className="user-profile-columns" style={{ marginTop: '2rem' }}>
+      {(data.referral || data.affiliate) && (
+        <section className="analytics-panel" style={{ marginTop: '1.5rem', marginBottom: '1.5rem' }}>
+          <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <h2>Affiliate & referral attribution</h2>
+              <p>Program membership and invitation history for this account.</p>
+            </div>
+            <Link href="/admin/affiliates" className="button secondary">
+              All referrals &rarr;
+            </Link>
+          </div>
+          <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1rem', marginTop: '1rem' }}>
+            {data.referral && (
+              <div className="stat-item stat-0" style={{ textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Referred By</span>
+                  <Share2 size={16} />
+                </div>
+                <strong style={{ display: 'block', margin: '0.25rem 0' }}>{data.referral.referrer_name}</strong>
+                <small>
+                  <Link href={`/admin/users/${data.referral.referrer_user_id}`}>
+                    {data.referral.referrer_email}
+                  </Link> · Code: <strong>{data.referral.referrer_code}</strong>
+                </small>
+                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <Status value={data.referral.status} />
+                  <small className="muted">{money(data.referral.reward_amount)} credit</small>
+                  <small className="muted">· <DateStamp value={data.referral.created} dateOnly /></small>
+                </div>
+              </div>
+            )}
+            {data.affiliate && (
+              <div className="stat-item stat-1" style={{ textAlign: 'left' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Enrolled Affiliate Marketer</span>
+                  <UserRound size={16} />
+                </div>
+                <strong style={{ display: 'block', margin: '0.25rem 0' }}>{data.affiliate.name} (Code: {data.affiliate.referral_code})</strong>
+                <small>
+                  {data.affiliate.referral_count} referred users ({data.affiliate.rewarded_count} rewarded)
+                </small>
+                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--green)' }}>
+                    {money(data.affiliate.credit_earned)} earned
+                  </span>
+                  <small className="muted">· Joined <DateStamp value={data.affiliate.created} dateOnly /></small>
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      <div className="user-profile-columns">
         <div className="analytics-panel">
           <div className="section-heading">
             <h2>Wallet ledger</h2>
-            <div className="form-actions" style={{ display: 'flex', gap: '0.5rem' }}>
-              <input
-                aria-label="Search wallet ledger"
-                placeholder="Search ledger…"
-                value={ledgerSearch}
-                onChange={e => setLedgerSearch(e.target.value)}
-              />
-              <select
-                aria-label="Filter wallet transactions"
-                value={ledgerType}
-                onChange={e => setLedgerType(e.target.value)}
-              >
-                <option value="">All types</option>
-                <option value="credit">Credits</option>
-                <option value="debit">Debits</option>
-              </select>
-            </div>
           </div>
+          <CollectionFilters filters={ledgerFilters} label="profile wallet ledger" fields={[
+            { key: 'type', label: 'Type', options: [{ value: 'credit', label: 'Credit' }, { value: 'debit', label: 'Debit' }] },
+            { key: 'source', label: 'Source' },
+            ...financialFields,
+          ]} />
+          {typeof data.wallet.count === 'number' && (
+            <CollectionCount count={data.wallet.count} />
+          )}
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Date</th>
+                  <th>Created</th>
                   <th>Type</th>
                   <th>Source</th>
                   <th>Description</th>
@@ -1036,11 +1198,11 @@ export function AdminUserDetailPage({ id }: { id: string }) {
               </thead>
               <tbody>
                 {!data.wallet.transactions.length ? (
-                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--muted)' }}>No transactions found.</td></tr>
+                  <tr><td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--muted)' }}>{ledgerFilters.active ? 'No transactions match your filters.' : 'No transactions yet.'}</td></tr>
                 ) : (
                   data.wallet.transactions.map(tx => (
                     <tr key={tx.id}>
-                      <td>{new Date(tx.created).toLocaleDateString()}</td>
+                      <td><DateStamp value={tx.created} dateOnly /></td>
                       <td><Status value={tx.type} /></td>
                       <td>{tx.source}</td>
                       <td>{tx.description}</td>
@@ -1053,6 +1215,7 @@ export function AdminUserDetailPage({ id }: { id: string }) {
               </tbody>
             </table>
           </div>
+          <CollectionPagination filters={ledgerFilters} count={data.wallet.count} />
         </div>
 
         <div className="analytics-panel">
@@ -1063,56 +1226,117 @@ export function AdminUserDetailPage({ id }: { id: string }) {
             data.activity.map(item => (
               <div className="stock-row" key={item.id}>
                 <div>
-                  <strong>{item.verb}</strong>
+                  <strong>{item.verb.replaceAll('_', ' ')}</strong>
                   {item.description && <small style={{ display: 'block' }}>{item.description}</small>}
                 </div>
-                <small>{new Date(item.created).toLocaleDateString()}</small>
+                <small><DateStamp value={item.created} dateOnly /></small>
               </div>
             ))
           )}
         </div>
       </div>
 
-      <section className="merchant-section" style={{ marginTop: '2rem' }}>
+      <section className="merchant-section admin-profile-orders">
         <div className="section-heading">
           <h2>Order history</h2>
-          <div className="form-actions" style={{ display: 'flex', gap: '0.5rem' }}>
+          <div className="form-actions admin-profile-filters">
             <input
-              aria-label="Search orders by reference"
-              placeholder="Search reference…"
+              aria-label="Search profile orders"
+              placeholder="Search reference, coupon, courier, tracking…"
               value={orderSearch}
               onChange={e => setOrderSearch(e.target.value)}
             />
             <select
               aria-label="Filter orders by status"
               value={orderStatus}
-              onChange={e => setOrderStatus(e.target.value)}
+              onChange={e => {
+                setOrderStatus(e.target.value);
+                setOrderOffset(0);
+              }}
             >
               <option value="">All statuses</option>
-              {['pending', 'confirmed', 'shipped', 'delivered', 'cancelled', 'refunded'].map(status => (
+              {['pending', 'confirmed', 'shipped', 'delivered', 'picked up', 'cancelled', 'refunded'].map(status => (
                 <option key={status} value={status}>{status}</option>
               ))}
             </select>
+            <select
+              aria-label="Filter orders by courier"
+              value={orderCarrier}
+              onChange={e => {
+                setOrderCarrier(e.target.value);
+                setOrderOffset(0);
+              }}
+            >
+              <option value="">All couriers</option>
+              {['USPS', 'UPS', 'FEDEX', 'DHL', 'DIGITAL'].map(carrier => (
+                <option key={carrier} value={carrier}>{carrier === 'DIGITAL' ? 'Digital / Instant' : carrier}</option>
+              ))}
+            </select>
+            <select
+              aria-label="Filter orders by payment method"
+              value={orderPayment}
+              onChange={e => {
+                setOrderPayment(e.target.value);
+                setOrderOffset(0);
+              }}
+            >
+              <option value="">All payment methods</option>
+              <option value="card">Card</option>
+              <option value="wallet">ProAce Wallet</option>
+              <option value="cash_on_delivery">Cash on Delivery</option>
+              <option value="stripe_wallet">Stripe Wallet</option>
+            </select>
+            <select
+              aria-label="Sort orders"
+              value={orderOrdering}
+              onChange={e => {
+                setOrderOrdering(e.target.value);
+                setOrderOffset(0);
+              }}
+            >
+              <option value="-created">Newest first</option>
+              <option value="created">Oldest first</option>
+              <option value="-total">Total: High to low</option>
+              <option value="total">Total: Low to high</option>
+            </select>
+            {orderFiltersActive && (
+              <button
+                type="button"
+                className="button secondary"
+                onClick={resetOrderFilters}
+              >
+                Reset filters
+              </button>
+            )}
           </div>
         </div>
+        <p className="muted">{data.order_count} matching orders{orderFiltersActive ? ' · Filters active' : ''}</p>
         <div className="table-scroll">
           <table>
             <thead>
               <tr>
                 <th>Order</th>
-                <th>Date</th>
+                <th>Created</th>
+                <th>Updated</th>
                 <th>Status</th>
                 <th>Total</th>
               </tr>
             </thead>
             <tbody>
               {!data.orders.length ? (
-                <tr><td colSpan={4} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--muted)' }}>No orders found.</td></tr>
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--muted)' }}>
+                    {orderFiltersActive
+                      ? 'No orders match your filters. Clear filters to see all orders.'
+                      : 'This user has not placed any orders.'}
+                  </td>
+                </tr>
               ) : (
                 data.orders.map(order => (
                   <tr key={order.id}>
                     <td><strong>{order.reference}</strong></td>
-                    <td>{new Date(order.created).toLocaleDateString()}<small style={{ display: 'block' }}>Updated {activityDate(order.updated)}</small></td>
+                    <td><DateStamp value={order.created} /></td>
+                    <td><DateStamp value={order.updated} /></td>
                     <td><Status value={order.status} /></td>
                     <td><strong>{money(order.total)}</strong></td>
                   </tr>
@@ -1121,6 +1345,27 @@ export function AdminUserDetailPage({ id }: { id: string }) {
             </tbody>
           </table>
         </div>
+        {data.order_count > 15 && (
+          <div className="form-actions">
+            <button
+              type="button"
+              className="button secondary"
+              disabled={orderOffset === 0 || profile.isFetching}
+              onClick={() => setOrderOffset(Math.max(0, orderOffset - 15))}
+            >
+              Previous
+            </button>
+            <span>Page {Math.floor(orderOffset / 15) + 1} of {Math.ceil(data.order_count / 15)}</span>
+            <button
+              type="button"
+              className="button secondary"
+              disabled={orderOffset + 15 >= data.order_count || profile.isFetching}
+              onClick={() => setOrderOffset(orderOffset + 15)}
+            >
+              Next
+            </button>
+          </div>
+        )}
       </section>
 
       {actionDialog.dialog}
@@ -1130,16 +1375,15 @@ export function AdminUserDetailPage({ id }: { id: string }) {
 
 export function AdminPayoutsPage() {
   const { user, sessionLoading, notify } = useShop();
-  const [statusFilter, setStatusFilter] = useState('');
-  const [search, setSearch] = useState('');
+  const filters = useCollectionFilters();
   const actionDialog = useActionDialog();
   const client = useQueryClient();
 
-  const query = new URLSearchParams();
-  if (statusFilter) query.set('status', statusFilter);
   const payouts = useQuery({
-    queryKey: ['admin', 'payouts', statusFilter],
-    queryFn: () => api<Page<StorePayout>>(`admin/staff/payouts?${query}`),
+    queryKey: ['admin', 'payouts', filters.query, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
+    queryFn: () => api<Page<StorePayout>>(`admin/staff/payouts?${filters.query}`),
     enabled: Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin),
   });
 
@@ -1172,15 +1416,7 @@ export function AdminPayoutsPage() {
     return <Empty title="Backoffice access required" text="Only staff and administrators can review merchant payouts." href="/admin" label="Back to dashboard" />;
   }
 
-  const items = (payouts.data?.results || []).filter(p => {
-    if (!search.trim()) return true;
-    const term = search.toLowerCase();
-    return (
-      p.reference.toLowerCase().includes(term) ||
-      (p.store_name && p.store_name.toLowerCase().includes(term)) ||
-      p.payout_method.toLowerCase().includes(term)
-    );
-  });
+  const items = payouts.data?.results || [];
 
   return (
     <div className="container admin-staff-page section">
@@ -1193,96 +1429,95 @@ export function AdminPayoutsPage() {
         <Link className="button secondary" href="/admin">Platform Dashboard</Link>
       </div>
 
-      <div className="admin-staff-toolbar" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-        <div className="search-box">
-          <Search size={17} />
-          <input
-            aria-label="Search payouts"
-            placeholder="Search by reference, store, or method…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-          />
-        </div>
-        <div className="filter-group" style={{ display: 'flex', gap: '0.5rem' }}>
-          <select
-            aria-label="Filter payout status"
-            value={statusFilter}
-            onChange={e => setStatusFilter(e.target.value)}
-          >
-            <option value="">All statuses</option>
-            <option value="pending">Pending review</option>
-            <option value="completed">Completed</option>
-            <option value="rejected">Rejected</option>
-          </select>
-        </div>
-        <span>{items.length} payouts</span>
-      </div>
+      <CollectionFilters
+        filters={filters}
+        label="payouts"
+        fields={[{ key: 'status', label: 'Status', options: [{ value: 'pending', label: 'Pending' }, { value: 'completed', label: 'Completed' }, { value: 'rejected', label: 'Rejected' }] }, { key: 'payout_method', label: 'Method', options: [{ value: 'bank_transfer', label: 'Bank transfer' }, { value: 'stripe_connect', label: 'Stripe Connect' }] }, ...financialFields]}
+      />
+      {typeof payouts.data?.count === 'number' && (
+        <CollectionCount count={payouts.data.count} />
+      )}
+
+      {payouts.isFetching && !payouts.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
 
       {payouts.isLoading ? (
         <Loading />
       ) : payouts.error ? (
         <ErrorState error={payouts.error} retry={() => payouts.refetch()} />
       ) : !items.length ? (
-        <Empty title="No payouts found" text="No merchant payouts match your current filters." />
+        <Empty
+          title="No payouts found"
+          text={filters.active ? 'No payouts match your filters.' : 'No merchant payout requests yet.'}
+          label={filters.active ? 'Reset filters' : 'Refresh payouts'}
+          onAction={filters.active ? filters.reset : () => { void payouts.refetch(); }}
+        />
       ) : (
-        <div className="admin-staff-table table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Reference</th>
-                <th>Store</th>
-                <th>Amount</th>
-                <th>Method</th>
-                <th>Account Details</th>
-                <th>Requested</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map(payout => (
-                <tr key={payout.id}>
-                  <td><strong>{payout.reference}</strong></td>
-                  <td>{payout.store_name || (payout.store ? `Store #${payout.store}` : 'Merchant Wallet')}</td>
-                  <td><strong>{money(payout.amount)}</strong></td>
-                  <td><span className="status">{payout.payout_method.replace('_', ' ')}</span></td>
-                  <td>
-                    <small style={{ fontFamily: 'monospace', fontSize: '11px' }}>
-                      {Object.keys(payout.account_details || {}).length > 0
-                        ? Object.entries(payout.account_details).map(([k, v]) => `${k}: ${v}`).join(', ')
-                        : 'Default account'}
-                    </small>
-                  </td>
-                  <td>{new Date(payout.created).toLocaleDateString()}</td>
-                  <td><Status value={payout.status} /></td>
-                  <td>
-                    {payout.status === 'pending' && (
-                      <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
-                        <button
-                          className="button"
-                          style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }}
-                          onClick={() => handleProcess(payout, 'approve')}
-                        >
-                          Approve
-                        </button>
-                        <button
-                          className="button secondary"
-                          style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem', color: 'var(--red, #e11d48)' }}
-                          onClick={() => handleProcess(payout, 'reject')}
-                        >
-                          Reject
-                        </button>
-                      </div>
-                    )}
-                    {payout.status !== 'pending' && payout.processed_at && (
-                      <small className="muted">{new Date(payout.processed_at).toLocaleDateString()}</small>
-                    )}
-                  </td>
+        <>
+          <div className="admin-staff-table table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Reference</th>
+                  <th>Store</th>
+                  <th>Amount</th>
+                  <th>Method</th>
+                  <th>Account Details</th>
+                  <th>Requested</th>
+                  <th>Processed</th>
+                  <th>Status</th>
+                  <th>Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {items.map(payout => (
+                  <tr key={payout.id}>
+                    <td><strong>{payout.reference}</strong></td>
+                    <td>{payout.store_name || (payout.store ? `Store #${payout.store}` : 'Merchant Wallet')}</td>
+                    <td><strong>{money(payout.amount)}</strong></td>
+                    <td><span className="status">{payout.payout_method.replace('_', ' ')}</span></td>
+                    <td>
+                      <small style={{ fontFamily: 'monospace', fontSize: '11px' }}>
+                        {Object.keys(payout.account_details || {}).length > 0
+                          ? Object.entries(payout.account_details).map(([k, v]) => `${k}: ${v}`).join(', ')
+                          : 'Default account'}
+                      </small>
+                    </td>
+                    <td><DateStamp value={payout.created} dateOnly /></td>
+                    <td><DateStamp value={payout.processed_at} dateOnly /></td>
+                    <td><Status value={payout.status} /></td>
+                    <td>
+                      {payout.status === 'pending' && (
+                        Boolean(user && (user.is_superuser || user.is_business_admin)) ? (
+                          <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
+                            <button
+                              className="button"
+                              style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }}
+                              onClick={() => handleProcess(payout, 'approve')}
+                            >
+                              Approve
+                            </button>
+                            <button
+                              className="button secondary"
+                              style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem', color: 'var(--red, #e11d48)' }}
+                              onClick={() => handleProcess(payout, 'reject')}
+                            >
+                              Reject
+                            </button>
+                          </div>
+                        ) : (
+                          <small className="muted">Admin review required</small>
+                        )
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <CollectionPagination filters={filters} count={payouts.data?.count || 0} />
+        </>
       )}
 
       {actionDialog.dialog}
@@ -1294,12 +1529,15 @@ export function AdminPayoutsPage() {
 export function AdminStaffPage() {
   const { user, sessionLoading, notify } = useShop();
   const client = useQueryClient();
-  const [search, setSearch] = useState('');
+  const filters = useCollectionFilters();
+  const search = filters.search;
   const [adding, setAdding] = useState(false);
   const [selectedStaff, setSelectedStaff] = useState<StaffUser | null>(null);
   const staff = useQuery({
-    queryKey: ['admin', 'staff', search],
-    queryFn: () => api<Page<StaffUser>>(`admin/staff${search.trim() ? `?search=${encodeURIComponent(search.trim())}` : ''}`),
+    queryKey: ['admin', 'staff', filters.query, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
+    queryFn: () => api<Page<StaffUser>>(`admin/staff?${filters.query}`),
     enabled: !!(user?.is_superuser || user?.is_business_admin),
   });
   const statusAction = useMutation({
@@ -1334,82 +1572,88 @@ export function AdminStaffPage() {
           Add staff
         </button>
       </div>
-      <div className="admin-staff-toolbar">
-        <div className="search-box">
-          <Search size={17} />
-          <input aria-label="Search staff" placeholder="Search by name or email…" value={search} onChange={event => setSearch(event.target.value)} />
-        </div>
-        <span>{staff.data?.count || 0} staff account{staff.data?.count === 1 ? '' : 's'}</span>
-      </div>
+      <CollectionFilters filters={filters} label="staff" fields={[
+        { key: 'is_active', label: 'Account state', options: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Blocked' }] },
+        { key: 'staff_email_verified', label: 'Email verification', options: [{ value: 'true', label: 'Verified' }, { value: 'false', label: 'Unverified' }] },
+      ]} />
+      {typeof staff.data?.count === 'number' && (
+        <CollectionCount count={staff.data.count} />
+      )}
+      {staff.isFetching && !staff.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
       {staff.isLoading ? (
         <Loading />
       ) : staff.error ? (
         <ErrorState error={staff.error} retry={() => staff.refetch()} />
       ) : rows.length ? (
-        <div className="admin-staff-table table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>Staff member</th>
-                <th>Joined</th><th>Last active</th><th>Last login</th>
-                <th>Status</th>
-                <th>Access</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(member => (
-                <tr key={member.id}>
-                  <td>
-                    <div className="admin-staff-person">
-                      {member.avatar_url ? (
-                        <img
-                          src={member.avatar_url}
-                          alt={member.first_name || member.email}
-                          style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
-                        />
-                      ) : (
-                        <span>{member.first_name?.[0] || member.email[0]}</span>
-                      )}
-                      <div>
-                        <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Staff member'}</strong>
-                        <small>{member.email}</small>
-                      </div>
-                    </div>
-                  </td>
-                  <td>{new Date(member.date_joined).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', year: 'numeric' })}</td><td>{activityDate(member.last_active_at)}</td><td>{activityDate(member.last_login)}</td>
-                  <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                      <button
-                        type="button"
-                        className="button secondary"
-                        aria-label={`View details for ${member.first_name || member.email}`}
-                        onClick={() => setSelectedStaff(member)}
-                      >
-                        Details
-                      </button>
-                      <button
-                        className={`button secondary ${member.is_active ? 'danger' : ''}`}
-                        disabled={statusAction.isPending}
-                        onClick={() => statusAction.mutate({ id: member.id, action: member.is_active ? 'block' : 'unblock' })}
-                      >
-                        {member.is_active ? <UserRoundX size={16} /> : <UserRoundCheck size={16} />}
-                        {member.is_active ? 'Block' : 'Unblock'}
-                      </button>
-                      {!member.staff_email_verified && <button className="button secondary" disabled={resendVerification.isPending} onClick={() => resendVerification.mutate(member.id)}>Resend verification</button>}
-                    </div>
-                  </td>
+        <>
+          <div className="admin-staff-table table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Staff member</th>
+                  <th>Joined</th><th>Last active</th><th>Last login</th>
+                  <th>Status</th>
+                  <th>Access</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {rows.map(member => (
+                  <tr key={member.id}>
+                    <td>
+                      <div className="admin-staff-person">
+                        {member.avatar_url ? (
+                          <img
+                            src={member.avatar_url}
+                            alt={member.first_name || member.email}
+                            style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                          />
+                        ) : (
+                          <span>{member.first_name?.[0] || member.email[0]}</span>
+                        )}
+                        <div>
+                          <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Staff member'}</strong>
+                          <small>{member.email}</small>
+                        </div>
+                      </div>
+                    </td>
+                    <td><DateStamp value={member.date_joined} dateOnly /></td><td><DateStamp value={member.last_active_at} /></td><td><DateStamp value={member.last_login} /></td>
+                    <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                        <button
+                          type="button"
+                          className="button secondary"
+                          aria-label={`View details for ${member.first_name || member.email}`}
+                          onClick={() => setSelectedStaff(member)}
+                        >
+                          Details
+                        </button>
+                        <button
+                          className={`button secondary ${member.is_active ? 'danger' : ''}`}
+                          disabled={statusAction.isPending}
+                          onClick={() => statusAction.mutate({ id: member.id, action: member.is_active ? 'block' : 'unblock' })}
+                        >
+                          {member.is_active ? <UserRoundX size={16} /> : <UserRoundCheck size={16} />}
+                          {member.is_active ? 'Block' : 'Unblock'}
+                        </button>
+                        {!member.staff_email_verified && <button className="button secondary" disabled={resendVerification.isPending} onClick={() => resendVerification.mutate(member.id)}>Resend verification</button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <CollectionPagination filters={filters} count={staff.data?.count || 0} />
+        </>
       ) : (
         <div className="admin-staff-empty">
           <UsersRound size={36} />
-          <h2>{search ? 'No staff found' : 'No staff accounts yet'}</h2>
-          <p>{search ? 'Try a different name or email address.' : 'Add your first staff member to give them access.'}</p>
-          {!search && <button className="button" onClick={() => setAdding(true)}>Add staff</button>}
+          <h2>{filters.active ? 'No staff found' : 'No staff accounts yet'}</h2>
+          <p>{filters.active ? 'Try a different name or email address.' : 'Add your first staff member to give them access.'}</p>
+          {!filters.active && <button className="button" onClick={() => setAdding(true)}>Add staff</button>}
         </div>
       )}
       {adding && (
@@ -1471,8 +1715,8 @@ function StaffDetailDialog({ staff, onClose }: { staff: StaffUser | null; onClos
     rows: [
       ['Email', staff.email], ['First name', staff.first_name], ['Last name', staff.last_name],
       ['Gender', staff.gender], ['Role', staff.role], ['Status', staff.is_active ? 'Active' : 'Blocked'],
-      ...(!staff.is_active && staff.staff_blocked_at ? [['Blocked on', new Date(staff.staff_blocked_at).toLocaleString()] as [string, string]] : []),
-      ['Joined', new Date(staff.date_joined).toLocaleString()],
+      ...(!staff.is_active && staff.staff_blocked_at ? [['Blocked on', activityDate(staff.staff_blocked_at)] as [string, string]] : []),
+      ['Joined', activityDate(staff.date_joined)],
       ['Last active', activityDate(staff.last_active_at)], ['Last login', activityDate(staff.last_login)], ['Profile updated', activityDate(staff.updated)],
     ],
   } : null;
@@ -1535,14 +1779,19 @@ export function AdminStoresPage() {
   const { user, notify } = useShop();
   const client = useQueryClient();
   const [offset, setOffset] = useState(0);
+  const extraFilters = useCollectionFilters();
+  useEffect(() => { setOffset(0); }, [extraFilters.query]);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [statusFilter, setStatusFilter] = useState('');
   const [ordering, setOrdering] = useState('-created');
   const actionDialog = useActionDialog();
 
   const stores = useQuery({
-    queryKey: ['admin', 'stores', offset, search, statusFilter, ordering],
-    queryFn: () => api<Page<import('@/lib/types').Store>>(`admin/staff/stores?limit=20&offset=${offset}&ordering=${ordering}${search ? `&search=${encodeURIComponent(search)}` : ''}${statusFilter ? `&status=${statusFilter}` : ''}`),
+    queryKey: ['admin', 'stores', offset, debouncedSearch, statusFilter, ordering, extraFilters.query, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
+    queryFn: () => api<Page<import('@/lib/types').Store>>(`admin/staff/stores?${extraFilters.query}&limit=20&offset=${offset}&ordering=${ordering}${debouncedSearch ? `&search=${encodeURIComponent(debouncedSearch)}` : ''}${statusFilter ? `&status=${statusFilter}` : ''}`),
     enabled: !!user && (user.is_staff || user.is_superuser || user.is_business_admin),
   });
 
@@ -1630,12 +1879,22 @@ export function AdminStoresPage() {
       {error && <p role="alert" className="form-error">{error}</p>}
       {stores.error && <ErrorState error={stores.error} retry={() => stores.refetch()} />}
 
+      <CollectionFilters filters={extraFilters} label="additional filters" hideSearch fields={[{ key: 'is_official', label: 'Store type', options: [{ value: 'true', label: 'Official' }, { value: 'false', label: 'Merchant' }] }, ...financialFields.slice(0, 2)]} />
+      <button type="button" className="button secondary" onClick={() => {
+        extraFilters.reset();
+        setSearch('');
+        setStatusFilter(''); setOrdering('-created'); setOffset(0);
+      }}>Reset all filters</button>
+      {stores.isFetching && !stores.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
+
       {stores.isLoading ? (
         <Loading />
       ) : !stores.data?.results.length ? (
         <Empty
           title="No operational stores found"
-          text="There are no stores registered on the platform yet."
+          text={search || statusFilter || extraFilters.active ? "No stores match your filters. Reset filters to see all stores." : "There are no stores registered yet."}
           href={(user.is_superuser || user.is_business_admin) ? "/merchant/new-store" : undefined}
           label={(user.is_superuser || user.is_business_admin) ? "Create official store" : undefined}
         />
@@ -1648,7 +1907,9 @@ export function AdminStoresPage() {
                   <th>Store</th>
                   <th>Type</th>
                   <th>Status</th>
-                  <th>Created / Updated / Active</th>
+                  <th>Created</th>
+                  <th>Updated</th>
+                  <th>Last active</th>
                   <th>Staff access</th>
                   <th><span className="sr-only">Actions</span>Actions</th>
                 </tr>
@@ -1703,13 +1964,9 @@ export function AdminStoresPage() {
                           </small>
                         )}
                       </td>
-                      <td>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
-                          <span><small style={{ color: 'var(--muted)', marginRight: 4 }}>Created:</small>{activityDate(store.created)}</span>
-                          <span><small style={{ color: 'var(--muted)', marginRight: 4 }}>Updated:</small>{activityDate(store.updated)}</span>
-                          <span><small style={{ color: 'var(--muted)', marginRight: 4 }}>Active:</small>{activityDate(store.last_active_at)}</span>
-                        </div>
-                      </td>
+                      <td><DateStamp value={store.created} /></td>
+                      <td><DateStamp value={store.updated} /></td>
+                      <td><DateStamp value={store.last_active_at} /></td>
                       <td>
                         {store.is_official ? (
                           <span
@@ -1734,35 +1991,55 @@ export function AdminStoresPage() {
                       <td>
                         <div className="form-actions" style={{ justifyContent: 'flex-end', flexWrap: 'nowrap', gap: 6 }}>
                           <Link className="button secondary" href={`/shop?store=${store.id}&preview=1`}><Eye size={14} /> Preview</Link>
-                          {(user.is_superuser || user.is_business_admin) && (store.status !== 'active' ? (
-                            <button
-                              className="button secondary"
-                              onClick={() => void action(`admin/stores/${store.id}/approve`, 'POST')}
-                            >
-                              <Check size={14} /> Approve
-                            </button>
+                          {store.is_official ? (
+                            (user.is_superuser || user.is_business_admin) && (
+                              <button
+                                className="button secondary danger"
+                                onClick={async () => {
+                                  if (await actionDialog.ask({ title: 'Delete official store', message: `Delete ${store.name} and its catalog?`, confirmLabel: 'Delete store' }) !== null)
+                                    void action(`stores/${store.id}/delete`, 'DELETE');
+                                }}
+                              >
+                                <Trash2 size={14} /> Delete
+                              </button>
+                            )
                           ) : (
-                            <button
-                              className="button secondary danger"
-                              onClick={() =>
-                                void action(`admin/stores/${store.id}/block`, 'POST', {
-                                  reason: 'Suspended by administrator',
-                                })
-                              }
-                            >
-                              <Ban size={14} /> Suspend
-                            </button>
-                          ))}
-                          {(user.is_superuser || user.is_business_admin) && store.is_official && (
-                            <button
-                              className="button secondary danger"
-                              onClick={async () => {
-                                if (await actionDialog.ask({ title: 'Delete official store', message: `Delete ${store.name} and its catalog?`, confirmLabel: 'Delete store' }) !== null)
-                                  void action(`stores/${store.id}/delete`, 'DELETE');
-                              }}
-                            >
-                              <Trash2 size={14} /> Delete
-                            </button>
+                            store.status === 'blocked' ? (
+                              <button
+                                className="button secondary"
+                                onClick={() => void action(`admin/staff/stores/${store.id}/unblock`, 'POST')}
+                              >
+                                <Check size={14} /> Reactivate
+                              </button>
+                            ) : store.status === 'pending' ? (
+                              (user.is_superuser || user.is_business_admin) && (
+                                <button
+                                  className="button secondary"
+                                  onClick={() => void action(`admin/stores/${store.id}/approve`, 'POST')}
+                                >
+                                  <Check size={14} /> Approve
+                                </button>
+                              )
+                            ) : (
+                              <button
+                                className="button secondary danger"
+                                onClick={async () => {
+                                  const reason = await actionDialog.ask({
+                                    title: `Suspend ${store.name}`,
+                                    message: `Are you sure you want to suspend @${store.username}? Products will be hidden from shoppers.`,
+                                    confirmLabel: 'Suspend store',
+                                    reasonLabel: 'Reason for suspension',
+                                  });
+                                  if (reason !== null) {
+                                    void action(`admin/staff/stores/${store.id}/block`, 'POST', {
+                                      reason: reason || 'Suspended by staff',
+                                    });
+                                  }
+                                }}
+                              >
+                                <Ban size={14} /> Suspend
+                              </button>
+                            )
                           )}
                         </div>
                       </td>
@@ -1791,17 +2068,20 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
   const client = useQueryClient();
   const store = useQuery({ queryKey: ['admin', 'store', id], queryFn: () => api<import('@/lib/types').Store & { owner_email?: string; owner_name?: string }>(`admin/staff/stores/${id}`), enabled: !!user });
 
+  const extraFilters = useCollectionFilters();
+  useEffect(() => { setOffset(0); }, [extraFilters.query]);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [assetFilter, setAssetFilter] = useState('all');
   const [ordering, setOrdering] = useState('-created');
   const [offset, setOffset] = useState(0);
 
-  const params = new URLSearchParams();
+  const params = new URLSearchParams(extraFilters.query);
   params.set('offset', String(offset));
   params.set('limit', '20');
-  if (search) params.set('search', search);
+  if (debouncedSearch) params.set('search', debouncedSearch);
   if (typeFilter === 'digital') params.set('is_digital', 'true');
   if (typeFilter === 'physical') {
     params.set('is_digital', 'false');
@@ -1815,7 +2095,12 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
   if (ordering) params.set('ordering', ordering);
 
   const products = useQuery({
-    queryKey: ['admin', 'store', id, 'products', params.toString()],
+    queryKey: ['admin', 'store', id, 'products', params.toString(), user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[2] === id
+        && previousQuery.queryKey.at(-1) === user?.id
+        ? previousData
+        : undefined,
     queryFn: () => api<Page<import('@/lib/types').StoreAuditProduct> | import('@/lib/types').StoreAuditProduct[]>(`admin/staff/stores/${id}/products?${params.toString()}`),
     enabled: !!user,
   });
@@ -1917,12 +2202,22 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
           </select>
         </div>
 
+        <CollectionFilters filters={extraFilters} label="additional filters" hideSearch fields={[{ key: 'category', label: 'Category', options: categories.map(category => ({ value: category.key, label: category.name })) }]} />
+      <button type="button" className="button secondary" onClick={() => {
+        extraFilters.reset();
+        setSearch('');
+        setTypeFilter('all'); setStatusFilter('all'); setAssetFilter('all'); setOrdering('-created'); setOffset(0);
+      }}>Reset all filters</button>
+      {products.isFetching && !products.isLoading && (
+          <p role="status" aria-live="polite">Updating results…</p>
+        )}
+
         {products.isLoading ? (
           <Loading />
         ) : products.error ? (
           <ErrorState error={products.error} retry={() => products.refetch()} />
         ) : !productList.length ? (
-          <p className="muted" style={{ padding: '1rem 0' }}>No products match the selected filters.</p>
+          <p className="muted" style={{ padding: '1rem 0' }}>{search || typeFilter !== 'all' || statusFilter !== 'all' || assetFilter !== 'all' || extraFilters.active ? 'No products match the selected filters.' : 'This store has no products yet.'}</p>
         ) : (
           <>
             <div className="table-scroll">
@@ -2012,7 +2307,9 @@ export function AdminOrdersPage() {
   const client = useQueryClient();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [statusFilter, setStatusFilter] = useState('');
+  const [courierFilter, setCourierFilter] = useState('');
   const [paymentFilter, setPaymentFilter] = useState('');
   const [ordering, setOrdering] = useState('-created');
   const [detail, setDetail] = useState<{ title: string; rows: [string, string][] } | null>(null);
@@ -2023,12 +2320,15 @@ export function AdminOrdersPage() {
     offset: String((page - 1) * 15),
     ordering,
   });
-  if (search.trim()) queryParams.set('search', search.trim());
+  if (debouncedSearch.trim()) queryParams.set('search', debouncedSearch.trim());
   if (statusFilter) queryParams.set('status', statusFilter);
+  if (courierFilter) queryParams.set('carrier', courierFilter);
   if (paymentFilter) queryParams.set('payment_type', paymentFilter);
 
   const orders = useQuery({
-    queryKey: ['admin', 'all_orders', page, search, statusFilter, paymentFilter, ordering],
+    queryKey: ['admin', 'all_orders', page, debouncedSearch, statusFilter, courierFilter, paymentFilter, ordering, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
     queryFn: () => api<Page<AdminOrder>>(`admin/staff/orders?${queryParams.toString()}`),
     enabled: !!user && (user.is_staff || user.is_superuser || user.is_business_admin),
   });
@@ -2079,7 +2379,7 @@ export function AdminOrdersPage() {
           <Search size={17} />
           <input
             aria-label="Search orders"
-            placeholder="Search order ID, buyer email, coupon, tracking…"
+            placeholder="Search order ID, buyer email, coupon, courier, tracking…"
             value={search}
             onChange={event => { setSearch(event.target.value); setPage(1); }}
           />
@@ -2097,6 +2397,18 @@ export function AdminOrdersPage() {
           <option value="picked up">Picked up</option>
           <option value="cancelled">Cancelled</option>
           <option value="refunded">Refunded</option>
+        </select>
+        <select
+          aria-label="Filter orders by courier"
+          value={courierFilter}
+          onChange={event => { setCourierFilter(event.target.value); setPage(1); }}
+        >
+          <option value="">All couriers</option>
+          <option value="USPS">USPS</option>
+          <option value="UPS">UPS</option>
+          <option value="FEDEX">FedEx</option>
+          <option value="DHL">DHL Express</option>
+          <option value="DIGITAL">Digital / Instant</option>
         </select>
         <select
           aria-label="Filter orders by payment method"
@@ -2119,16 +2431,20 @@ export function AdminOrdersPage() {
           <option value="-total">Total: High to low</option>
           <option value="total">Total: Low to high</option>
         </select>
-        {(search || statusFilter || paymentFilter || ordering !== '-created') && (
+        {(search || statusFilter || courierFilter || paymentFilter || ordering !== '-created') && (
           <button
             type="button"
             className="button secondary"
-            onClick={() => { setSearch(''); setStatusFilter(''); setPaymentFilter(''); setOrdering('-created'); setPage(1); }}
+            onClick={() => { setSearch(''); setStatusFilter(''); setCourierFilter(''); setPaymentFilter(''); setOrdering('-created'); setPage(1); }}
           >
             Reset
           </button>
         )}
       </div>
+
+      {orders.isFetching && !orders.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
 
       {orders.isLoading ? (
         <Loading />
@@ -2137,9 +2453,16 @@ export function AdminOrdersPage() {
       ) : !orders.data?.results.length ? (
         <Empty
           title="No orders found"
-          text={search || statusFilter || paymentFilter ? "No orders matched your search or filters." : "No customer orders have been placed yet."}
-          href="/admin/orders"
-          label={search || statusFilter || paymentFilter ? "Reset filters" : "Refresh orders"}
+          text={search || statusFilter || courierFilter || paymentFilter ? "No orders matched your search or filters." : "No customer orders have been placed yet."}
+          onAction={() => {
+            setSearch('');
+            setStatusFilter('');
+            setCourierFilter('');
+            setPaymentFilter('');
+            setOrdering('-created');
+            setPage(1);
+          }}
+          label={search || statusFilter || courierFilter || paymentFilter ? "Reset filters" : "Refresh orders"}
         />
       ) : (
         <>
@@ -2153,7 +2476,8 @@ export function AdminOrdersPage() {
                   <th>Payment</th>
                   <th>Shipping / Tracking</th>
                   <th>Total</th>
-                  <th>Date</th>
+                  <th>Created</th>
+                  <th>Updated</th>
                   <th>Action</th>
                   <th>Emergency action</th>
                 </tr>
@@ -2176,7 +2500,8 @@ export function AdminOrdersPage() {
                       )}
                     </td>
                     <td><strong>{money(order.total)}</strong></td>
-                    <td>{new Date(order.created).toLocaleDateString()}<small style={{ display: 'block' }}>Updated {activityDate(order.updated)}</small></td>
+                    <td><DateStamp value={order.created} /></td>
+                    <td><DateStamp value={order.updated} /></td>
                     <td>
                       <button
                         type="button"
@@ -2190,11 +2515,11 @@ export function AdminOrdersPage() {
                             ['Payment Method', order.payment_type?.replaceAll('_', ' ') || 'card'],
                             ['Subtotal', money(order.subtotal || order.total)],
                             ['Total', money(order.total)],
-                            ['Created', new Date(order.created).toLocaleString()], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)],
+                            ['Created', activityDate(order.created)], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)],
                             ['Carrier', order.carrier || 'USPS'],
                             ['Tracking Number', order.tracking_number || 'Not assigned'],
-                            ...(order.shipped_at ? [['Shipped At', new Date(order.shipped_at).toLocaleString()] as [string, string]] : []),
-                            ...(order.delivered_at ? [['Delivered At', new Date(order.delivered_at).toLocaleString()] as [string, string]] : []),
+                            ...(order.shipped_at ? [['Shipped At', activityDate(order.shipped_at)] as [string, string]] : []),
+                            ...(order.delivered_at ? [['Delivered At', activityDate(order.delivered_at)] as [string, string]] : []),
                             ...(order.items_snapshot?.length ? [['Items Count', `${order.items_snapshot.length} items recorded`] as [string, string]] : []),
                           ]
                         })}
@@ -2203,19 +2528,22 @@ export function AdminOrdersPage() {
                       </button>
                     </td>
                     <td>
-                      <select
-                        aria-label={`Override status for order ${order.orderId}`}
-                        value={order.status}
-                        disabled={order.status === 'refunded' || order.status === 'cancelled'}
-                        onChange={event => void overrideOrder(order, event.target.value)}
-                      >
-                        {((order.status === 'pending' ? ['pending', 'confirmed', 'cancelled']
-                          : order.status === 'confirmed' ? ['confirmed', 'shipped', 'picked up', 'cancelled']
-                          : order.status === 'shipped' ? ['shipped', 'delivered', 'confirmed', 'cancelled']
-                          : order.status === 'delivered' ? ['delivered', 'shipped']
-                          : order.status === 'picked up' ? ['picked up', 'confirmed']
-                          : [order.status]) as string[]).map(value => <option value={value} key={value}>{value}</option>)}
-                      </select>
+                      {(() => {
+                        const isDigital = isOrderAllDigital(order);
+                        return (
+                          <select
+                            aria-label={`Override status for order ${order.orderId}`}
+                            value={order.status}
+                            disabled={order.status === 'refunded' || order.status === 'cancelled' || (isDigital && order.status === 'delivered')}
+                            title={isDigital && order.status === 'delivered' ? 'Digital orders are delivered electronically' : undefined}
+                            onChange={event => void overrideOrder(order, event.target.value)}
+                          >
+                            {getOrderOverrideOptions(order.status, isDigital).map(value => (
+                              <option value={value} key={value}>{value}</option>
+                            ))}
+                          </select>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ))}
@@ -2236,7 +2564,10 @@ export function AdminCouponsPage() {
   const { user, notify } = useShop();
   const client = useQueryClient();
   const [page, setPage] = useState(1);
+  const extraFilters = useCollectionFilters();
+  useEffect(() => { setPage(1); }, [extraFilters.query]);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [activeFilter, setActiveFilter] = useState('');
   const [ordering, setOrdering] = useState('-created');
   const [detail, setDetail] = useState<{ title: string; rows: [string, string][] } | null>(null);
@@ -2249,15 +2580,18 @@ export function AdminCouponsPage() {
   const actionDialog = useActionDialog();
 
   const queryParams = new URLSearchParams({
+    ...Object.fromEntries(new URLSearchParams(extraFilters.query)),
     limit: '15',
     offset: String((page - 1) * 15),
     ordering,
   });
-  if (search.trim()) queryParams.set('search', search.trim());
+  if (debouncedSearch.trim()) queryParams.set('search', debouncedSearch.trim());
   if (activeFilter) queryParams.set('active', activeFilter);
 
   const coupons = useQuery({
-    queryKey: ['admin', 'all_coupons', page, search, activeFilter, ordering],
+    queryKey: ['admin', 'all_coupons', page, debouncedSearch, activeFilter, ordering, extraFilters.query, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
     queryFn: () => api<Page<AdminCoupon>>(`admin/staff/coupons?${queryParams.toString()}`),
     enabled: !!user && (user.is_staff || user.is_superuser || user.is_business_admin),
   });
@@ -2267,7 +2601,11 @@ export function AdminCouponsPage() {
     try {
       if (action === 'delete') {
         if (isUsed) {
-          notify(`Coupon ${coupon.code} has recorded customer redemptions and cannot be deleted to preserve order history. Keep it deactivated instead.`, true);
+          await actionDialog.ask({
+            title: 'Coupon Cannot Be Deleted',
+            message: `Coupon "${coupon.code}" has recorded customer redemptions (${coupon.num_used} used in orders). To preserve historical order records and financial audit trails, used coupons cannot be deleted from the database. Keeping the coupon deactivated ensures it can never be used again.`,
+            confirmLabel: 'Understood',
+          });
           return;
         }
         if (await actionDialog.ask({ title: 'Delete coupon', message: `Permanently delete unused coupon ${coupon.code}?`, confirmLabel: 'Delete' }) === null) return;
@@ -2383,6 +2721,16 @@ export function AdminCouponsPage() {
         )}
       </div>
 
+      <CollectionFilters filters={extraFilters} label="additional filters" hideSearch fields={[{ key: 'type', label: 'Coupon type', options: ['order_total', 'product', 'product_quantity', 'category'].map(value => ({ value, label: value.replaceAll('_', ' ') })) }, { key: 'validity', label: 'Validity', options: ['current', 'expired', 'upcoming'].map(value => ({ value, label: value })) }, { key: 'created_by', label: 'Creator email' }]} />
+      <button type="button" className="button secondary" onClick={() => {
+        extraFilters.reset();
+        setSearch('');
+        setActiveFilter(''); setOrdering('-created'); setPage(1);
+      }}>Reset all filters</button>
+      {coupons.isFetching && !coupons.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
+
       {coupons.isLoading ? (
         <Loading />
       ) : coupons.error ? (
@@ -2390,9 +2738,15 @@ export function AdminCouponsPage() {
       ) : !coupons.data?.results.length ? (
         <Empty
           title="No coupons found"
-          text={search || activeFilter ? "No coupons matched your search or filters." : "No promotion coupons have been configured yet."}
-          href="/admin/coupons"
-          label={search || activeFilter ? "Reset filters" : "Refresh coupons"}
+          text={search || activeFilter || extraFilters.active ? "No coupons matched your search or filters." : "No promotion coupons have been configured yet."}
+          onAction={() => {
+            setSearch('');
+            setActiveFilter('');
+            setOrdering('-created');
+            setPage(1);
+            extraFilters.reset();
+          }}
+          label={search || activeFilter || extraFilters.active ? "Reset filters" : "Refresh coupons"}
         />
       ) : (
         <>
@@ -2404,7 +2758,8 @@ export function AdminCouponsPage() {
                   <th>Discount</th>
                   <th>Status</th>
                   <th>Usage</th>
-                  <th>Valid period</th>
+                  <th>Valid from</th>
+                  <th>Valid to</th>
                   <th>Created by</th>
                   <th>Redemptions</th>
                   <th>Actions</th>
@@ -2417,12 +2772,9 @@ export function AdminCouponsPage() {
                     <td>{coupon.discount}% off</td>
                     <td><Status value={coupon.active ? 'active' : 'inactive'} /></td>
                     <td>{coupon.num_used} / {coupon.num_available}</td>
-                    <td>
-                      <small>
-                        {new Date(coupon.valid_from).toLocaleDateString()} – {new Date(coupon.valid_to).toLocaleDateString()}
-                      </small>
-                    </td>
-                    <td><small>{coupon.created_by || 'Staff Backoffice'}</small></td>
+                    <td><DateStamp value={coupon.valid_from} dateOnly /></td>
+                    <td><DateStamp value={coupon.valid_to} dateOnly /></td>
+                    <td><small>{coupon.created_by || 'Not recorded'}</small></td>
                     <td>{coupon.redemptions?.length || 0} orders</td>
                     <td>
                       <div className="form-actions" style={{ justifyContent: 'flex-start' }}>
@@ -2435,9 +2787,9 @@ export function AdminCouponsPage() {
                             rows: [
                               ['Status', coupon.active ? 'Active' : 'Inactive'],
                               ['Discount', `${coupon.discount}%`],
-                              ['Created by', coupon.created_by || 'Staff Backoffice'],
-                              ['Valid from', new Date(coupon.valid_from).toLocaleString()],
-                              ['Valid to', new Date(coupon.valid_to).toLocaleString()],
+                              ['Created by', coupon.created_by || 'Not recorded'],
+                              ['Valid from', activityDate(coupon.valid_from)],
+                              ['Valid to', activityDate(coupon.valid_to)],
                               ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
                               ...(coupon.redemptions?.length ? [['Redemptions', `${coupon.redemptions.length} orders redeemed`] as [string, string]] : []),
                             ]
@@ -2457,16 +2809,14 @@ export function AdminCouponsPage() {
                           className="icon-button"
                           aria-label={
                             coupon.num_used > 0
-                              ? `Coupon ${coupon.code} cannot be deleted (used in orders)`
-                              : `Delete coupon ${coupon.code}`
+                              ? `Used coupon ${coupon.code} cannot be deleted (click to see reason)`
+                              : `Delete unused coupon ${coupon.code}`
                           }
                           title={
                             coupon.num_used > 0
-                              ? 'Used coupons cannot be deleted to preserve redemption history. Keep deactivated.'
+                              ? 'Used coupons cannot be deleted to preserve order records. Click for details.'
                               : 'Delete unused coupon'
                           }
-                          disabled={coupon.num_used > 0}
-                          style={coupon.num_used > 0 ? { opacity: 0.35, cursor: 'not-allowed' } : undefined}
                           onClick={() => void setCoupon(coupon, 'delete')}
                         >
                           <Trash2 size={16} />
@@ -2560,6 +2910,7 @@ export function AdminRefundsPage() {
   const client = useQueryClient();
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [statusFilter, setStatusFilter] = useState('');
   const [refundTypeFilter, setRefundTypeFilter] = useState('');
   const [ordering, setOrdering] = useState('-created');
@@ -2571,12 +2922,14 @@ export function AdminRefundsPage() {
     offset: String((page - 1) * 15),
     ordering,
   });
-  if (search.trim()) queryParams.set('search', search.trim());
+  if (debouncedSearch.trim()) queryParams.set('search', debouncedSearch.trim());
   if (statusFilter) queryParams.set('status', statusFilter);
   if (refundTypeFilter) queryParams.set('refund_type', refundTypeFilter);
 
   const refunds = useQuery({
-    queryKey: ['admin', 'all_refunds', page, search, statusFilter, refundTypeFilter, ordering],
+    queryKey: ['admin', 'all_refunds', page, debouncedSearch, statusFilter, refundTypeFilter, ordering, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
     queryFn: () => api<Page<AdminRefund>>(`admin/staff/refunds?${queryParams.toString()}`),
     enabled: !!user && (user.is_staff || user.is_superuser || user.is_business_admin),
   });
@@ -2671,6 +3024,10 @@ export function AdminRefundsPage() {
         )}
       </div>
 
+      {refunds.isFetching && !refunds.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
+
       {refunds.isLoading ? (
         <Loading />
       ) : refunds.error ? (
@@ -2679,7 +3036,13 @@ export function AdminRefundsPage() {
         <Empty
           title="No refund requests found"
           text={search || statusFilter || refundTypeFilter ? "No refunds matched your search or filters." : "No customer refund requests currently exist."}
-          href="/admin/refunds"
+          onAction={() => {
+            setSearch('');
+            setStatusFilter('');
+            setRefundTypeFilter('');
+            setOrdering('-created');
+            setPage(1);
+          }}
           label={search || statusFilter || refundTypeFilter ? "Reset filters" : "Refresh refunds"}
         />
       ) : (
@@ -2695,7 +3058,7 @@ export function AdminRefundsPage() {
                   <th>Status</th>
                   <th>Reason</th>
                   <th>Reference / Details</th>
-                  <th>Date</th>
+                  <th>Created</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -2719,7 +3082,7 @@ export function AdminRefundsPage() {
                         <span className="muted">—</span>
                       )}
                     </td>
-                    <td>{new Date(refund.created).toLocaleDateString()}</td>
+                    <td><DateStamp value={refund.created} dateOnly /></td>
                     <td>
                       <div className="form-actions" style={{ justifyContent: 'flex-start' }}>
                         <button
@@ -2736,7 +3099,7 @@ export function AdminRefundsPage() {
                               ['Reason', refund.reason],
                               ...(refund.provider_reference ? [['Provider Reference', refund.provider_reference] as [string, string]] : []),
                               ...(refund.failure_reason ? [['Failure Details', refund.failure_reason] as [string, string]] : []),
-                              ['Created', new Date(refund.created).toLocaleString()],
+                              ['Created', activityDate(refund.created)],
                             ]
                           })}
                         >
@@ -2780,8 +3143,9 @@ export function AdminRefundsPage() {
 export function AdminCommissionPage() {
   const { user, notify } = useShop();
   const client = useQueryClient();
+  const filters = useCollectionFilters();
   const wallet = useQuery({
-    queryKey: ['admin', 'commission-wallet'],
+    queryKey: ['admin', 'commission-wallet', filters.query, user?.id],
     queryFn: () =>
       api<{
         earned: string;
@@ -2789,6 +3153,7 @@ export function AdminCommissionPage() {
         official_stores_revenue?: string;
         withdrawn_or_pending: string;
         available: string;
+        withdrawal_count: number;
         withdrawals: Array<{
           id: number;
           amount: string;
@@ -2797,7 +3162,7 @@ export function AdminCommissionPage() {
           reference: string;
           created: string;
         }>;
-      }>('admin/staff/commission-wallet'),
+      }>(`admin/staff/commission-wallet?${filters.query}`),
     enabled: Boolean(user?.is_superuser || user?.is_business_admin),
   });
   const [busy, setBusy] = useState(false);
@@ -2832,6 +3197,9 @@ export function AdminCommissionPage() {
         </div>
         <Link className="button secondary" href="/admin">Dashboard</Link>
       </div>
+      {wallet.isFetching && !wallet.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
       {wallet.isLoading ? (
         <Loading />
       ) : wallet.error ? (
@@ -2892,6 +3260,17 @@ export function AdminCommissionPage() {
           </section>
           <section className="merchant-section" style={{ marginTop: '2rem' }}>
             <h2>Withdrawal history</h2>
+            <CollectionFilters filters={filters} label="withdrawals" fields={[
+              { key: 'status', label: 'Status', options: [{ value: 'pending', label: 'Pending' }, { value: 'completed', label: 'Completed' }, { value: 'failed', label: 'Failed' }] },
+              { key: 'payout_method', label: 'Method', options: [{ value: 'stripe', label: 'Stripe' }, { value: 'bank', label: 'Bank transfer' }] },
+              ...financialFields,
+            ]} />
+            {typeof wallet.data.withdrawal_count === 'number' && (
+              <CollectionCount count={wallet.data.withdrawal_count} />
+            )}
+            {!wallet.data.withdrawals.length && (
+              <p className="muted">{filters.active ? 'No withdrawals match your filters.' : 'No withdrawals yet.'}</p>
+            )}
             <div className="table-scroll">
               <table>
                 <thead>
@@ -2900,7 +3279,7 @@ export function AdminCommissionPage() {
                     <th>Amount</th>
                     <th>Method</th>
                     <th>Status</th>
-                    <th>Date</th>
+                    <th>Created</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2910,12 +3289,13 @@ export function AdminCommissionPage() {
                       <td>{money(row.amount)}</td>
                       <td>{row.payout_method}</td>
                       <td><Status value={row.status} /></td>
-                      <td>{new Date(row.created).toLocaleString()}</td>
+                      <td><DateStamp value={row.created} /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            <CollectionPagination filters={filters} count={wallet.data.withdrawal_count} />
           </section>
         </>
       )}
@@ -2929,7 +3309,9 @@ export function AdminTaxesPage() {
   const actionDialog = useActionDialog();
 
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [stateFilter, setStateFilter] = useState('');
+  const debouncedState = useDebouncedValue(stateFilter);
   const [activeFilter, setActiveFilter] = useState('');
 
   const [editTarget, setEditTarget] = useState<AdminTaxJurisdiction | null>(null);
@@ -2950,12 +3332,14 @@ export function AdminTaxesPage() {
   });
 
   const queryParams = new URLSearchParams();
-  if (search.trim()) queryParams.set('search', search.trim());
-  if (stateFilter.trim()) queryParams.set('state', stateFilter.trim());
+  if (debouncedSearch.trim()) queryParams.set('search', debouncedSearch.trim());
+  if (debouncedState.trim()) queryParams.set('state', debouncedState.trim());
   if (activeFilter) queryParams.set('is_active', activeFilter);
 
   const taxes = useQuery({
-    queryKey: ['admin', 'taxes', search, stateFilter, activeFilter],
+    queryKey: ['admin', 'taxes', debouncedSearch, debouncedState, activeFilter, user?.id],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
     queryFn: () => api<AdminTaxesResponse>(`admin/taxes?${queryParams.toString()}`),
     enabled: !!(user?.is_staff || user?.is_superuser || user?.is_business_admin),
   });
@@ -3170,6 +3554,10 @@ export function AdminTaxesPage() {
         )}
       </div>
 
+      {taxes.isFetching && !taxes.isLoading && (
+        <p role="status" aria-live="polite">Updating results…</p>
+      )}
+
       {taxes.isLoading ? (
         <Loading />
       ) : taxes.error ? (
@@ -3178,7 +3566,11 @@ export function AdminTaxesPage() {
         <Empty
           title="No tax jurisdictions found"
           text={search || stateFilter || activeFilter ? "No tax rules matched your search or filters." : "No tax jurisdictions have been configured yet. Click 'Restore 50 US Baselines' in the header to initialize all standard US rates."}
-          href="/admin/taxes"
+          onAction={() => {
+            setSearch('');
+            setStateFilter('');
+            setActiveFilter('');
+          }}
           label={search || stateFilter || activeFilter ? "Reset filters" : "Refresh tax rules"}
         />
       ) : (

@@ -27,7 +27,7 @@
                     {% block action_label %}Sign in to ProAce{% endblock %}
                   </a>
                 </p>
-                <p>Need help? Contact <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>
+                {% if support_email %}<p>Need help? Contact <a href="mailto:{{ support_email }}">{{ support_email }}</a>.</p>{% endif %}
               </td>
             </tr>
             <tr>

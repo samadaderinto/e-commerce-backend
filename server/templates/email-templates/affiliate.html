@@ -4,7 +4,7 @@
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
     <meta name="viewport" content="width=device-width">
-    <title>ProAce International - Welcome to the Affiliate &amp; Partner Network</title>
+    <title>ProAce - Welcome to the Referral Program</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&amp;display=swap" rel="stylesheet">
     <style type="text/css">
       html {
@@ -48,7 +48,7 @@
 
   <body style="margin: 0; padding: 0; background-color: #f4f6f1;">
     <span style="display: none !important; visibility: hidden; opacity: 0; color: #FFFFFF; height: 0; width: 0; font-size: 1px;">
-      Welcome to the ProAce Affiliate Network - Start earning with our partner catalog
+      Welcome to the ProAce Referral Program - Invite friends and earn wallet store credit
     </span>
     <table cellpadding="0" cellspacing="0" border="0" width="100%" style="background: #f4f6f1; min-width: 360px; font-size: 1px; line-height: normal;">
       <tr em="group">
@@ -75,11 +75,11 @@
                         <tr>
                           <td align="center">
                             <div class="Inter700" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 26px; line-height: 34px; font-weight: bold; text-transform: uppercase;">
-                              Welcome To The Partner Network
+                              Welcome To The Referral Program
                             </div>
                             <div style="height: 6px; font-size: 1px; line-height: 6px;">&nbsp;</div>
                             <div class="Inter400" style="font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 20px;">
-                              Monetize traffic across our marketplace and curated ClickBank catalog
+                              Invite friends to ProAce and earn spendable wallet store credit
                             </div>
                           </td>
                         </tr>
@@ -101,7 +101,7 @@
                       </div>
                       <div style="height: 12px; font-size: 1px; line-height: 12px;">&nbsp;</div>
                       <div class="Inter400" style="font-family: Arial, sans-serif; color: #333333; font-size: 15px; line-height: 23px;">
-                        Congratulations! Your affiliate marketer account has been established. You are now equipped to earn commissions by sharing verified products from top marketplace merchants and official brand partners.
+                        Congratulations! Your personal referral link and code are ready. Share your link with friends, family, and colleagues. For each of your first 4 referred customer signups, you'll earn $25.00 in ProAce Wallet store credit (up to $100.00 total) to spend on any purchase across the marketplace.
                       </div>
                     </td>
                   </tr>
@@ -143,11 +143,11 @@
                       <table cellpadding="0" cellspacing="0" border="0" width="100%">
                         <tr>
                           <td class="Inter400" style="font-family: Arial, sans-serif; color: #333333; font-size: 14px; line-height: 23px;">
-                            <strong>Partner Program Highlights:</strong><br>
-                            • <strong>ClickBank Curated Products:</strong> Share curated listings with encrypted HopLinks and earn direct vendor referral commissions under ClickBank's 60-day customer satisfaction guarantee.<br>
-                            • <strong>Native Marketplace Sales:</strong> Transparent 4% standard processing fee for merchant sales (official partner stores enjoy 0% platform fee).<br>
-                            • <strong>7-Day Escrow Review:</strong> Earnings clear after the statutory customer refund window directly into your payout balance.<br>
-                            • <strong>Fast Payouts:</strong> Withdraw available funds via Stripe Express or direct payout transfer once cleared.
+                            <strong>Referral Program Highlights:</strong><br>
+                            • <strong>Earn Store Credit:</strong> Receive $25.00 in spendable ProAce Wallet store credit for each of your first 4 referred customer signups (up to $100.00 total promotional credit).<br>
+                            • <strong>Spend at Checkout:</strong> Your earned store credit balance is automatically available to apply towards any order at checkout.<br>
+                            • <strong>Track Signups:</strong> Track all your referred signups and reward statuses in real time within your referral workspace.<br>
+                            • <strong>Simple Sharing:</strong> Friends can register directly using your personal invite link or by entering your referral code during account signup.
                           </td>
                         </tr>
                       </table>
@@ -163,8 +163,8 @@
                 <table cellpadding="0" cellspacing="0" border="0" width="265">
                   <tr>
                     <td align="center" valign="middle" height="44" style="height: 44px; background: #44cf9c; border-radius: 10px;" bgcolor="#44CF9C">
-                      <a href="https://proace.local/merchant" class="Inter700" target="_blank" style="display: table-cell; width: 265px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
-                        Open Affiliate Portal
+                      <a href="{{ dashboard_url }}" class="Inter700" target="_blank" style="display: table-cell; width: 265px; height: 44px; font-family: Arial, sans-serif; color: #ffffff; font-size: 15px; line-height: 15px; text-decoration: none; vertical-align: middle; font-weight: bold;">
+                        Open Referral Workspace
                       </a>
                     </td>
                   </tr>
@@ -179,13 +179,12 @@
                   <tr>
                     <td align="center">
                       <div class="Inter400" style="font-family: Arial, sans-serif; color: #697067; font-size: 13px; line-height: 19px;">
-                        <strong>ProAce International Affiliate Operations</strong><br>
-                        Questions? Contact partner support: <a href="mailto:support@proace.local" style="color: #1f5b3a; text-decoration: none;">support@proace.local</a><br>
-                        FTC-Compliant Affiliate Program · Official Partner Network
+                        <strong>ProAce Referral Program · Customer Rewards</strong><br>
+                        {% if support_email %}Questions? Contact support: <a href="mailto:{{ support_email }}" style="color: #1f5b3a; text-decoration: none;">{{ support_email }}</a><br>{% endif %}
                       </div>
                       <div style="height: 14px; font-size: 1px; line-height: 14px;">&nbsp;</div>
                       <div class="Inter400" style="font-family: Arial, sans-serif; color: #9aa198; font-size: 12px; line-height: 17px;">
-                        © {% now "Y" %} ProAce International. All rights reserved.
+                        © {% now "Y" %} ProAce. All rights reserved.
                       </div>
                     </td>
                   </tr>

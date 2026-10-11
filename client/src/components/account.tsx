@@ -1,13 +1,19 @@
 'use client';
 
+import { CollectionCount, CollectionFilters, CollectionPagination, financialFields, useCollectionFilters, useDebouncedValue } from './collection-filters';
+
+
+import type { Page } from '@/lib/types';
 import { validateMilitaryAddress } from '@/lib/geo';
 
-import { ActivityDetails } from './activity';
+import { ActivityDetails, DateStamp } from './activity';
+import { displayDate } from '@/lib/datetime';
+import { OrderStatusTracker } from './order-status-tracker';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, ReactNode, useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, ChartNoAxesCombined, Check, ChevronRight, ExternalLink, Eye, EyeOff, FileText, Printer, Heart, LockKeyhole, LogOut, MapPin, Package, Pencil, Plus, RotateCcw, ShoppingBag, Settings, Store, Trash2, Truck, UserRound, UsersRound, WalletCards, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, ChartNoAxesCombined, Check, Clock, ChevronRight, ExternalLink, Eye, EyeOff, FileText, Printer, Heart, LockKeyhole, LogOut, MapPin, Package, Pencil, Plus, RotateCcw, ShoppingBag, Settings, Store, Trash2, Truck, UserRound, UsersRound, WalletCards, X } from 'lucide-react';
 
 import { api, money } from '@/lib/api';
 import type { Address, Order, User, UserWallet } from '@/lib/types';
@@ -26,7 +32,7 @@ import {
   validateUnit,
 } from '@/lib/geo';
 import { useShop } from './providers';
-import { Empty, ErrorState, Field, Loading, ProductImage, Status } from './ui';
+import { Empty, ErrorState, Field, Loading, ProductImage, Status, useDialogFocus } from './ui';
 
 export function Gate({ children, next = '/account' }: { children: ReactNode; next?: string }) {
   const { user, sessionLoading } = useShop();
@@ -45,8 +51,39 @@ export function Gate({ children, next = '/account' }: { children: ReactNode; nex
   return <>{children}</>;
 }
 
+function GoogleIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="#4285F4"
+        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3h3.88c2.27-2.09 3.66-5.17 3.66-9.09z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.09C3.26 21.48 7.31 24 12 24z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M5.28 14.32c-.25-.72-.38-1.49-.38-2.32 0-.83.13-1.6.38-2.32V6.59H1.24C.45 8.16 0 9.93 0 12c0 2.07.45 3.84 1.24 5.41l4.04-3.09z"
+      />
+      <path
+        fill="#EA4335"
+        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.52 1.24 6.59l4.04 3.09c.95-2.83 3.6-4.93 6.72-4.93z"
+      />
+    </svg>
+  );
+}
+
+function AppleIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.38c.62-.75 1.04-1.8 0.93-2.85-.9.04-1.99.6-2.64 1.35-.56.65-1.06 1.7-0.93 2.71 1.01.08 2.02-.46 2.64-1.21z" />
+    </svg>
+  );
+}
+
 export function AuthPage({ mode }: { mode: string }) {
-  const { login, user, notify } = useShop();
+  const { login, socialLogin, user, notify } = useShop();
   const router = useRouter();
   const params = useSearchParams();
   const [show, setShow] = useState(false);
@@ -57,6 +94,17 @@ export function AuthPage({ mode }: { mode: string }) {
   const isForgot = mode === 'forgot-password';
   const isReset = mode === 'reset-password';
 
+  useEffect(() => {
+    const refParam = params.get('ref');
+    if (refParam && typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('proace_referral', refParam);
+      } catch {
+        /* Ignore storage errors */
+      }
+    }
+  }, [params]);
+
   const verify = useQuery({
     queryKey: ['verify', params.get('token')],
     queryFn: () =>
@@ -66,6 +114,56 @@ export function AuthPage({ mode }: { mode: string }) {
     staleTime: Infinity,
   });
 
+  async function handleSocial(provider: 'google' | 'apple') {
+    setBusy(true);
+    setError('');
+    const storedRef = typeof window !== 'undefined' ? sessionStorage.getItem('proace_referral') || '' : '';
+    const referralCode = (params.get('ref') || storedRef || '').trim();
+
+    try {
+      let credential = '';
+      if (typeof window !== 'undefined') {
+        const emailInput = document.querySelector('input[name="email"]') as HTMLInputElement | null;
+        const enteredEmail = emailInput?.value?.trim() || '';
+        const selectedEmail =
+          enteredEmail ||
+          prompt(
+            `Enter your ${provider === 'google' ? 'Google' : 'Apple'} account email for sign-in:`,
+            'shopper@example.com'
+          );
+        if (!selectedEmail) {
+          setBusy(false);
+          return;
+        }
+        credential = `dev-${provider}:${selectedEmail.trim().toLowerCase()}`;
+      }
+
+      await socialLogin(provider, {
+        credential,
+        referral_code: referralCode,
+      });
+
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem('proace_referral');
+        } catch {
+          /* Ignore storage errors */
+        }
+      }
+
+      const next = params.get('next') || '/account';
+      router.push(
+        next.startsWith('/') && !next.startsWith('//') && !next.includes('\\')
+          ? next
+          : '/account'
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -74,7 +172,10 @@ export function AuthPage({ mode }: { mode: string }) {
 
     try {
       if (isRegister) {
-        const result = await api<{ detail: string }>('auth/register', 'POST', data);
+        const result = await api<{ detail: string }>('auth/register', 'POST', {
+          ...data,
+          referral_code: data.referral_code?.trim() || '',
+        });
         setMessage(result.detail);
       } else if (isForgot) {
         const result = await api<{ detail: string }>('auth/forgot', 'POST', data);
@@ -184,6 +285,35 @@ export function AuthPage({ mode }: { mode: string }) {
                     : 'Sign in to your everyday marketplace.'}
             </p>
 
+            {!isForgot && !isReset && (
+              <>
+                <div className="social-auth-group">
+                  <button
+                    type="button"
+                    className="social-auth-btn"
+                    disabled={busy}
+                    onClick={() => handleSocial('google')}
+                  >
+                    <GoogleIcon />
+                    <span>{isRegister ? 'Sign up with Google' : 'Continue with Google'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="social-auth-btn apple-btn"
+                    disabled={busy}
+                    onClick={() => handleSocial('apple')}
+                  >
+                    <AppleIcon />
+                    <span>{isRegister ? 'Sign up with Apple' : 'Continue with Apple'}</span>
+                  </button>
+                </div>
+
+                <div className="auth-divider">
+                  <span>or with email</span>
+                </div>
+              </>
+            )}
+
             <form onSubmit={submit} className="form-stack">
               {isRegister && (
                 <div className="form-row">
@@ -216,6 +346,17 @@ export function AuthPage({ mode }: { mode: string }) {
                     autoComplete="tel"
                     required
                     placeholder="+1 301 325 1550"
+                  />
+                </Field>
+              )}
+
+              {isRegister && (
+                <Field label="Referral code (optional)">
+                  <input
+                    name="referral_code"
+                    defaultValue={params.get('ref') || ''}
+                    maxLength={70}
+                    autoComplete="off"
                   />
                 </Field>
               )}
@@ -736,12 +877,14 @@ function WalletTopupModal({ onClose, onSuccess }: { onClose: () => void; onSucce
   );
 }
 
-function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: () => void }) {
+function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSuccess: (user: User) => void }) {
+  const dialogRef = useDialogFocus(true, onClose);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showCurrent, setShowCurrent] = useState(false);
   const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -755,14 +898,18 @@ function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSu
       setError('New passwords do not match.');
       return;
     }
+    if (currentPassword === newPassword) {
+      setError('New password must be different from current password.');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
-      await api('password/change', 'POST', {
+      const result = await api<{ user: User }>('password/change', 'POST', {
         current_password: currentPassword,
         password: newPassword,
       });
-      onSuccess();
+      onSuccess(result.user);
     } catch (err) {
       setError((err as Error).message);
       setBusy(false);
@@ -771,7 +918,7 @@ function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSu
 
   return (
     <div className="dialog-backdrop" role="presentation" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-      <section className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="pwd-title" style={{ maxWidth: '440px' }}>
+      <section ref={dialogRef} className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="pwd-title" style={{ maxWidth: '440px' }}>
         <div className="section-heading">
           <div>
             <span className="eyebrow green">SECURITY & ACCESS</span>
@@ -784,17 +931,18 @@ function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSu
         </p>
         <form className="form-stack" onSubmit={handleSubmit}>
           <Field label="Current password">
-            <div style={{ position: 'relative' }}>
+            <div className="password-input">
               <input
                 type={showCurrent ? 'text' : 'password'}
                 required
+                disabled={busy}
                 value={currentPassword}
                 onChange={e => setCurrentPassword(e.target.value)}
                 autoComplete="current-password"
               />
               <button
                 type="button"
-                className="icon-button password-toggle"
+                className="icon-button"
                 onClick={() => setShowCurrent(!showCurrent)}
                 aria-label={showCurrent ? 'Hide current password' : 'Show current password'}
               >
@@ -803,10 +951,11 @@ function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSu
             </div>
           </Field>
           <Field label="New password (min. 8 characters)">
-            <div style={{ position: 'relative' }}>
+            <div className="password-input">
               <input
                 type={showNew ? 'text' : 'password'}
                 required
+                disabled={busy}
                 minLength={8}
                 value={newPassword}
                 onChange={e => setNewPassword(e.target.value)}
@@ -814,7 +963,7 @@ function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSu
               />
               <button
                 type="button"
-                className="icon-button password-toggle"
+                className="icon-button"
                 onClick={() => setShowNew(!showNew)}
                 aria-label={showNew ? 'Hide new password' : 'Show new password'}
               >
@@ -823,18 +972,29 @@ function PasswordChangeModal({ onClose, onSuccess }: { onClose: () => void; onSu
             </div>
           </Field>
           <Field label="Confirm new password">
-            <input
-              type="password"
-              required
-              minLength={8}
-              value={confirmPassword}
-              onChange={e => setConfirmPassword(e.target.value)}
-              autoComplete="new-password"
-            />
+            <div className="password-input">
+              <input
+                type={showConfirm ? 'text' : 'password'}
+                required
+                disabled={busy}
+                minLength={8}
+                value={confirmPassword}
+                onChange={e => setConfirmPassword(e.target.value)}
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setShowConfirm(!showConfirm)}
+                aria-label={showConfirm ? 'Hide confirm password' : 'Show confirm password'}
+              >
+                {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </Field>
           {error && <p className="form-error" role="alert">{error}</p>}
           <div className="form-actions" style={{ marginTop: '16px' }}>
-            <button type="button" className="button secondary" onClick={onClose}>Cancel</button>
+            <button type="button" className="button secondary" onClick={onClose} disabled={busy}>Cancel</button>
             <button className="button" disabled={busy}>
               {busy ? 'Updating…' : 'Update password'}
             </button>
@@ -851,9 +1011,16 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
   const [showTopupModal, setShowTopupModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const isBackoffice = Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
-  const orders = useQuery({ queryKey: ['orders', user?.id], queryFn: () => api<Order[]>('orders'), enabled: !!user && !isBackoffice });
+  const orderFilters = useCollectionFilters();
+  const walletFilters = useCollectionFilters();
+  const orders = useQuery({
+    queryKey: ['orders', user?.id, orderFilters.query],
+    queryFn: () => api<Page<Order>>(`orders?paginated=1&${orderFilters.query}`),
+    enabled: !!user && !isBackoffice,
+    refetchInterval: 15000,
+  });
   const addresses = useQuery({ queryKey: ['addresses', user?.id], queryFn: () => api<Address[]>('addresses'), enabled: !!user && !isBackoffice });
-  const wallet = useQuery({ queryKey: ['wallet', user?.id], queryFn: () => api<UserWallet>('wallet'), enabled: !!user && !isBackoffice });
+  const wallet = useQuery({ queryKey: ['wallet', user?.id, walletFilters.query], queryFn: () => api<UserWallet>(`wallet?${walletFilters.query}`), enabled: !!user && !isBackoffice });
   function fundWallet() {
     setShowTopupModal(true);
   }
@@ -869,6 +1036,17 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
       .then(result => { notify(result.detail); void client.invalidateQueries({ queryKey: ['wallet', user.id] }); router.replace('/account/wallet'); })
       .catch(error => notify((error as Error).message, true));
   }, [params, user?.id, isBackoffice]);
+  useEffect(() => {
+    if (params.get('topup_cancelled') === '1' && user && !isBackoffice) {
+      void api('wallet/topup-cancel', 'POST', {})
+        .then(() => {
+          notify('Top-up cancelled.');
+          void client.invalidateQueries({ queryKey: ['wallet', user.id] });
+          router.replace('/account/wallet');
+        })
+        .catch(() => {});
+    }
+  }, [params, user?.id, isBackoffice, router, notify, client]);
   const links = isBackoffice
     ? [
         ['profile', 'Personal details', UserRound],
@@ -878,6 +1056,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
         ['orders', 'My orders', Package],
         ['wallet', 'ProAce Wallet', WalletCards],
         ['addresses', 'Address book', MapPin],
+        ['affiliates', 'Affiliates & referrals', UsersRound],
         ['profile', 'Personal details', UserRound],
       ] as const;
 
@@ -1060,7 +1239,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                 <div className="account-stat-grid">
                   <Link href="/account/orders">
                     <Package />
-                    <strong>{orders.data?.length || 0}</strong>
+                    <strong>{orders.data?.count || 0}</strong>
                     <span>Orders</span>
                     <ArrowRight size={17} />
                   </Link>
@@ -1084,7 +1263,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                   </Link>
                 </div>
                 <OrderList
-                  orders={orders.data?.slice(0, 3)}
+                  orders={orders.data?.results.slice(0, 3)}
                   loading={orders.isLoading}
                   error={orders.error}
                 />
@@ -1092,12 +1271,25 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
             ) : section === 'orders' ? (
               <>
                 <h1>My orders</h1>
+                <CollectionFilters filters={orderFilters} label="orders" fields={[
+                  { key: 'status', label: 'Status', options: ['pending', 'confirmed', 'shipped', 'delivered', 'picked up', 'cancelled', 'refunded'].map(value => ({ value, label: value })) },
+                  { key: 'payment_type', label: 'Payment method', options: ['card', 'wallet', 'cash_on_delivery', 'stripe_wallet'].map(value => ({ value, label: value.replaceAll('_', ' ') })) },
+                  ...financialFields,
+                ]} />
+                {typeof orders.data?.count === 'number' && (
+                  <CollectionCount count={orders.data.count} />
+                )}
+                {orderFilters.active && !orders.isLoading && !orders.data?.results.length && (
+                  <p className="muted">No orders match your filters. Reset filters to see all orders.</p>
+                )}
                 <p className="muted">Keep an eye on your latest finds.</p>
                 <OrderList
-                  orders={orders.data}
+                  orders={orders.data?.results}
+                  filtered={orderFilters.active}
                   loading={orders.isLoading}
                   error={orders.error}
                 />
+                <CollectionPagination filters={orderFilters} count={orders.data?.count || 0} />
               </>
             ) : section === 'wallet' ? (
               <div>
@@ -1120,51 +1312,72 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                   <h2>Recent wallet activity</h2>
                   <button className="button" onClick={fundWallet}>Add funds</button>
                 </div>
+                <CollectionFilters filters={walletFilters} label="wallet transactions" fields={[
+                  { key: 'transaction_type', label: 'Type', options: [{ value: 'credit', label: 'Credit' }, { value: 'debit', label: 'Debit' }] },
+                  { key: 'source', label: 'Source' },
+                  ...financialFields,
+                ]} />
+                {typeof wallet.data?.count === 'number' && (
+                  <CollectionCount count={wallet.data.count} />
+                )}
                 {wallet.isLoading ? (
                   <Loading />
                 ) : wallet.error ? (
                   <ErrorState error={wallet.error} />
                 ) : !wallet.data?.transactions?.length ? (
                   <Empty
-                    title="No transactions yet"
-                    text="When you receive store credit or pay with your wallet, activity appears here."
+                    title={walletFilters.active ? "No transactions match your filters" : "No transactions yet"}
+                    text={walletFilters.active ? "Reset filters to see all transactions." : "When you receive credit or pay with your wallet, activity appears here."}
                   />
                 ) : (
-                  <div className="table-scroll">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Date</th>
-                          <th>Type</th>
-                          <th>Source</th>
-                          <th>Description</th>
-                          <th>Amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {wallet.data.transactions.map((tx) => (
-                          <tr key={tx.id}>
-                            <td>{new Date(tx.created).toLocaleDateString()}</td>
-                            <td>
-                              <span className={tx.transaction_type === 'credit' ? 'status active' : 'status'}>
-                                {tx.transaction_type.toUpperCase()}
-                              </span>
-                            </td>
-                            <td>{tx.source}</td>
-                            <td>{tx.description}</td>
-                            <td
-                              style={{
-                                fontWeight: 600,
-                                color: tx.transaction_type === 'credit' ? 'var(--green)' : 'var(--ink)',
-                              }}
-                            >
-                              {tx.transaction_type === 'credit' ? `+${money(tx.amount)}` : `-${money(tx.amount)}`}
-                            </td>
+                  <>
+                    <div className="table-scroll">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>Created</th>
+                            <th>Reference</th>
+                            <th>Type</th>
+                            <th>Source</th>
+                            <th>Description</th>
+                            <th>Amount</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {wallet.data.transactions.map((tx) => (
+                            <tr key={tx.id}>
+                              <td><DateStamp value={tx.created} dateOnly /></td>
+                              <td>
+                                {tx.reference ? (
+                                  <strong style={{ fontFamily: 'var(--mono, monospace)', fontSize: '12px' }}>
+                                    {tx.reference}
+                                  </strong>
+                                ) : (
+                                  <span className="muted">—</span>
+                                )}
+                              </td>
+                              <td>
+                                <span className={tx.transaction_type === 'credit' ? 'status active' : 'status'}>
+                                  {tx.transaction_type.toUpperCase()}
+                                </span>
+                              </td>
+                              <td style={{ textTransform: 'capitalize' }}>{tx.source}</td>
+                              <td>{tx.description}</td>
+                              <td
+                                style={{
+                                  fontWeight: 600,
+                                  color: tx.transaction_type === 'credit' ? 'var(--green)' : 'var(--ink)',
+                                }}
+                              >
+                                {tx.transaction_type === 'credit' ? `+${money(tx.amount)}` : `-${money(tx.amount)}`}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <CollectionPagination filters={walletFilters} count={wallet.data?.count || 0} />
+                  </>
                 )}
               </div>
             ) : section === 'addresses' ? (
@@ -1287,8 +1500,10 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
             {showPasswordModal && (
               <PasswordChangeModal
                 onClose={() => setShowPasswordModal(false)}
-                onSuccess={() => {
+                onSuccess={(updatedUser) => {
                   setShowPasswordModal(false);
+                  client.setQueryData(['me'], updatedUser);
+                  void client.invalidateQueries({ queryKey: ['me'] });
                   notify('Password updated successfully');
                 }}
               />
@@ -1300,11 +1515,11 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
   );
 }
 
-function OrderList({ orders, loading, error }: { orders?: Order[]; loading: boolean; error: Error | null }) {
+function OrderList({ orders, loading, error, filtered = false }: { orders?: Order[]; loading: boolean; error: Error | null; filtered?: boolean }) {
   if (loading) return <Loading />;
   if (error) return <ErrorState error={error} />;
   if (!orders?.length) {
-    return <Empty title="Your first find is waiting" text="When you place an order, you can follow it right here." />;
+    return <Empty title={filtered ? "No orders match your filters" : "Your first find is waiting"} text={filtered ? "Reset filters to see all orders." : "When you place an order, you can follow it right here."} />;
   }
   return (
     <div className="order-list">
@@ -1318,11 +1533,7 @@ function OrderList({ orders, loading, error }: { orders?: Order[]; loading: bool
               {order.items.length > 1 ? ` + ${order.items.length - 1} more` : ''}
             </p>
             <small>
-              {new Date(order.created).toLocaleDateString('en-GB', {
-                day: 'numeric',
-                month: 'short',
-                year: 'numeric',
-              })}
+              <DateStamp value={order.created} dateOnly />
             </small>
           </div>
           <Status value={order.status} />
@@ -1336,7 +1547,12 @@ function OrderList({ orders, loading, error }: { orders?: Order[]; loading: bool
 
 export function OrderPage({ id }: { id: string }) {
   const { user, notify } = useShop(); const params = useSearchParams(); const client = useQueryClient();
-  const order = useQuery({ queryKey: ['order', id, user?.id], queryFn: () => api<Order>(`orders/${id}`), enabled: !!user });
+  const order = useQuery({
+    queryKey: ['order', id, user?.id],
+    queryFn: () => api<Order>(`orders/${id}`),
+    enabled: !!user,
+    refetchInterval: 15000,
+  });
   const [requestingRefund, setRequestingRefund] = useState(false);
   const [editingRefund, setEditingRefund] = useState(false);
   const [reason, setReason] = useState('item_damaged');
@@ -1353,6 +1569,8 @@ export function OrderPage({ id }: { id: string }) {
   }
 
   const data = order.data;
+  const showPlacedMessage: boolean = params.has('placed')
+    && ['pending', 'confirmed'].includes(data?.status || '');
   const isAllDigital = data?.items?.every(item => item.is_digital) ?? false;
   const hasPhysical = data?.items?.some(item => !item.is_digital) ?? false;
   const createdTime = data ? new Date(data.created).getTime() : 0;
@@ -1360,11 +1578,25 @@ export function OrderPage({ id }: { id: string }) {
   const isWithin7Days = daysElapsed <= 7;
   const activeRefund = data?.active_refund;
   const isRefundPending = Boolean(activeRefund?.is_pending);
+  const claimedProductIds = data?.claimed_product_ids || [];
+  const unclaimedPhysicalItems = (data?.items || []).filter(
+    (item) => !item.is_digital && !claimedProductIds.includes(item.product)
+  );
   const canRequestRefund: boolean = !isRefundPending
     && hasPhysical
     && isWithin7Days
+    && unclaimedPhysicalItems.length > 0
     && Number(data?.paid_total || 0) > Number(data?.refunded_total || 0)
     && !['refunded', 'cancelled'].includes(data?.status || '');
+
+  function openNewRefund() {
+    setEditingRefund(false);
+    setReason('item_damaged');
+    setOtherReason('');
+    setRefundType('store_credit');
+    setRefundProducts([]);
+    setRequestingRefund(true);
+  }
 
   function openEditRefund() {
     if (!activeRefund) return;
@@ -1444,8 +1676,34 @@ export function OrderPage({ id }: { id: string }) {
       ? `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encodeURIComponent(data?.tracking_number || '')}`
       : `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(data?.tracking_number || '')}`);
 
-  const canCancel: boolean = ['pending', 'confirmed'].includes(data?.status || '')
+  const hoursElapsed = (Date.now() - createdTime) / (1000 * 60 * 60);
+  const isWithin12Hours = hoursElapsed <= 12;
+  const hasDigital = data?.items?.some((item) => item.is_digital) ?? false;
+  const canCancel: boolean = hasPhysical
+    && !hasDigital
+    && isWithin12Hours
+    && ['pending', 'confirmed'].includes(data?.status || '')
     && (data?.fulfillments || []).every((fulfillment) => fulfillment.status === 'confirmed');
+  const paymentMethods: Record<string, string> = {
+    user_wallet: 'ProAce Wallet',
+    wallet: 'ProAce Wallet',
+    stripe_wallet: 'Card & ProAce Wallet',
+    card: 'Card',
+  };
+  const paymentMethod: string = paymentMethods[(data?.payment_type || '').toLowerCase().replaceAll(' ', '_')]
+    || data?.payment_type || 'Online payment';
+  const paidAmount: number = Number(data?.paid_total || 0);
+  const refundedAmount: number = Number(data?.refunded_total || 0);
+  function paymentState(): string {
+    if (paidAmount <= 0) {
+      if (Number(data?.total) === 0) return 'No payment required';
+      return data?.status === 'cancelled' ? 'No payment collected' : 'Awaiting payment';
+    }
+    if (refundedAmount >= paidAmount) return 'Refunded';
+    if (refundedAmount > 0) return 'Partially refunded';
+    return paidAmount >= Number(data?.total || 0) ? 'Paid' : 'Partially paid';
+  }
+
   const [cancelling, setCancelling] = useState(false);
 
   async function cancelOrder() {
@@ -1480,17 +1738,25 @@ export function OrderPage({ id }: { id: string }) {
           data && (
             <>
               <div className="order-success">
-                <div className="success-icon">
-                  <Check size={30} />
+                <div className={['pending', 'cancelled', 'refunded'].includes(data.status) ? 'order-outcome-icon' : 'success-icon'}>
+                  {data.status === 'pending' ? (
+                    <Clock size={30} />
+                  ) : data.status === 'cancelled' ? (
+                    <X size={30} />
+                  ) : data.status === 'refunded' ? (
+                    <RotateCcw size={30} />
+                  ) : (
+                    <Check size={30} />
+                  )}
                 </div>
                 <span className="eyebrow green">
-                  {params.has('placed') ? 'A GOOD FIND, INDEED' : 'YOUR ORDER'}
+                  {showPlacedMessage ? 'A GOOD FIND, INDEED' : 'YOUR ORDER'}
                 </span>
-                <h1>{params.has('placed') ? 'It’s on the list.' : data.reference}</h1>
+                <h1>{showPlacedMessage ? 'It’s on the list.' : data.reference}</h1>
                 <p>
-                  {params.has('placed')
-                    ? `Your order ${data.reference} is confirmed. Thank you for shopping with ProAce.`
-                    : `Placed on ${new Date(data.created).toLocaleDateString()}`}
+                  {showPlacedMessage
+                    ? `Your order ${data.reference} is ${data.status}. Thank you for shopping with ProAce.`
+                    : `Placed on ${displayDate(data.created)}`}
                 </p>
                 <Status value={data.status} />
                 <button
@@ -1533,21 +1799,11 @@ export function OrderPage({ id }: { id: string }) {
                 </div>
               )}
 
-              <div className="order-progress">
-                {['confirmed', 'shipped', 'delivered'].map((step, index) => (
-                  <div
-                    key={step}
-                    className={
-                      ['confirmed', 'shipped', 'delivered'].indexOf(data.status) >= index ? 'done' : ''
-                    }
-                  >
-                    <span>
-                      <Check size={15} />
-                    </span>
-                    <strong>{step}</strong>
-                  </div>
-                ))}
-              </div>
+              <OrderStatusTracker
+                status={data.status}
+                isDigital={isAllDigital}
+                changedAt={data.status_updated_at}
+              />
 
               <div className="checkout-layout">
                 <section>
@@ -1561,9 +1817,11 @@ export function OrderPage({ id }: { id: string }) {
                         {item.is_digital ? (
                           <div className="digital-badge" style={{ marginTop: '6px' }}>
                             <small style={{ display: 'block', marginBottom: '4px' }}>
-                              Digital download (Instant fulfillment)
+                              {['cancelled', 'refunded'].includes(data.status)
+                                ? `Order ${data.status} — download access revoked`
+                                : 'Digital download (Instant fulfillment)'}
                             </small>
-                            {item.download_url ? (
+                            {!['cancelled', 'refunded'].includes(data.status) && item.download_url ? (
                               <div className="form-actions">
                                 <a
                                   className="button secondary"
@@ -1598,11 +1856,11 @@ export function OrderPage({ id }: { id: string }) {
                                   </button>
                                 )}
                               </div>
-                            ) : (
+                            ) : !['cancelled', 'refunded'].includes(data.status) ? (
                               <span className="muted" style={{ fontSize: '11px' }}>
                                 Processing file link…
                               </span>
-                            )}
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -1613,21 +1871,19 @@ export function OrderPage({ id }: { id: string }) {
 
                 <aside className="order-summary">
                   <h2>Order details</h2>
-                  <h4>Deliver to</h4>
-                  <p>
-                    {data.address.address}<br />
-                    {data.address.city}, {data.address.state}<br />
-                    {data.address.country} {data.address.zip}
-                  </p>
+                  {!isAllDigital && (
+                    <>
+                      <h4>Deliver to</h4>
+                      <p>
+                        {data.address.address}<br />
+                        {data.address.city}, {data.address.state}<br />
+                        {data.address.country} {data.address.zip}
+                      </p>
+                    </>
+                  )}
                   <h4>Payment status</h4>
                   <p>
-                    {data.payment_type === 'user_wallet'
-                      ? 'ProAce Wallet Balance (Paid)'
-                      : data.payment_type === 'stripe_wallet'
-                        ? 'Cards, Stripe & Wallet (Paid)'
-                        : data.payment_type === 'card'
-                          ? 'Card (Paid)'
-                          : 'Online Payment (Paid)'}
+                    {paymentMethod} · {paymentState()}
                   </p>
                   <div className="summary-total">
                     <span>Total</span>
@@ -1690,7 +1946,7 @@ export function OrderPage({ id }: { id: string }) {
                           <strong>Note:</strong> {activeRefund.failure_reason || activeRefund.processing_reason}
                         </p>
                       )}
-                      {activeRefund.is_pending && !requestingRefund && isWithin7Days && (
+                      {activeRefund.is_pending && !requestingRefund && isWithin7Days && !['cancelled', 'refunded'].includes(data.status) && (
                         <button
                           type="button"
                           className="button secondary"
@@ -1714,37 +1970,47 @@ export function OrderPage({ id }: { id: string }) {
                     </button>
                   )}
                   {canRequestRefund && !requestingRefund && (
-                    <button className="button secondary" onClick={() => setRequestingRefund(true)}>
+                    <button className="button secondary" onClick={openNewRefund}>
                       <RotateCcw size={16} />Request a return / refund
                     </button>
                   )}
-                  {requestingRefund && (
+                  {requestingRefund && !['cancelled', 'refunded'].includes(data.status) && (
                     <form className="form-stack" onSubmit={submitRefund} style={{ marginTop: '1rem' }}>
                       <h4>{editingRefund ? 'Edit refund request' : 'Request refund (7-day window)'}</h4>
                       <fieldset className="form-stack">
                         <legend>Select items to return</legend>
-                        {data.items.map((item) => (
-                          <label className="check-row" key={item.product}>
-                            <input
-                              type="checkbox"
-                              disabled={Boolean(item.is_digital)}
-                              checked={refundProducts.includes(item.product)}
-                              onChange={(event) =>
-                                setRefundProducts((current) =>
-                                  event.target.checked
-                                    ? [...current, item.product]
-                                    : current.filter((id) => id !== item.product)
-                                )
-                              }
-                            />
-                            {item.title} · {money(Number(item.unit_price) * item.quantity)}
-                            {item.is_digital && (
-                              <small>
-                                Digital products are non-refundable. If you are experiencing issues, please contact support via email.
-                              </small>
-                            )}
-                          </label>
-                        ))}
+                        {data.items.map((item) => {
+                          const isClaimedByOther = claimedProductIds.includes(item.product) && !activeRefund?.product_ids?.includes(item.product);
+                          const isClaimed = editingRefund ? isClaimedByOther : claimedProductIds.includes(item.product);
+                          const isDisabled = Boolean(item.is_digital) || isClaimed;
+
+                          return (
+                            <label className="check-row" key={item.product}>
+                              <input
+                                type="checkbox"
+                                disabled={isDisabled}
+                                checked={refundProducts.includes(item.product)}
+                                onChange={(event) =>
+                                  setRefundProducts((current) =>
+                                    event.target.checked
+                                      ? [...current, item.product]
+                                      : current.filter((id) => id !== item.product)
+                                  )
+                                }
+                              />
+                              {item.title} · {money(Number(item.unit_price) * item.quantity)}
+                              {item.is_digital ? (
+                                <small>
+                                  Digital products are non-refundable. If you are experiencing issues, please contact support via email.
+                                </small>
+                              ) : isClaimed ? (
+                                <small style={{ color: 'var(--muted, #64748b)' }}>
+                                  Refund already requested, processed, or declined for this item.
+                                </small>
+                              ) : null}
+                            </label>
+                          );
+                        })}
                       </fieldset>
                       <Field label="Refund Destination">
                         <select value={refundType} onChange={(e) => setRefundType(e.target.value)}>

@@ -1,0 +1,63 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  <p>Your order <strong>#{{ orderId }}</strong>{% if store_name %} from {{ store_name }}{% endif %} is confirmed.</p>
+  {% if estimated_delivery %}<p>Estimated delivery: {{ estimated_delivery }}</p>{% endif %}
+  {% if has_physical_items %}
+    <p>You can view fulfillment updates from your order page.</p>
+    {% if delivery_details %}
+      <h2 style="font-size: 18px;">Delivery address</h2>
+      <table role="presentation" width="100%" cellpadding="8" cellspacing="0" border="0">
+        {% for detail in delivery_details %}
+          <tr>
+            <td style="color: #526158;">{{ detail.label }}</td>
+            <td>{{ detail.value }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+    {% endif %}
+  {% elif has_physical_items == False %}
+    <p>Your digital purchases are available from your order page. No physical shipment is needed.</p>
+  {% endif %}
+  {% if contact_details %}
+    <h2 style="font-size: 18px;">Contact details</h2>
+    <table role="presentation" width="100%" cellpadding="8" cellspacing="0" border="0">
+      {% for detail in contact_details %}
+        <tr>
+          <td style="color: #526158;">{{ detail.label }}</td>
+          <td>{{ detail.value }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+  {% if ordered_items %}
+    <h2 style="font-size: 18px;">Items ordered</h2>
+    <table role="presentation" width="100%" cellpadding="8" cellspacing="0" border="0">
+      {% for item in ordered_items %}
+        <tr>
+          <td>
+            {% if item.title %}<strong>{{ item.title }}</strong>{% endif %}
+            {% if item.variant %}<br>{{ item.variant }}{% endif %}
+          </td>
+          <td>{% if item.quantity != None %}×{{ item.quantity }}{% endif %}</td>
+          <td>{% if item.price != None %}${{ item.price }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+  {% if totals %}
+    <h2 style="font-size: 18px;">Order totals</h2>
+    <table role="presentation" width="100%" cellpadding="8" cellspacing="0" border="0">
+      {% for detail in totals %}
+        <tr>
+          <td>{{ detail.label }}</td>
+          <td>${{ detail.value }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+  {% if not ordered_items and not totals %}
+    <p>Open your order page to track processing and fulfillment updates.</p>
+  {% endif %}
+{% endblock %}
+{% block action_url %}{{ order_url }}{% endblock %}
+{% block action_label %}View order{% endblock %}

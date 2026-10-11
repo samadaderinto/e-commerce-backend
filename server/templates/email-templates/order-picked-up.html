@@ -1,0 +1,8 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  <p>Your order <strong>#{{ orderId }}</strong>{% if store_name %} from {{ store_name }}{% endif %} has been marked as picked up.</p>
+  {% if pickup_location %}<p>Pickup location: {{ pickup_location }}</p>{% endif %}
+  <p>Thank you for picking up your order. Open your order page to review the order details and receipt.</p>
+{% endblock %}
+{% block action_url %}{{ order_url }}{% endblock %}
+{% block action_label %}View order{% endblock %}

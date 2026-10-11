@@ -21,8 +21,11 @@ MAX_REWARDED_REFERRALS = 4  # Capped at $25 for up to 4 users ($100 max promotio
 
 @transaction.atomic
 def reward_referral(referral_code: str, referred_user: Any) -> Optional[Referral]:
+    code = str(referral_code or "").strip()
+    if not code:
+        return None
     marketer = Marketer.objects.select_related("user").filter(
-        marketer_id=referral_code
+        marketer_id__iexact=code
     ).first()
     if marketer is None or marketer.user_id == referred_user.pk:
         return None

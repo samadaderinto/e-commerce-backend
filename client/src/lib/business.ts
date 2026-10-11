@@ -21,6 +21,8 @@ export const business = {
   escrowReviewDays: 7,
   standardCommissionPercent: 4,
   officialCommissionPercent: 0,
+  referralRewardAmount: 25,
+  referralRewardLimit: 4,
   affiliateNetwork: 'ClickBank Official Partner Network',
 } as const;
 
