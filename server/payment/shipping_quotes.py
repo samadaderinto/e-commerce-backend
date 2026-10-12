@@ -1,19 +1,31 @@
 """Shipping selections bound to shopper, cart, destination, and expiry."""
+from __future__ import annotations
+
 import hashlib
 import json
 from decimal import Decimal
+from typing import Any
 from django.core import signing
 from rest_framework.exceptions import ValidationError
+from cart.models import Cart
+from core.models import Address
+from store.models import StoreAddress
 from payment.models import ShippingQuote
 
 
-def fingerprint(cart, address):
+def fingerprint(cart: Cart, address: Address | None) -> str:
     from storefront.serializers import AddressSerializer, unit_price
-    has_physical = any(not item.product.is_digital for item in cart.cart_items.select_related('product').all())
+    items = list(cart.cart_items.select_related('product').order_by('product_id', 'variant', 'pk'))
+    has_physical = any(not item.product.is_digital for item in items)
     rows = [(item.product_id, item.variant, item.quantity, str(unit_price(item.product, item.variant)),
-             str(item.product.weight), item.product.is_digital, item.product.store_id)
-            for item in cart.cart_items.select_related('product').order_by('product_id')]
-    payload = {'cart': cart.pk, 'rows': rows, 'address': AddressSerializer(address).data if (address and has_physical) else None}
+             str(item.product.weight), item.product.is_digital, item.product.store_id,
+             *(str(getattr(item.product, field)) for field in ('length', 'width', 'height')))
+            for item in items]
+    store_ids = {item.product.store_id for item in items if not item.product.is_digital}
+    origins = list(StoreAddress.objects.filter(
+        store_id__in=store_ids, is_default=True,
+    ).order_by('store_id', 'pk').values('store_id', 'address', 'city', 'state', 'country', 'zip'))
+    payload = {'cart': cart.pk, 'rows': rows, 'origins': origins, 'address': AddressSerializer(address).data if (address and has_physical) else None}
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
@@ -56,7 +68,7 @@ def cart_rates(carrier, cart, address):
             if not has_store_address(item.product.store):
                 raise ValidationError({'store_address': f'Store {item.product.store.name} must configure its default address before shipping can be quoted.'})
             zipcode = origin.zip
-            group = groups.setdefault(zipcode, {'weight': Decimal('0'), 'package': {}})
+            group = groups.setdefault(item.product.store_id, {'origin_zip': zipcode, 'weight': Decimal('0'), 'package': {}})
             group['weight'] += Decimal(str(item.product.weight or '1')) * item.quantity
             for field in ('length', 'width', 'height'):
                 value = getattr(item.product, field, None)
@@ -65,7 +77,8 @@ def cart_rates(carrier, cart, address):
     if not groups:
         return calculate_carrier_rates(carrier, '', '', Decimal('0'), subtotal, False)
     combined = None
-    for origin, group in groups.items():
+    for group in groups.values():
+        origin = group['origin_zip']
         options = calculate_carrier_rates(carrier, origin, address.zip, group['weight'], Decimal('0'), True, group['package'])
         by_service = {row['service_id']: {**row, 'shipments': [{'origin_zip': origin, 'weight_lbs': str(group['weight']), 'amount': row['amount']}]} for row in options}
         if combined is None:

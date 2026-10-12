@@ -155,7 +155,7 @@ default_email_backend = (
 EMAIL_BACKEND = os.environ.get('EMAIL_BACKEND', default_email_backend)
 CELERY_TASK_ALWAYS_EAGER = os.environ.get(
     'CELERY_TASK_ALWAYS_EAGER',
-    'true' if DEBUG else 'false',
+    'false',
 ).lower() == 'true'
 CELERY_TASK_EAGER_PROPAGATES = CELERY_TASK_ALWAYS_EAGER
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:3000')
@@ -182,6 +182,8 @@ if FCM_ENABLED and not (FIREBASE_PROJECT_ID and (
     )
 STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'card,cashapp')
 STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'usd')
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
+APPLE_CLIENT_ID = os.environ.get('APPLE_CLIENT_ID', '').strip()
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SESSION_COOKIE_SAMESITE = 'Lax'

@@ -30,7 +30,7 @@ def check_dependencies():
         cache = caches[alias]
         try:
             cache.set(key, 'ok', timeout=10)
-            # Detect Redis outages even with IGNORE_EXCEPTIONS enabled.
+            # Confirm the official Redis cache can round-trip writes and reads.
             if cache.get(key) != 'ok':
                 status = 'error'
         except Exception:

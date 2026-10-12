@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from django.db import transaction
+from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 from rest_framework import serializers
 from taggit.serializers import TaggitSerializer, TagListSerializerField
@@ -237,6 +238,21 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         is_digital = attrs.get('is_digital', getattr(self.instance, 'is_digital', False))
         file_url = attrs.get('digital_file_url', getattr(self.instance, 'digital_file_url', ''))
         if is_digital:
+            if 'digital_file_url' in attrs and file_url != getattr(self.instance, 'digital_file_url', ''):
+                try:
+                    path = urllib.parse.urlsplit(file_url).path.lstrip('/')
+                except ValueError:
+                    raise serializers.ValidationError({'digital_file_url': 'Enter a valid digital asset address.'})
+                for prefix in (f'{settings.MINIO_BUCKET_NAME}/media/', f'{settings.MINIO_BUCKET_NAME}/', 'media/'):
+                    if path.startswith(prefix):
+                        path = path[len(prefix):]
+                        break
+                if '..' in path.split('/'):
+                    raise serializers.ValidationError({'digital_file_url': 'Choose a digital asset uploaded for this product.'})
+                if path.startswith('digital_products/'):
+                    expected = f'digital_products/{self.instance.store_id}/{self.instance.pk}/' if self.instance else None
+                    if not expected or not path.startswith(expected):
+                        raise serializers.ValidationError({'digital_file_url': 'Choose a digital asset uploaded for this product.'})
             raw_data = getattr(self, 'initial_data', {}) or {}
             errors: dict[str, str] = {}
             if 'weight' in raw_data and raw_data['weight'] is not None and str(raw_data['weight']).strip() != '':

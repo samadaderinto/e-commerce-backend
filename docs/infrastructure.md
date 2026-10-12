@@ -163,7 +163,7 @@ Important API environment variables:
 | `FRONTEND_URL` | Browser app origin for links and CORS-style checks | `http://127.0.0.1:3000` |
 | `DATABASE_ENGINE` | Database backend selector | `postgres` |
 | `POSTGRES_HOST` | Database hostname inside Compose | `postgres` |
-| `CACHE_URL` | Django cache URL inside Compose | `redis://redis:6379/0` |
+| `CACHE_URL` | Required Django Redis cache URL inside Compose; host-run Django defaults to `redis://127.0.0.1:6379/0` when unset | `redis://redis:6379/0` |
 | `OBJECT_STORAGE_ENABLED` | Enables S3-compatible media storage | `false` |
 | `OBSERVABILITY_TOKEN` | Bearer token for `/metrics/` and detailed health | generated/local placeholder |
 | `OTEL_TRACING_ENABLED` | Enables OTLP tracing | `false` |
@@ -175,6 +175,8 @@ Important API environment variables:
 | `ELASTICSEARCH_URL` | Elasticsearch HTTP endpoint for host-run Django | `http://127.0.0.1:9200` |
 | `ELASTICSEARCH_PRODUCTS_INDEX` | Product index name | `commerce-products` |
 | `ELASTICSEARCH_JAVA_OPTS` | Local JVM memory sizing | `-Xms512m -Xmx512m` |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID accepted by backend social token verification | blank |
+| `APPLE_CLIENT_ID` | Apple Services ID accepted by backend social token verification | blank |
 
 Host bind variables:
 

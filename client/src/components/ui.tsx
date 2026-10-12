@@ -644,12 +644,24 @@ export function AddToBagButton({
   const preview =
     params.get("preview") === "1" &&
     Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
+  const backoffice = Boolean(
+    user?.is_staff || user?.is_superuser || user?.is_business_admin
+  );
   const [busy, setBusy] = useState(false);
   const [added, setAdded] = useState(false);
   const locked = useRef(false);
 
   // If this is an external affiliate product, render direct outbound link to ClickBank tracking endpoint
   if (product.product_type === "affiliate_clickbank") {
+    if (preview || backoffice) {
+      return (
+        <button type="button" className={className} disabled>
+          <ArrowUpRight size={16} />
+          <span>Preview only</span>
+        </button>
+      );
+    }
+
     const outboundUrl = `/api/affiliates/clickbank/outbound/${product.id}`;
     const label = product.affiliate_button_text || "Buy on Partner Site";
     return (
@@ -712,6 +724,8 @@ export function AddToBagButton({
 
   const label = preview
     ? "Preview only"
+    : backoffice
+      ? "Preview only"
     : product.is_own_store
       ? "Your listing"
       : product.store_verified === false
@@ -733,6 +747,7 @@ export function AddToBagButton({
     busy ||
     cartLoading ||
     !!cartError ||
+    backoffice ||
     committed ||
     isSoldOut ||
     (!product.is_digital && quantity > product.available) ||

@@ -1,25 +1,77 @@
 from __future__ import annotations
 
 import ipaddress
+import http.client
+import logging
 import os
 import socket
+import tempfile
 import urllib.request
+from typing import Any
 from urllib.parse import urlparse
 
 from django.core.files.storage import default_storage
-from django.http import FileResponse, StreamingHttpResponse
+from django.http import FileResponse
 from rest_framework.response import Response
 
 MAX_DIGITAL_ASSET_SIZE = 50 * 1024 * 1024  # 50 MB
+logger = logging.getLogger(__name__)
+
+
+def _public_connection(address: tuple[str, int], timeout: Any = None, source_address: Any = None) -> socket.socket:
+    """Validate and pin the resolved IP used by HTTP and TLS connections."""
+    host, port = address
+    addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    if not addresses or any(not ipaddress.ip_address(row[4][0]).is_global for row in addresses):
+        raise ValueError('Private digital asset destination is prohibited.')
+    # The HTTP host and TLS server name remain the original hostname. Only the
+    # TCP destination is pinned, preventing a second DNS lookup from rebinding.
+    return socket.create_connection((addresses[0][4][0], port), timeout, source_address)
+
+
+def _http_connection(host: str, **kwargs: Any) -> http.client.HTTPConnection:
+    connection = http.client.HTTPConnection(host, **kwargs)
+    connection._create_connection = _public_connection
+    return connection
+
+
+def _https_connection(host: str, **kwargs: Any) -> http.client.HTTPSConnection:
+    connection = http.client.HTTPSConnection(host, **kwargs)
+    connection._create_connection = _public_connection
+    return connection
+
+
+class PublicHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, request: urllib.request.Request) -> Any:
+        return self.do_open(_http_connection, request)
+
+
+class PublicHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, request: urllib.request.Request) -> Any:
+        return self.do_open(_https_connection, request)
+
+
+class PublicRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request: Any, file: Any, code: int, message: str, headers: Any, new_url: str) -> Any:
+        safe, _ = is_safe_external_url(new_url)
+        if not safe:
+            raise ValueError('Unsafe digital asset redirect.')
+        return super().redirect_request(request, file, code, message, headers, new_url)
 
 
 def is_safe_external_url(url: str) -> tuple[bool, str]:
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+        port = parsed.port
+    except ValueError:
+        return False, 'Invalid digital asset URL.'
     if parsed.scheme not in ("http", "https"):
         return False, "Digital asset URL must use http or https protocol."
     hostname = parsed.hostname
     if not hostname:
         return False, "Digital asset URL is missing hostname."
+    if parsed.username or parsed.password:
+        return False, 'Digital asset URLs cannot include credentials.'
 
     blocked_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "metadata.google.internal", "instance-data"}
     if hostname.lower() in blocked_hosts or hostname.endswith(".local"):
@@ -31,22 +83,24 @@ def is_safe_external_url(url: str) -> tuple[bool, str]:
         for _, _, _, _, sockaddr in addr_info:
             ip_str = sockaddr[0]
             ip = ipaddress.ip_address(ip_str)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                if hostname not in ("downloads.proace.test", "example.com", "testserver"):
-                    return False, f"Destination resolves to prohibited IP address ({ip_str})."
+            if not ip.is_global:
+                return False, 'Destination resolves to a prohibited network.'
     except (socket.gaierror, ValueError):
-        return False, f"Could not resolve digital asset host: {hostname}."
+        return False, 'Could not resolve the digital asset destination.'
 
     return True, ""
 
 
-def stream_digital_asset(product):
+def stream_digital_asset(product: Any) -> FileResponse | Response:
     file_url = (product.digital_file_url or "").strip()
     if not file_url:
         return Response({"detail": "This digital product has no uploaded asset."}, status=404)
 
     from django.conf import settings
-    parsed = urlparse(file_url)
+    try:
+        parsed = urlparse(file_url)
+    except ValueError:
+        return Response({'detail': 'Invalid digital asset URL.'}, status=400)
     path = parsed.path.lstrip("/")
     bucket_prefix = f"{getattr(settings, 'MINIO_BUCKET_NAME', 'commerce-images')}/"
     if path.startswith(bucket_prefix):
@@ -63,7 +117,6 @@ def stream_digital_asset(product):
         else:
             clean_name = raw_name
         response = FileResponse(f, as_attachment=True, filename=clean_name)
-        response["Content-Disposition"] = f'attachment; filename="{clean_name}"'
         response["Cache-Control"] = "private, no-store"
         return response
 
@@ -74,14 +127,19 @@ def stream_digital_asset(product):
 
     raw_name = os.path.basename(parsed.path) or f"digital-asset-{product.pk}.bin"
 
-    # 3. Stream external URL with 50MB ceiling and timeout
-    def file_iterator():
+    # Complete the bounded fetch before sending headers so provider failures
+    # become a clean API error rather than a truncated successful download.
+    asset = tempfile.SpooledTemporaryFile(max_size=5 * 1024 * 1024)
+    try:
         req = urllib.request.Request(
             file_url,
             headers={"User-Agent": "ProAce-Backoffice-Audit/1.0"},
         )
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), PublicHTTPHandler(), PublicHTTPSHandler(), PublicRedirectHandler(),
+        )
         total_bytes = 0
-        with urllib.request.urlopen(req, timeout=15) as conn:
+        with opener.open(req, timeout=15) as conn:
             while True:
                 chunk = conn.read(64 * 1024)
                 if not chunk:
@@ -89,15 +147,12 @@ def stream_digital_asset(product):
                 total_bytes += len(chunk)
                 if total_bytes > MAX_DIGITAL_ASSET_SIZE:
                     raise ValueError("Digital asset exceeded maximum allowed size (50 MB).")
-                yield chunk
-
-    try:
-        response = StreamingHttpResponse(
-            file_iterator(),
-            content_type="application/octet-stream",
-        )
-        response["Content-Disposition"] = f'attachment; filename="{raw_name}"'
+                asset.write(chunk)
+        asset.seek(0)
+        response = FileResponse(asset, as_attachment=True, filename=raw_name, content_type='application/octet-stream')
         response["Cache-Control"] = "private, no-store"
         return response
     except Exception as exc:
-        return Response({"detail": f"Failed to retrieve digital asset: {str(exc)}"}, status=502)
+        asset.close()
+        logger.warning('Digital asset retrieval failed for product %s (%s)', product.pk, type(exc).__name__)
+        return Response({'detail': 'Unable to retrieve the digital asset. Please try again.'}, status=502)

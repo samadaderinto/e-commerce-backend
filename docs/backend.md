@@ -1,5 +1,9 @@
 # Backend documentation
 
+`CELERY_TASK_ALWAYS_EAGER` defaults to false even in debug mode so background tasks do not block HTTP requests. Set it explicitly to true only for tests or diagnostics; offline test settings already do so.
+
+Catalog invalidation queues `storefront.tasks.warm_catalog_snapshot` after commit. The task prepares the first anonymous page for the most recently observed backend origin, preserving host-specific media URLs. A ten-second pending-job lock coalesces bursts; failed enqueue attempts are logged and ordinary requests can still populate snapshots. The Celery worker must run. Tests disable automatic warming with `CATALOG_CACHE_WARM_ENABLED=False` and exercise the task explicitly. Apple public signing keys are cached in Redis for one hour; unknown key IDs force refresh and provider requests time out after five seconds. This is background processing and shared caching; no blanket async view conversion is implied.
+
 Catalog responses expose the backend `visibility` flag. The product page shows the draft preview banner only for explicit `visibility: false`; missing metadata is not evidence of a draft. Hidden products return 404, and unverified-store previews require the store owner or an authorized operator, even with `?preview=1`.
 
 ## Lifecycle tracking
@@ -274,8 +278,8 @@ Runtime configuration:
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | PostgreSQL credentials |
 | `POSTGRES_HOST`, `POSTGRES_PORT` | PostgreSQL connection target |
 | `DB_REQUIRE_SSL` | Enables database SSL requirement when supported |
-| `REDIS_URL` | Redis URL when running Django directly on the host |
-| `CACHE_URL` | Django cache URL, set to Compose Redis in containers |
+| `REDIS_URL` | Optional Redis URL fallback when `CACHE_URL` is unset |
+| `CACHE_URL` | Django Redis cache URL, set to Compose Redis in containers and defaulting to local Redis for host-run Django |
 | `OBJECT_STORAGE_ENABLED` | Enables S3-compatible media storage |
 | `OBSERVABILITY_TOKEN` | Protects `/metrics/` and detailed health endpoints |
 | `ELASTICSEARCH_ENABLED` | Enables Elasticsearch search and health checks |
@@ -561,7 +565,7 @@ The stress runner accepts only a completed matching inventory test case from a J
 
 Catalog review counts use a scalar subquery so page totals do not group the full catalog. Worker-count tuning must be benchmarked against the actual deployment: increasing local processes did not improve tail latency in this environment. The two-process, 32-thread default is retained, overridable with `GUNICORN_THREADS`. A local eight-thread trial improved the anonymous benchmark during memory pressure, but lowers total request slots from 64 to 16. Live notification streams occupy those slots, so that trial is not sufficient evidence to lower the application-wide default. Rebenchmark process/thread limits with notification streams and carrier I/O on the actual deployment.
 
-Anonymous catalog pages use a short-lived shared snapshot (`PUBLIC_CATALOG_CACHE_SECONDS=15`, range 0–60; 0 disables). Warm snapshots perform two lightweight database checks instead of fetching and serializing the model graph. Every hit rechecks current product visibility, active/verified store status, ownership, price, discount, stock and variants. Model, image, specification, review, tag and earnings changes invalidate after commit, with store timestamps covering missed Redis invalidations. Earnings-related timestamps update after commit to avoid adding Store row locks to financial transactions. Authenticated, transactional and search requests bypass snapshots; checkout retains authoritative database validation. Bulk changes that skip model signals and explicit invalidation can leave metadata, page membership and totals stale until the bounded TTL; use model saves or `invalidate_product_cache()` for such writes. Load reports record HIT/MISS/BYPASS counts and describe their mixed warm/uncached workload.
+Anonymous catalog pages use a short-lived Redis-backed shared snapshot (`PUBLIC_CATALOG_CACHE_SECONDS=15`, range 0–60; 0 disables). Runtime Django cache is Redis-only; local development defaults to `redis://127.0.0.1:6379/0`, containers use Compose Redis, and cache connection failures surface instead of silently falling back to uncached catalog responses. Warm snapshots perform two lightweight database checks instead of fetching and serializing the model graph. Every hit rechecks current product visibility, active/verified store status, ownership, price, discount, stock and variants. Model, image, specification, review, tag and earnings changes invalidate after commit, with store timestamps covering missed Redis invalidations. Earnings-related timestamps update after commit to avoid adding Store row locks to financial transactions. Authenticated, transactional and search requests bypass snapshots; checkout retains authoritative database validation. Bulk changes that skip model signals and explicit invalidation can leave metadata, page membership and totals stale until the bounded TTL; use model saves or `invalidate_product_cache()` for such writes. Load reports record HIT/MISS/BYPASS counts and describe their mixed warm/uncached workload.
 
 USPS live rating uses HTTPX async I/O with one bounded three-connection pool: authenticate once, then request Ground Advantage, Priority Mail and Priority Mail Express concurrently. Failure cancels sibling requests before closing the pool and returns a sanitized shipping error without invented rates. Other carriers retain their existing adapters. Tests use mock transports; live carrier latency and credentials are not established by these tests.
 

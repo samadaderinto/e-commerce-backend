@@ -58,6 +58,7 @@ from staff.serializers import (
     StaffUserSerializer,
     StaffUserDetailSerializer,
     StaffUserOrderQuerySerializer,
+    TreasuryWithdrawalSerializer,
     StoreModerationSerializer,
     StoreAuditProductSerializer,
 )
@@ -759,14 +760,13 @@ class StaffViewSet(viewsets.GenericViewSet):
 
     @action(detail=False, methods=["post"], url_path="commission-wallet/withdraw")
     @transaction.atomic
-    def withdraw_commission(self, request):
-        amount = Decimal(str(request.data.get('amount', '0')))
-        if amount <= 0:
-            return Response({'amount': 'Enter an amount greater than zero.'}, status=400)
+    @extend_schema(request=TreasuryWithdrawalSerializer, responses={201: OpenApiTypes.OBJECT})
+    def withdraw_commission(self, request: Request) -> Response:
+        serializer = TreasuryWithdrawalSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        amount = serializer.validated_data['amount']
         # Serialize platform withdrawals to prevent concurrent double-withdrawals
-        official_store = Store.objects.select_for_update().filter(is_official=True).first()
-        if not official_store:
-            User.objects.select_for_update().get(pk=request.user.pk)
+        User.objects.select_for_update().order_by('pk').first()
         commission_earned = StoreEarningsLedger.objects.filter(
             status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
             store__is_official=False,
@@ -782,8 +782,8 @@ class StaffViewSet(viewsets.GenericViewSet):
         from nanoid import generate
         row = PlatformCommissionWithdrawal.objects.create(
             amount=amount,
-            payout_method=str(request.data.get('payout_method', 'stripe')),
-            account_details=request.data.get('account_details') or {},
+            payout_method=serializer.validated_data['payout_method'],
+            account_details=serializer.validated_data['account_details'],
             requested_by=request.user,
             reference=f'PCW-{generate(size=12)}'
         )

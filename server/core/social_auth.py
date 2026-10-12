@@ -5,6 +5,7 @@ from typing import Any
 import jwt
 import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.contrib.auth.models import update_last_login
 from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -16,6 +17,26 @@ from core.models import Device, User
 import sys
 
 logger = logging.getLogger(__name__)
+APPLE_JWKS_URL = 'https://appleid.apple.com/auth/keys'
+APPLE_JWKS_CACHE_KEY = 'social:apple:jwks'
+
+
+class RedisAppleJWKClient(jwt.PyJWKClient):
+    """Share Apple's public keys across API processes, including key rotation."""
+
+    def fetch_data(self) -> dict[str, Any]:
+        cached = cache.get(APPLE_JWKS_CACHE_KEY)
+        if isinstance(cached, dict) and cached.get('keys'):
+            return cached
+        payload = super().fetch_data()
+        jwt.PyJWKSet.from_dict(payload)
+        cache.set(APPLE_JWKS_CACHE_KEY, payload, timeout=3600)
+        return payload
+
+    def get_jwk_set(self, refresh: bool = False) -> jwt.PyJWKSet:
+        if refresh:
+            cache.delete(APPLE_JWKS_CACHE_KEY)
+        return super().get_jwk_set(refresh=refresh)
 
 
 def is_development_or_test() -> bool:
@@ -34,10 +55,13 @@ def verify_google_credential(credential: str) -> dict[str, Any]:
         raise ValidationError({'detail': 'Please provide a valid Google credential.'})
 
     cred = credential.strip()
+    client_id = getattr(settings, 'GOOGLE_CLIENT_ID', '')
+    if not is_development_or_test() and not client_id:
+        raise ValidationError({'detail': 'Google sign-in is not configured.'})
 
     # Supported mock and test tokens for development and automated suites
     if cred.startswith(('mock-google-', 'test-google-', 'dev-google:')):
-        if not is_development_or_test() and cred.startswith('dev-google:'):
+        if not is_development_or_test():
             raise ValidationError({'detail': 'Development tokens are only permitted in development mode.'})
         if ':' in cred:
             email = cred.split(':', 1)[1].strip().lower()
@@ -60,11 +84,12 @@ def verify_google_credential(credential: str) -> dict[str, Any]:
         )
         if resp.status_code == 200:
             payload = resp.json()
+            if not isinstance(payload, dict):
+                raise ValueError('Invalid provider response')
             email = payload.get('email', '').strip().lower()
             email_verified = payload.get('email_verified') in (True, 'true')
             if not email or not email_verified:
                 raise ValidationError({'detail': 'Google email is not verified.'})
-            client_id = getattr(settings, 'GOOGLE_CLIENT_ID', None)
             if client_id and payload.get('aud') != client_id:
                 raise ValidationError({'detail': 'Google token audience mismatch.'})
             return {
@@ -73,22 +98,23 @@ def verify_google_credential(credential: str) -> dict[str, Any]:
                 'last_name': payload.get('family_name') or '',
                 'sub': payload.get('sub', ''),
             }
-    except requests.RequestException as exc:
-        logger.warning('Google tokeninfo endpoint request failed: %s', exc)
+    except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
+        # Request exceptions can contain the credential-bearing tokeninfo URL.
+        logger.warning('Google verification request failed (%s)', type(exc).__name__)
 
-    # Fallback to JWT payload parsing for test environments
-    try:
-        decoded = jwt.decode(cred, options={'verify_signature': False})
-        iss = decoded.get('iss', '')
-        if iss in ('accounts.google.com', 'https://accounts.google.com') and decoded.get('email'):
-            return {
-                'email': str(decoded['email']).strip().lower(),
-                'first_name': decoded.get('given_name') or decoded.get('name') or 'Google User',
-                'last_name': decoded.get('family_name') or '',
-                'sub': decoded.get('sub', ''),
-            }
-    except Exception:
-        pass
+    if is_development_or_test():
+        try:
+            decoded = jwt.decode(cred, options={'verify_signature': False})
+            iss = decoded.get('iss', '')
+            if iss in ('accounts.google.com', 'https://accounts.google.com') and decoded.get('email'):
+                return {
+                    'email': str(decoded['email']).strip().lower(),
+                    'first_name': decoded.get('given_name') or decoded.get('name') or 'Google User',
+                    'last_name': decoded.get('family_name') or '',
+                    'sub': decoded.get('sub', ''),
+                }
+        except Exception:
+            pass
 
     raise ValidationError({'detail': 'Unable to verify Google credential. Please try again.'})
 
@@ -98,10 +124,13 @@ def verify_apple_credential(credential: str, user_info: dict[str, Any] | None = 
         raise ValidationError({'detail': 'Please provide a valid Apple credential.'})
 
     cred = credential.strip()
+    client_id = getattr(settings, 'APPLE_CLIENT_ID', '')
+    if not is_development_or_test() and not client_id:
+        raise ValidationError({'detail': 'Apple sign-in is not configured.'})
 
     # Supported mock and test tokens for development and automated suites
     if cred.startswith(('mock-apple-', 'test-apple-', 'dev-apple:')):
-        if not is_development_or_test() and cred.startswith('dev-apple:'):
+        if not is_development_or_test():
             raise ValidationError({'detail': 'Development tokens are only permitted in development mode.'})
         if ':' in cred:
             email = cred.split(':', 1)[1].strip().lower()
@@ -116,9 +145,23 @@ def verify_apple_credential(credential: str, user_info: dict[str, Any] | None = 
             'sub': f'mock-apple-sub-{email}',
         }
 
-    # Decode Apple JWT identity token
     try:
-        decoded = jwt.decode(cred, options={'verify_signature': False})
+        if client_id:
+            signing_key = RedisAppleJWKClient(
+                APPLE_JWKS_URL, timeout=5
+            ).get_signing_key_from_jwt(cred)
+            decoded = jwt.decode(
+                cred,
+                signing_key.key,
+                algorithms=['RS256'],
+                audience=client_id,
+                issuer='https://appleid.apple.com',
+            )
+        elif is_development_or_test():
+            decoded = jwt.decode(cred, options={'verify_signature': False})
+        else:
+            decoded = {}
+
         iss = decoded.get('iss', '')
         if iss in ('https://appleid.apple.com', 'appleid.apple.com') and decoded.get('email'):
             name_obj = (user_info or {}).get('name') or {}
@@ -131,7 +174,7 @@ def verify_apple_credential(credential: str, user_info: dict[str, Any] | None = 
                 'sub': decoded.get('sub', ''),
             }
     except Exception as exc:
-        logger.warning('Apple token decode failed: %s', exc)
+        logger.warning('Apple token verification failed: %s', exc)
 
     raise ValidationError({'detail': 'Unable to verify Apple credential. Please try again.'})
 
@@ -165,10 +208,7 @@ def authenticate_social_user(provider: str, data: dict[str, Any], request: Any =
                 'Please sign in with your email and password.'
             )
         if not user.is_active:
-            user.is_active = True
-            user.save(update_fields=['is_active'])
-            if referral_code:
-                reward_referral(referral_code, user)
+            raise PermissionDenied('This account is inactive. Please contact support.')
     else:
         is_new_user = True
         user = User(

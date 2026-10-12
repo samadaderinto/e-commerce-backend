@@ -516,7 +516,9 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         data = serializer.validated_data
         from payment.fulfillment import ensure_fulfillments
         ensure_fulfillments(order)
-        current = order.fulfillments.get(store=store)
+        current = order.fulfillments.filter(store=store).first()
+        if current is None:
+            raise ValidationError({'order': 'This store has no physical items to fulfill.'})
         previous = (current.status, current.carrier, current.tracking_number)
         fulfillment = update_fulfillment(
             order,
@@ -1011,7 +1013,7 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         product = self.get_object()
         if request.method == 'GET':
             from django.core.files.storage import default_storage
-            from django.http import HttpResponseRedirect
+            from django.http import FileResponse
             from urllib.parse import urlparse
             raw = (product.digital_file_url or '').strip()
             path = urlparse(raw).path.lstrip('/')
@@ -1044,7 +1046,11 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
 
             if not resolved_path:
                 return Response({'detail': 'This product has no uploaded digital file.'}, status=404)
-            response = HttpResponseRedirect(default_storage.url(resolved_path))
+            response = FileResponse(
+                default_storage.open(resolved_path, 'rb'),
+                as_attachment=True,
+                filename=resolved_path.rsplit('/', 1)[-1],
+            )
             response['Cache-Control'] = 'private, no-store'
             return response
         file_obj = request.FILES.get('file')
@@ -1072,12 +1078,15 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         clean_name = file_obj.name.lower()
         update_fields = ['is_digital', 'digital_file_url', 'weight', 'updated']
         if clean_name.endswith(image_exts):
-            raw_url = default_storage.url(saved_path)
-            public_image_url = normalize_media_url(request.build_absolute_uri(raw_url) if request else raw_url)
-            if not product.image_url:
+            from utils.digital_previews import create_digital_preview
+
+            preview_path = create_digital_preview(file_obj, product.store_id, product.pk)
+            if preview_path:
+                raw_url = default_storage.url(preview_path)
+                public_image_url = normalize_media_url(request.build_absolute_uri(raw_url))
                 product.image_url = public_image_url
                 update_fields.append('image_url')
-            product.digital_preview_watermark = True
+            product.digital_preview_watermark = bool(preview_path)
             update_fields.append('digital_preview_watermark')
         else:
             product.digital_preview_watermark = False

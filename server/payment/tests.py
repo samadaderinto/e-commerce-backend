@@ -226,7 +226,8 @@ class PaymentRefundAndTransitionServiceTests(TestCase):
 
         refund.refresh_from_db()
         self.assertEqual(refund.status, Refund.STATUS_FAILED)
-        self.assertIn("Stripe card error", refund.failure_reason)
+        self.assertNotIn("Stripe card error", refund.failure_reason)
+        self.assertNotIn("Stripe card error", str(ctx.exception))
 
         order.refresh_from_db()
         self.assertEqual(order.status, "confirmed")  # order NOT refunded!

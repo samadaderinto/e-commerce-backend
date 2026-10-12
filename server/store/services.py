@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+import logging
 
 from django.conf import settings
 from django.db import models, transaction
@@ -13,6 +14,8 @@ from nanoid import generate
 from cart.models import CartItem
 from product.models import Product
 from store.models import MerchantWallet, Schedule, Store, StoreAddress, StoreEarningsLedger, StorePayout
+
+logger = logging.getLogger(__name__)
 
 
 def has_store_address(store: Store) -> bool:
@@ -385,6 +388,10 @@ def request_merchant_payout(
     """
     from rest_framework.exceptions import ValidationError
 
+    if not amount.is_finite() or amount <= 0:
+        raise ValidationError({'amount': 'Enter a positive payout amount.'})
+    if store and (store.user_id != user.pk or store.is_official):
+        raise ValidationError({'store': 'Choose one of your merchant stores.'})
     wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=user)
     settle_pending_merchant_earnings()
     calculate_merchant_financials(user)
@@ -447,19 +454,22 @@ def process_payout_status_change(
     wallet_obj = MerchantWallet.objects.select_for_update().get(pk=wallet.pk) if wallet else None
 
     if action == "approve":
-        # A connected Express account receives the approved payout through Stripe.
-        # Local/demo environments without Stripe credentials keep the existing manual
-        # completion flow so test and development payouts remain usable.
-        if wallet and wallet.stripe_account_id and getattr(settings, 'STRIPE_SECRET', ''):
+        if payout.payout_method == StorePayout.METHOD_STRIPE_CONNECT:
+            if not wallet or not wallet.stripe_account_id or not getattr(settings, 'STRIPE_SECRET', ''):
+                raise ValidationError({'detail': 'Connect a Stripe account and configure payouts before approving this transfer.'})
             import stripe
             stripe.api_key = settings.STRIPE_SECRET
-            transfer = stripe.Transfer.create(
-                amount=int((payout.amount * 100).quantize(Decimal('1'))),
-                currency=getattr(settings, 'STRIPE_CURRENCY', 'usd').lower(),
-                destination=wallet.stripe_account_id,
-                metadata={'payout_id': str(payout.pk), 'reference': payout.reference},
-                idempotency_key=f"payout-transfer-{payout.reference}",
-            )
+            try:
+                transfer = stripe.Transfer.create(
+                    amount=int((payout.amount * 100).quantize(Decimal('1'))),
+                    currency=getattr(settings, 'STRIPE_CURRENCY', 'usd').lower(),
+                    destination=wallet.stripe_account_id,
+                    metadata={'payout_id': str(payout.pk), 'reference': payout.reference},
+                    idempotency_key=f"payout-transfer-{payout.reference}",
+                )
+            except Exception as exc:
+                logger.exception('Stripe payout transfer failed for payout %s', payout.pk)
+                raise ValidationError({'detail': 'The payout provider could not complete this transfer. Please retry.'}) from exc
             notes = f"Stripe transfer {transfer.id}" if not notes else f"{notes} · Stripe transfer {transfer.id}"
         payout.status = StorePayout.STATUS_COMPLETED
         payout.processed_at = timezone.now()

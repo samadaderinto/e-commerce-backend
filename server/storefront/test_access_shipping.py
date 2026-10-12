@@ -241,7 +241,7 @@ class AccessAndShippingTests(TestCase):
         args = create_session.call_args.kwargs
         self.assertEqual(args['payment_intent_data']['metadata'], args['metadata'])
         self.assertEqual(args['metadata']['carrier'], 'FEDEX')
-        retrieve_session.return_value = {'currency': 'usd', 'payment_status': 'paid', 'client_reference_id': str(self.buyer.pk),
+        retrieve_session.return_value = {'id': 'cs_test', 'currency': 'usd', 'payment_status': 'paid', 'client_reference_id': str(self.buyer.pk),
                                          'metadata': args['metadata'], 'amount_total': args['line_items'][0]['price_data']['unit_amount']}
         with patch('payment.carriers.live_rates', side_effect=AssertionError('Paid quote must not be rerated')):
             response = self.client.post('/api/v1/checkout/wallet-confirm/', {'session_id': 'cs_test'}, format='json')

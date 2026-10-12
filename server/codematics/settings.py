@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 import dotenv
+from django.core.exceptions import ImproperlyConfigured
 
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -267,40 +268,35 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 AUTH_USER_MODEL = "core.User"
 
-CACHE_URL = os.environ.get("CACHE_URL") or os.environ.get("REDIS_URL")
+CACHE_URL = (
+    os.environ.get("CACHE_URL")
+    or os.environ.get("REDIS_URL")
+    or "redis://127.0.0.1:6379/0"
+).strip()
 CACHE_TIMEOUT = int(os.environ.get("CACHE_TIMEOUT", 60 * 5))
 PUBLIC_CATALOG_CACHE_SECONDS = max(
     0, min(60, int(os.environ.get("PUBLIC_CATALOG_CACHE_SECONDS", "15")))
 )
-CACHE_MAX_ENTRIES = int(os.environ.get("CACHE_MAX_ENTRIES", 256))
 
-if CACHE_URL:
-    CACHES = {
-        "default": {
-            "BACKEND": "django_redis.cache.RedisCache",
-            "LOCATION": CACHE_URL,
-            "OPTIONS": {
-                "CLIENT_CLASS": "django_redis.client.DefaultClient",
-                "IGNORE_EXCEPTIONS": True,
-                "SOCKET_CONNECT_TIMEOUT": 2,
-                "SOCKET_TIMEOUT": 2,
-            },
-            "KEY_PREFIX": os.environ.get("CACHE_KEY_PREFIX", "codematics"),
-            "TIMEOUT": CACHE_TIMEOUT,
-        }
+if not CACHE_URL.startswith(("redis://", "rediss://", "unix://")):
+    raise ImproperlyConfigured(
+        "CACHE_URL must point to Redis, for example redis://127.0.0.1:6379/0."
+    )
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": CACHE_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "IGNORE_EXCEPTIONS": False,
+            "SOCKET_CONNECT_TIMEOUT": 2,
+            "SOCKET_TIMEOUT": 2,
+        },
+        "KEY_PREFIX": os.environ.get("CACHE_KEY_PREFIX", "codematics"),
+        "TIMEOUT": CACHE_TIMEOUT,
     }
-else:
-    CACHES = {
-        "default": {
-            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
-            "LOCATION": "codematics-cache",
-            "TIMEOUT": CACHE_TIMEOUT,
-            "OPTIONS": {
-                "MAX_ENTRIES": CACHE_MAX_ENTRIES,
-                "CULL_FREQUENCY": 3,
-            },
-        }
-    }
+}
 
 
 ELASTICSEARCH_ENABLED = os.environ.get("ELASTICSEARCH_ENABLED", "false").lower() == "true"
@@ -426,7 +422,7 @@ SIMPLE_JWT = {
     "SLIDING_TOKEN_LIFETIME": timedelta(minutes=5),
     "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=1),
     "TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
-    "TOKEN_REFRESH_SERIALIZER": "rest_framework_simplejwt.serializers.TokenRefreshSerializer",
+    "TOKEN_REFRESH_SERIALIZER": "core.access.VersionedTokenRefreshSerializer",
     "TOKEN_VERIFY_SERIALIZER": "rest_framework_simplejwt.serializers.TokenVerifySerializer",
     "TOKEN_BLACKLIST_SERIALIZER": "rest_framework_simplejwt.serializers.TokenBlacklistSerializer",
     "SLIDING_TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainSlidingSerializer",

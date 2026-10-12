@@ -174,7 +174,9 @@ class ClickBankOutboundTests(TestCase):
             gender="male",
             phone1="+2348012345683",
         )
-        self.store = Store.objects.create(name="Affiliate Partner Hub", username="affiliate-hub", user=self.user, status=Store.STATUS_ACTIVE, is_official=True)
+        from django.utils import timezone
+
+        self.store = Store.objects.create(name="Affiliate Partner Hub", username="affiliate-hub", user=self.user, status=Store.STATUS_ACTIVE, is_official=True, verified_at=timezone.now())
         self.affiliate_product = Product.objects.create(
             store=self.store,
             title="Keto Diet Masterclass",

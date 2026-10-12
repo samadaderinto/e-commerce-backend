@@ -1,5 +1,9 @@
 # Proace Commerce
 
+Celery uses the worker by default, including debug mode. `CELERY_TASK_ALWAYS_EAGER=true` explicitly runs tasks inline and should be reserved for tests or deliberate local diagnostics.
+
+Catalog invalidation queues a Celery task after commit to warm the first anonymous page at the last observed backend origin. Pending warm jobs are coalesced for ten seconds; broker failures are logged without failing committed commerce changes. Warming requires the worker and Redis and retains host-specific cache keys and authoritative row checks. Apple public signing keys are shared in Redis for one hour, with forced refresh on key rotation and a five-second provider timeout. These improvements require measurements before claiming a latency gain.
+
 `client/tests/filter-stability.spec.ts` exercises delayed filter responses for guests, shoppers, buyers, sellers, merchants, staff, business administrators, and technical administrators on desktop and mobile. It verifies retained results, typing focus, mounted controls, same-document shop history, and customer profile stability.
 
 Notification search, tabs, and category filters retain results within the same account and store. Backoffice filter caches and private product previews include the viewer identity; login cancels outstanding queries and clears the prior query cache before activating the new account. External payment and onboarding redirects remain full navigations.
@@ -87,6 +91,9 @@ npm run dev
 
 Open <http://127.0.0.1:3000>. The client defaults to
 `http://127.0.0.1:8000/api/v1`; override `API_URL` in `client/.env` when needed.
+Set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` / `NEXT_PUBLIC_APPLE_CLIENT_ID` in
+`client/.env` and matching `GOOGLE_CLIENT_ID` / `APPLE_CLIENT_ID` values in
+`server/.env` to enable real Google and Apple customer sign-in.
 Customer email verification and password-reset links print to the API terminal with the local console email backend. Staff credential issuance requires a private email backend such as Resend or SMTP.
 Set `FRONTEND_URL=http://127.0.0.1:3000` to keep email links on that exact host.
 
@@ -236,6 +243,7 @@ Visit `/merchant` after signing in:
 - **Bulk CSV Catalog Import**: RFC 4180-compliant batch upload supporting quotes, multiline values, variants, and tags.
 - **Storefront Customization**: Configure store announcement banner, banner covers, avatars, bio, and direct customer inquiry channels.
 - **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`). Official company stores automatically consolidate 100% of retail sales into Platform Treasury.
+- **Official Store Ownership Separation**: Staff and administrators can operate official company stores from the merchant workspace, but official products are not serialized as a user's own seller listing in the customer catalog. Backoffice accounts see preview-only purchase controls.
 - **Order Fulfillment**: Review store-specific customer orders, assign carrier & tracking numbers, update fulfillment milestones, and trigger instant buyer notifications.
 
 ## Admin & Staff Experience
@@ -456,7 +464,7 @@ The stress runner accepts only a completed matching inventory test case from a J
 
 Catalog review counts use a scalar subquery so page totals do not group the full catalog. Worker-count tuning must be benchmarked against the actual deployment: increasing local processes did not improve tail latency in this environment. The two-process, 32-thread default is retained, overridable with `GUNICORN_THREADS`. A local eight-thread trial improved the anonymous benchmark during memory pressure, but lowers total request slots from 64 to 16. Live notification streams occupy those slots, so that trial is not sufficient evidence to lower the application-wide default. Rebenchmark process/thread limits with notification streams and carrier I/O on the actual deployment.
 
-Anonymous catalog pages use a short-lived shared snapshot (`PUBLIC_CATALOG_CACHE_SECONDS=15`, range 0–60; 0 disables). Warm snapshots perform two lightweight database checks instead of fetching and serializing the model graph. Every hit rechecks current product visibility, active/verified store status, ownership, price, discount, stock and variants. Model, image, specification, review, tag and earnings changes invalidate after commit, with store timestamps covering missed Redis invalidations. Earnings-related timestamps update after commit to avoid adding Store row locks to financial transactions. Authenticated, transactional and search requests bypass snapshots; checkout retains authoritative database validation. Bulk changes that skip model signals and explicit invalidation can leave metadata, page membership and totals stale until the bounded TTL; use model saves or `invalidate_product_cache()` for such writes. Load reports record HIT/MISS/BYPASS counts and describe their mixed warm/uncached workload.
+Anonymous catalog pages use a short-lived Redis-backed shared snapshot (`PUBLIC_CATALOG_CACHE_SECONDS=15`, range 0–60; 0 disables). Runtime Django cache is Redis-only; local development defaults to `redis://127.0.0.1:6379/0`, containers use Compose Redis, and cache connection failures surface instead of silently falling back to uncached catalog responses. Warm snapshots perform two lightweight database checks instead of fetching and serializing the model graph. Every hit rechecks current product visibility, active/verified store status, ownership, price, discount, stock and variants. Model, image, specification, review, tag and earnings changes invalidate after commit, with store timestamps covering missed Redis invalidations. Earnings-related timestamps update after commit to avoid adding Store row locks to financial transactions. Authenticated, transactional and search requests bypass snapshots; checkout retains authoritative database validation. Bulk changes that skip model signals and explicit invalidation can leave metadata, page membership and totals stale until the bounded TTL; use model saves or `invalidate_product_cache()` for such writes. Load reports record HIT/MISS/BYPASS counts and describe their mixed warm/uncached workload.
 
 USPS live rating uses HTTPX async I/O with one bounded three-connection pool: authenticate once, then request Ground Advantage, Priority Mail and Priority Mail Express concurrently. Failure cancels sibling requests before closing the pool and returns a sanitized shipping error without invented rates. Other carriers retain their existing adapters. Tests use mock transports; live carrier latency and credentials are not established by these tests.
 

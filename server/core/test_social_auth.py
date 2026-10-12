@@ -1,13 +1,47 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import json
+from unittest.mock import patch
+import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from django.core.cache import cache
+from django.test import override_settings
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.test import APIClient
 
 from affiliates.models import Marketer, Referral
 from core.models import User, UserWallet, UserWalletTransaction
 from core.social_auth import authenticate_social_user, verify_google_credential, verify_apple_credential
+
+
+def test_apple_keys_are_shared_and_refresh_on_rotation() -> None:
+    from core.social_auth import APPLE_JWKS_CACHE_KEY, APPLE_JWKS_URL, RedisAppleJWKClient
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    payload = {"keys": [json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(key.public_key()))]}
+    cache.delete(APPLE_JWKS_CACHE_KEY)
+    try:
+        with patch("jwt.PyJWKClient.fetch_data", return_value=payload) as fetch:
+            RedisAppleJWKClient(APPLE_JWKS_URL).get_jwk_set()
+            RedisAppleJWKClient(APPLE_JWKS_URL).get_jwk_set()
+            assert fetch.call_count == 1
+            RedisAppleJWKClient(APPLE_JWKS_URL).get_jwk_set(refresh=True)
+            assert fetch.call_count == 2
+    finally:
+        cache.delete(APPLE_JWKS_CACHE_KEY)
+
+
+@pytest.mark.parametrize("prefix", ["mock-", "test-", "dev-"])
+@pytest.mark.parametrize("provider", ["google", "apple"])
+@override_settings(GOOGLE_CLIENT_ID="configured", APPLE_CLIENT_ID="configured")
+def test_production_rejects_every_synthetic_token(provider: str, prefix: str) -> None:
+    verifier = verify_google_credential if provider == "google" else verify_apple_credential
+    separator = ":" if prefix == "dev-" else "-"
+    with patch("core.social_auth.is_development_or_test", return_value=False):
+        with pytest.raises(ValidationError):
+            verifier(f"{prefix}{provider}{separator}user@example.com")
 
 
 @pytest.mark.django_db
@@ -67,6 +101,26 @@ def test_social_auth_customer_apple() -> None:
     assert user.is_active is True
     assert user.is_staff is False
     assert user.has_usable_password() is False
+
+
+@override_settings(DEBUG=False, TESTING=False, GOOGLE_CLIENT_ID='')
+def test_google_social_auth_requires_configured_client_id_in_production(monkeypatch) -> None:
+    monkeypatch.setattr('core.social_auth.is_development_or_test', lambda: False)
+
+    with pytest.raises(ValidationError) as exc_info:
+        verify_google_credential('dev-google:customer@example.com')
+
+    assert 'Google sign-in is not configured' in str(exc_info.value)
+
+
+@override_settings(DEBUG=False, TESTING=False, APPLE_CLIENT_ID='')
+def test_apple_social_auth_requires_configured_client_id_in_production(monkeypatch) -> None:
+    monkeypatch.setattr('core.social_auth.is_development_or_test', lambda: False)
+
+    with pytest.raises(ValidationError) as exc_info:
+        verify_apple_credential('dev-apple:customer@example.com')
+
+    assert 'Apple sign-in is not configured' in str(exc_info.value)
 
 
 @pytest.mark.django_db

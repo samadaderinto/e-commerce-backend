@@ -157,7 +157,10 @@ class AffiliatesViewSet(viewsets.ViewSet):
         from nanoid import generate
         from affiliates.models import ClickBankOutboundClick
 
-        product = get_object_or_404(Product, pk=product_id, visibility=True)
+        product = get_object_or_404(
+            Product, pk=product_id, visibility=True,
+            store__status='active', store__verified_at__isnull=False,
+        )
         if product.product_type != 'affiliate_clickbank' or not product.affiliate_hoplink:
             return redirect(f"/products/{product.pk}/", permanent=False)
 

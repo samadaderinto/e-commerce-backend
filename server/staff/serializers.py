@@ -1,4 +1,5 @@
 """Canonical serializers module for the staff application."""
+from decimal import Decimal
 from utils.timezones import TimeZoneField
 from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
@@ -13,6 +14,12 @@ from staff.models import Post, Content, Comment
 from store.models import Store
 from store.serializers import StoreSerializer
 from taggit.serializers import TagListSerializerField, TaggitSerializer
+
+
+class TreasuryWithdrawalSerializer(serializers.Serializer):
+    amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=Decimal('0.01'))
+    payout_method = serializers.ChoiceField(choices=['stripe', 'bank'], default='stripe')
+    account_details = serializers.DictField(required=False, default=dict)
 
 
 class PostSerializer(TaggitSerializer, serializers.ModelSerializer):

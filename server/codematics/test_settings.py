@@ -7,6 +7,7 @@ SECRET_KEY = 'merchant-tests-only-not-for-deployment'
 SIMPLE_JWT = {**SIMPLE_JWT, 'SIGNING_KEY': SECRET_KEY}  # noqa: F405
 DEBUG = False
 CELERY_TASK_ALWAYS_EAGER = True
+CATALOG_CACHE_WARM_ENABLED = False
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_BROKER_URL = 'memory://'
 CELERY_RESULT_BACKEND = 'cache+memory://'

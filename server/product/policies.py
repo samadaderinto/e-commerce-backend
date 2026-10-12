@@ -5,10 +5,21 @@ from rest_framework.exceptions import ValidationError
 
 
 def is_own_store(product: Any, user: Any) -> bool:
-    return bool(user and getattr(user, "is_authenticated", False) and getattr(product, "store", None) and product.store.user_id == user.pk)
+    store = getattr(product, "store", None)
+    return bool(
+        user
+        and getattr(user, "is_authenticated", False)
+        and store
+        and not getattr(store, "is_official", False)
+        and store.user_id == user.pk
+    )
 
 
 def validate_purchase(product: Any, user: Any) -> None:
+    if product.product_type == 'affiliate_clickbank':
+        raise ValidationError({
+            'detail': 'This partner listing uses the vendor checkout. Open its official partner link.'
+        })
     from core.access import is_backoffice
     if is_backoffice(user):
         raise ValidationError({"detail": "Administrative accounts cannot purchase products."})

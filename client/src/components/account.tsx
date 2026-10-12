@@ -17,6 +17,7 @@ import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, ChartNoAxesCombined, Chec
 
 import { api, money } from '@/lib/api';
 import type { Address, Order, User, UserWallet } from '@/lib/types';
+import { getSocialCredential, type SocialProvider } from '@/lib/social-auth';
 import { UserAvatarUpload } from './user-avatar';
 import {
   COUNTRIES,
@@ -114,32 +115,16 @@ export function AuthPage({ mode }: { mode: string }) {
     staleTime: Infinity,
   });
 
-  async function handleSocial(provider: 'google' | 'apple') {
+  async function handleSocial(provider: SocialProvider) {
     setBusy(true);
     setError('');
     const storedRef = typeof window !== 'undefined' ? sessionStorage.getItem('proace_referral') || '' : '';
     const referralCode = (params.get('ref') || storedRef || '').trim();
 
     try {
-      let credential = '';
-      if (typeof window !== 'undefined') {
-        const emailInput = document.querySelector('input[name="email"]') as HTMLInputElement | null;
-        const enteredEmail = emailInput?.value?.trim() || '';
-        const selectedEmail =
-          enteredEmail ||
-          prompt(
-            `Enter your ${provider === 'google' ? 'Google' : 'Apple'} account email for sign-in:`,
-            'shopper@example.com'
-          );
-        if (!selectedEmail) {
-          setBusy(false);
-          return;
-        }
-        credential = `dev-${provider}:${selectedEmail.trim().toLowerCase()}`;
-      }
-
+      const socialCredential = await getSocialCredential(provider);
       await socialLogin(provider, {
-        credential,
+        ...socialCredential,
         referral_code: referralCode,
       });
 

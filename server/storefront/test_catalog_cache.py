@@ -56,6 +56,27 @@ class CatalogSnapshotTests(TransactionTestCase):
         self.assertEqual(response.data, expected)
         self.assertLessEqual(len(queries), 2)
 
+    def test_background_warm_populates_observed_origin(self) -> None:
+        from storefront.tasks import warm_catalog_snapshot
+        from storefront.catalog_cache import invalidate_catalog_snapshot
+
+        self.warm()
+        invalidate_catalog_snapshot()
+        warm_catalog_snapshot()
+        response = self.client.get("/api/v1/products/")
+        self.assertEqual(response["X-Catalog-Cache"], "HIT")
+
+    @override_settings(CATALOG_CACHE_WARM_ENABLED=True)
+    def test_invalidation_enqueues_one_warm_after_commit(self) -> None:
+        from storefront.catalog_cache import invalidate_catalog_snapshot
+
+        with patch("storefront.tasks.warm_catalog_snapshot.apply_async") as enqueue:
+            with transaction.atomic():
+                invalidate_catalog_snapshot()
+                invalidate_catalog_snapshot()
+                enqueue.assert_not_called()
+            enqueue.assert_called_once_with(retry=False)
+
     def test_bulk_price_stock_and_variant_changes_are_never_served_from_snapshot(
         self,
     ) -> None:
@@ -149,26 +170,24 @@ class CatalogSnapshotTests(TransactionTestCase):
         self.assertEqual(response["X-Catalog-Cache"], "HIT")
         self.assertEqual(response.data, expected)
 
-    def test_cache_failure_falls_back_to_live_catalog(self) -> None:
+    def test_cache_failure_surfaces_instead_of_falling_back_silently(self) -> None:
         self.warm()
         with patch(
             "storefront.catalog_cache.cache.get_or_set", side_effect=ConnectionError
         ):
             response = self.client.get("/api/v1/products/")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response["X-Catalog-Cache"], "BYPASS")
-        self.assertEqual(response.data["results"][0]["id"], self.product.pk)
 
-    def test_missed_redis_invalidation_still_changes_transactional_version(
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("X-Catalog-Cache", response)
+
+    def test_redis_invalidation_failure_surfaces(
         self,
     ) -> None:
         self.warm()
         with patch("storefront.catalog_cache.cache.set", side_effect=ConnectionError):
-            self.product.title = "Committed new title"
-            self.product.save()
-        response = self.client.get("/api/v1/products/")
-        self.assertEqual(response["X-Catalog-Cache"], "MISS")
-        self.assertEqual(response.data["results"][0]["title"], "Committed new title")
+            with self.assertRaises(ConnectionError):
+                self.product.title = "Committed new title"
+                self.product.save()
 
     @override_settings(PUBLIC_CATALOG_CACHE_SECONDS=0)
     def test_configuration_can_disable_snapshots(self) -> None:

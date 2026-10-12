@@ -713,7 +713,8 @@ class EmailTemplateRenderingTests(TestCase):
         del_delivery = NotificationDelivery.objects.filter(recipient_email=self.user.email).latest("pk")
         self.assertTrue(del_delivery.is_html)
         self.assertIn("Account Closure Confirmation", del_delivery.subject)
-        self.assertIn("permanently deleted", del_delivery.body)
+        self.assertIn("has been deactivated", del_delivery.body)
+        self.assertNotIn("permanently deleted", del_delivery.body)
 
     @patch("payment.services.call_stripe_refund", return_value="re_mock123")
     def test_order_status_transitions_queue_html_emails(self, mock_stripe_refund):

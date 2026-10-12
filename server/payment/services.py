@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from datetime import timedelta
+import logging
 from typing import Any
 
 from django.conf import settings
@@ -32,6 +34,19 @@ ALLOWED_ORDER_TRANSITIONS: dict[str, set[str]] = {
     "cancelled": set(),
     "refunded": set(),
 }
+logger = logging.getLogger(__name__)
+
+
+def validate_return_window(order: Order, items: list[dict[str, Any]]) -> None:
+    """A physical line's return clock starts at its recorded store delivery."""
+    days = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
+    deliveries = dict(order.fulfillments.values_list('store_id', 'delivered_at'))
+    for item in items:
+        if item.get('is_digital'):
+            continue
+        delivered = deliveries.get(item.get('store')) or order.delivered_at
+        if delivered and timezone.now() > delivered + timedelta(days=days):
+            raise ValidationError({'detail': f'The {days}-day return window for a selected item has expired.'})
 
 
 def is_digital_only_order(order: Order) -> bool:
@@ -303,9 +318,10 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
                 provider_reference = f"STORE-CREDIT-{order.orderId}"
     except Exception as exc:
         refund.status = Refund.STATUS_FAILED
-        refund.failure_reason = str(exc)
+        logger.exception('Refund provider operation failed for refund %s', refund.pk)
+        refund.failure_reason = 'Payment provider refund failed. Support will review it.'
         refund.save(update_fields=["status", "failure_reason", "updated"])
-        raise ValidationError({"detail": f"Payment provider refund failed: {str(exc)}"})
+        raise ValidationError({'detail': 'Payment provider refund failed. Please try again or contact support.'}) from exc
 
     with transaction.atomic():
         refund = Refund.objects.select_for_update().get(pk=refund.pk)
@@ -660,11 +676,12 @@ def execute_order_status_transition(
                         idempotency_key=f"cancel-{order.pk}-wallet",
                     )
             except Exception as exc:
+                logger.exception('Cancellation payment refund failed for order %s', order.pk)
                 raise ValidationError(
                     {
-                        "detail": f"Cannot cancel order: payment refund failed: {str(exc)}"
+                        "detail": "Cannot cancel order: payment refund failed. Please try again or contact support."
                     }
-                )
+                ) from exc
             order.refunded_total += remaining
             order.wallet_refunded_total += wallet_part
             order.card_refunded_total += card_part

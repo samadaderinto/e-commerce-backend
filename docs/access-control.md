@@ -99,6 +99,8 @@ Backoffice interaction with store data is strictly conducted through the central
 ### 3. Proace official stores exception & Platform Treasury consolidation
 For "Proace Official Stores" (`is_official=True`, created directly by Administrators), all Staff members and Admins are automatically granted access to the actual Seller Interface (`/merchant` and `StoreViewSet`) upon login. This gives staff the ability to act as the sellers specifically for app-owned official stores, while remaining locked out of third-party stores.
 
+Official store access is operational platform access, not customer-facing merchant ownership. Official products must not serialize as `is_own_store=true`, and backoffice accounts see preview-only purchase controls in the storefront.
+
 **Platform Treasury Consolidation**:
 To enforce separation of duties and prevent rogue or untracked self-dealing withdrawals by operators:
 - Direct merchant payout requests (`stores/{id}/payouts/` and `stores/wallet/payouts/`) are **strictly blocked** for official company stores.

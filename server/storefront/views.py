@@ -168,7 +168,7 @@ class AuthView(APIView):
                 raise ValidationError({'password': error.messages})
             referral_code = serializer.validated_data.pop('referral_code', '').strip()
             user = User.objects.create_user(**serializer.validated_data, is_active=False)
-            token_payload = {'user': user.pk}
+            token_payload = {'user': user.pk, 'version': user.credential_version}
             if referral_code:
                 token_payload['ref'] = referral_code
             token = signing.dumps(token_payload, salt='proace-verify')
@@ -192,15 +192,18 @@ class AuthView(APIView):
                 return Response({'detail': 'Email verified. Please check your email to set your password.'})
             try:
                 payload = signing.loads(raw_token, salt='proace-verify', max_age=86400)
-                user = User.objects.get(pk=payload['user'])
-            except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError):
+                with transaction.atomic():
+                    user = User.objects.select_for_update().get(pk=payload['user'])
+                    if user.is_active or payload['version'] != user.credential_version:
+                        raise ValueError()
+                    user.is_active = True
+                    user.credential_version += 1
+                    user.save(update_fields=['is_active', 'credential_version'])
+                    ref = str(payload.get('ref') or '').strip()
+                    if ref:
+                        reward_referral(ref, user)
+            except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError, ValueError):
                 raise ValidationError({'detail': 'This verification link is invalid or expired.'})
-            was_inactive = not user.is_active
-            user.is_active = True
-            user.save(update_fields=['is_active'])
-            ref = str(payload.get('ref') or '').strip()
-            if was_inactive and ref:
-                reward_referral(ref, user)
             return Response({'detail': 'Email verified. You can now sign in.'})
         if action == 'forgot':
             email = serializers.EmailField().run_validation(data.get('email'))
@@ -248,7 +251,9 @@ class AuthView(APIView):
                     BlacklistedToken.objects.get_or_create(token=token)
                 return Response({'detail': 'Password updated. Sign in with your new password.'})
         if action == 'refresh':
-            serializer = TokenRefreshSerializer(data=data)
+            from core.access import VersionedTokenRefreshSerializer
+
+            serializer = VersionedTokenRefreshSerializer(data=data)
             try:
                 serializer.is_valid(raise_exception=True)
             except TokenError as error:
@@ -279,12 +284,14 @@ class MeView(APIView):
         return Response(serializer.data)
 
     @extend_schema(responses={200: OpenApiTypes.OBJECT})
+    @transaction.atomic
     def delete(self, request: Request) -> Response:
-        user = request.user
+        user = User.objects.select_for_update().get(pk=request.user.pk)
         email = str(user.email)
         first_name = str(user.first_name)
         user.is_active = False
-        user.save(update_fields=["is_active"])
+        user.credential_version += 1
+        user.save(update_fields=["is_active", "credential_version"])
         send_mail(
             "account-delete-confirmation",
             email,
@@ -294,7 +301,7 @@ class MeView(APIView):
                 "subject": "ProAce Account Closure Confirmation",
             },
         )
-        return Response({"detail": "Your account has been deactivated and scheduled for permanent deletion."})
+        return Response({"detail": "Your account has been deactivated. Contact support for data deletion requests."})
 
 
 class MeAvatarView(APIView):
@@ -349,7 +356,11 @@ class ProductsView(APIView):
             return response
         response = self._get_uncached(request)
         if response.status_code == 200:
-            write_snapshot(key, response.data)
+            write_snapshot(
+                key,
+                response.data,
+                request.build_absolute_uri() if not request.query_params else None,
+            )
         response['X-Catalog-Cache'] = 'MISS' if key else 'BYPASS'
         return response
 
@@ -707,22 +718,47 @@ def calculate_shipping(subtotal, has_physical_items, origin_zip='33602', dest_zi
     return Decimal(rates[0]['amount'])
 
 
-def cart_data(cart, request):
+def cart_data(cart: Cart, request: Request) -> dict[str, Any]:
+    from product.policies import selected_variant
+
     items = cart.cart_items.select_related('product__store').prefetch_related('product__images', 'product__tags')
-    rows = [{'product': CatalogSerializer(item.product, context={'request': request}).data,
-             'quantity': item.quantity, 'total': str(unit_price(item.product, item.variant) * item.quantity),
-             'purchasable': not is_own_store(item.product, request.user)
-             and item.product.visibility and item.product.store.status == Store.STATUS_ACTIVE
-             and item.product.store.verified_at is not None
-             and (item.product.is_digital or item.quantity <= item.product.available)} for item in items]
-    for item, row in zip(items, rows):
-        row['product']['selected_variant'] = item.variant
-        row['product']['sale_price'] = str(unit_price(item.product, item.variant))
+    quantities: dict[int, int] = {}
+    for item in items:
+        quantities[item.product_id] = quantities.get(item.product_id, 0) + item.quantity
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        product = item.product
+        valid_option = True
+        option = None
+        try:
+            option = selected_variant(product, item.variant)
+            price = unit_price(product, item.variant)
+        except ValidationError:
+            # A seller can retire an option while it is in a shopper's cart.
+            # Keep the cart readable/removable; checkout still rejects the option.
+            valid_option = False
+            price = unit_price(product)
+        available = min(product.available, option.get('available', product.available)) if option else product.available
+        data = CatalogSerializer(product, context={'request': request}).data
+        data['selected_variant'] = item.variant
+        data['sale_price'] = str(price)
+        data['available'] = available if valid_option else 0
         if item.variant:
-            from product.policies import selected_variant
-            option = selected_variant(item.product, item.variant)
-            row['product']['available'] = min(item.product.available, option.get('available', item.product.available))
-            row['product']['title'] += f' ({item.variant})'
+            data['title'] += f' ({item.variant})'
+        rows.append({
+            'product': data,
+            'quantity': item.quantity,
+            'total': str(price * item.quantity),
+            'purchasable': valid_option
+            and product.product_type != Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
+            and not is_own_store(product, request.user)
+            and product.visibility
+            and product.store.status == Store.STATUS_ACTIVE
+            and product.store.verified_at is not None
+            and (item.quantity == 1 if product.is_digital else (
+                item.quantity <= available and quantities[product.pk] <= product.available
+            )),
+        })
     subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
     has_physical_items = any(not row['product']['is_digital'] for row in rows)
     total_weight = sum(
@@ -759,8 +795,10 @@ class CartView(APIView):
             quantity = serializers.IntegerField(min_value=1, max_value=1000).run_validation(request.data.get('quantity', 1))
             product = get_object_or_404(catalog(), pk=pk)
             validate_purchase(product, request.user)
+            if product.is_digital:
+                quantity = 1
             item = cart.cart_items.filter(product=product, variant=variant_name).first()
-            if request.method == 'POST' and item:
+            if request.method == 'POST' and item and not product.is_digital:
                 quantity += item.quantity
             from product.policies import selected_variant
             option = selected_variant(product, variant_name)
@@ -967,7 +1005,7 @@ class DigitalDownloadView(APIView):
         )
         if not item:
             raise Http404
-        product = get_object_or_404(Product, pk=product_pk, is_digital=True)
+        product = Product.objects.filter(pk=product_pk).first()
         from django.core.files.storage import default_storage
         from urllib.parse import urlparse
 
@@ -975,7 +1013,7 @@ class DigitalDownloadView(APIView):
         item_download = (item.get("download_url") or "").strip()
         if item_download and not item_download.startswith("/api/"):
             candidates.append(item_download)
-        prod_download = (product.digital_file_url or "").strip()
+        prod_download = (product.digital_file_url or "").strip() if product and product.is_digital else ''
         if prod_download and prod_download not in candidates:
             candidates.append(prod_download)
 
@@ -1012,6 +1050,12 @@ class DigitalDownloadView(APIView):
                 break
 
         if not resolved_path:
+            external = next((raw for raw in candidates if raw.startswith(('https://', 'http://'))), None)
+            if external:
+                from types import SimpleNamespace
+                from staff.digital_assets import stream_digital_asset
+
+                return stream_digital_asset(SimpleNamespace(pk=product_pk, digital_file_url=external))
             return Response(
                 {
                     "detail": "The digital asset is unavailable. Contact support for a replacement."
@@ -1217,17 +1261,6 @@ class OrderRefundView(APIView):
                 }
             )
 
-        refund_window = getattr(settings, "REFUND_WINDOW_DAYS", 7)
-        from datetime import timedelta
-
-        deadline = order.created + timedelta(days=refund_window)
-        if timezone.now() > deadline:
-            raise ValidationError(
-                {
-                    "detail": f"The {refund_window}-day return window for this order has expired."
-                }
-            )
-
         if not request.data.get("reason"):
             raise ValidationError({"reason": "A reason is required to request a refund."})
         if not request.data.get("product_ids"):
@@ -1256,6 +1289,9 @@ class OrderRefundView(APIView):
                     "product_ids": "Digital products are non-refundable. If you are experiencing issues, please contact support via email."
                 }
             )
+        from payment.services import validate_return_window
+
+        validate_return_window(order, selected)
         claimed = set()
         for previous in Refund.objects.filter(
             order=order,
@@ -1351,17 +1387,6 @@ class OrderRefundView(APIView):
                 }
             )
 
-        refund_window = getattr(settings, "REFUND_WINDOW_DAYS", 7)
-        from datetime import timedelta
-
-        deadline = order.created + timedelta(days=refund_window)
-        if timezone.now() > deadline:
-            raise ValidationError(
-                {
-                    "detail": f"The {refund_window}-day return window for this order has expired."
-                }
-            )
-
         serializer = RefundRequestSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
 
@@ -1422,6 +1447,9 @@ class OrderRefundView(APIView):
             refund.selected_items = selected
             refund.refund_amount = new_amount
 
+        from payment.services import validate_return_window
+
+        validate_return_window(order, refund.selected_items or snapshots)
         refund.save(update_fields=["reason", "refund_type", "selected_items", "refund_amount", "updated"])
 
         from notification.domain import refund_notice
@@ -1753,6 +1781,8 @@ class CheckoutView(APIView):
             query = Product.objects.select_for_update() if lock else Product.objects
             product = query.get(pk=item.product_id)
             validate_purchase(product, user)
+            if product.is_digital and item.quantity != 1:
+                raise ValidationError({'detail': 'Digital products require one entitlement per option. Update your cart.'})
             from product.policies import selected_variant
 
             option = selected_variant(product, item.variant)
@@ -2465,19 +2495,29 @@ class WalletCheckoutConfirmView(CheckoutView):
         return Response(order_data(order), status=201)
 
 
+@transaction.atomic
 def complete_stripe_checkout(
     user: User, session: dict, attempt: Any = None
 ) -> Order:
+    User.objects.select_for_update().get(pk=user.pk)
+    if session.get('payment_status') != 'paid' or session.get('client_reference_id') != str(user.pk):
+        raise ValidationError({'detail': 'Invalid paid checkout owner.'})
+    if attempt and (attempt.user_id != user.pk or attempt.session_id != session.get('id')):
+        raise ValidationError({'detail': 'Invalid checkout reservation.'})
     key_raw = session.get("metadata", {}).get("checkout_key")
     if not key_raw:
         raise ValidationError({"detail": "Session has no checkout reference."})
     key = serializers.UUIDField().run_validation(key_raw)
     existing = Order.objects.filter(checkout_key=key).first()
     if existing:
+        if existing.user_id != user.pk:
+            raise ValidationError({'detail': 'Invalid checkout reference.'})
         if attempt and attempt.status != "completed":
             attempt.status = "completed"
             attempt.save(update_fields=["status", "updated"])
         return existing
+    if attempt and attempt.status in {'released', 'refunded', 'refund_pending'}:
+        raise ValidationError({'detail': 'This checkout reservation is no longer active.'})
 
     address_raw = session.get("metadata", {}).get("address")
     address = None
@@ -2613,17 +2653,18 @@ class StripeWebhookView(APIView):
         webhook_secret = getattr(settings, "STRIPE_WEBHOOK_SECRET", "")
         event = None
 
-        if stripe and webhook_secret and sig_header:
-            try:
-                event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
-            except Exception as exc:
-                return Response({"detail": f"Webhook signature error: {str(exc)}"}, status=400)
-        else:
-            try:
-                import json
-                event = json.loads(payload.decode("utf-8") if isinstance(payload, bytes) else str(payload))
-            except Exception:
-                return Response({"detail": "Invalid JSON payload."}, status=400)
+        if not stripe or not webhook_secret:
+            logger.error('Stripe webhook verification is not configured')
+            return Response({'detail': 'Payment notifications are temporarily unavailable.'}, status=503)
+        if not sig_header:
+            return Response({'detail': 'A valid payment notification signature is required.'}, status=400)
+        try:
+            event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+        except Exception as exc:
+            logger.warning('Stripe webhook verification failed (%s)', type(exc).__name__)
+            return Response({'detail': 'Invalid payment notification signature.'}, status=400)
+        if not isinstance(event, dict):
+            return Response({'detail': 'Invalid payment notification.'}, status=400)
 
         event_type = event.get("type", "")
         data_object = event.get("data", {}).get("object", {})

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { accessCookieMaxAge, refreshOnce } from '@/lib/auth-refresh';
+import { isSameOrigin } from '@/lib/request-origin';
 
 function getCandidateApis(): string[] {
   // Compose supplies the service URL; local development uses the published port.
@@ -26,15 +27,16 @@ async function handler(
   if (path.some((part) => !/^[a-zA-Z0-9_-]+$/.test(part))) {
     return NextResponse.json({ detail: 'Invalid route.' }, { status: 400 });
   }
+  const route = path.join('/');
+  const paymentWebhook = route === 'checkout/stripe-webhook' || route === 'stripe/webhook';
 
-  if (!['GET', 'HEAD'].includes(request.method)) {
+  if (!['GET', 'HEAD'].includes(request.method) && !paymentWebhook) {
     const origin = request.headers.get('origin');
-    if (!origin || new URL(origin).host !== request.headers.get('host')) {
+    if (!isSameOrigin(origin, request.headers.get('host'), isSecure)) {
       return NextResponse.json({ detail: 'Invalid request origin.' }, { status: 403 });
     }
   }
 
-  const route = path.join('/');
   const publicRead = request.method === 'GET' && (
     route === 'products' ||
     /^products\/\d+$/.test(route) ||
@@ -48,6 +50,9 @@ async function handler(
 
   if (request.headers.get('content-type')) {
     headers['Content-Type'] = request.headers.get('content-type')!;
+  }
+  if (paymentWebhook && request.headers.has('stripe-signature')) {
+    headers['Stripe-Signature'] = request.headers.get('stripe-signature')!;
   }
   if (access) {
     headers.Authorization = `Bearer ${access}`;
@@ -277,7 +282,11 @@ async function handler(
       });
     }
 
-    if (route === 'auth/logout' || (invalidRefresh && !route.startsWith('auth/'))) {
+    if (
+      route === 'auth/logout'
+      || (route === 'me' && request.method === 'DELETE' && upstream.ok)
+      || (invalidRefresh && !route.startsWith('auth/'))
+    ) {
       response.cookies.delete('proace_access');
       response.cookies.delete('proace_refresh');
     }

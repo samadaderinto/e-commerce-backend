@@ -81,7 +81,7 @@ def update_fulfillment(
             if all(value == "picked up" for value in statuses)
             else "delivered"
         )
-        order.delivered_at = now
+        order.delivered_at = order.delivered_at or now
         if not order.shipped_at:
             order.shipped_at = now
     elif any(value in {"shipped", "delivered", "picked up"} for value in statuses):

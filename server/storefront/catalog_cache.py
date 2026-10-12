@@ -17,16 +17,27 @@ from rest_framework.request import Request
 from product.models import Product
 from store.models import Store
 
-logger = logging.getLogger("codematics.catalog_cache")
 REVISION_KEY = "storefront:catalog:revision"
+WARM_LOCK_KEY = "storefront:catalog:warm:pending"
+WARM_URL_KEY = "storefront:catalog:warm:url"
+logger = logging.getLogger(__name__)
 
 
 def invalidate_catalog_snapshot() -> None:
     def committed() -> None:
-        try:
-            cache.set(REVISION_KEY, uuid4().hex, timeout=None)
-        except Exception:
-            logger.warning("Catalog cache invalidation unavailable", exc_info=True)
+        cache.set(REVISION_KEY, uuid4().hex, timeout=None)
+        if (
+            getattr(settings, "PUBLIC_CATALOG_CACHE_SECONDS", 15) > 0
+            and getattr(settings, "CATALOG_CACHE_WARM_ENABLED", True)
+            and cache.add(WARM_LOCK_KEY, True, timeout=10)
+        ):
+            from .tasks import warm_catalog_snapshot
+
+            try:
+                warm_catalog_snapshot.apply_async(retry=False)
+            except Exception:
+                cache.delete(WARM_LOCK_KEY)
+                logger.exception("Unable to enqueue catalog snapshot warming")
 
     transaction.on_commit(committed)
 
@@ -45,33 +56,25 @@ def snapshot_key(request: Request) -> str | None:
     stamp = Store.objects.order_by("-updated").values_list("updated", flat=True).first()
     if stamp is None:
         return None
-    try:
-        revision = cache.get_or_set(REVISION_KEY, uuid4().hex, timeout=None)
-        if not isinstance(revision, str):
-            return None
-        identity = json.dumps(
-            [
-                revision,
-                stamp.isoformat(),
-                request.build_absolute_uri(),
-                sorted(request.query_params.lists()),
-            ],
-            sort_keys=True,
-        )
-        return "storefront:catalog:" + hashlib.sha256(identity.encode()).hexdigest()
-    except Exception:
-        logger.warning("Catalog snapshot lookup unavailable", exc_info=True)
+    revision = cache.get_or_set(REVISION_KEY, uuid4().hex, timeout=None)
+    if not isinstance(revision, str):
         return None
+    identity = json.dumps(
+        [
+            revision,
+            stamp.isoformat(),
+            request.build_absolute_uri(),
+            sorted(request.query_params.lists()),
+        ],
+        sort_keys=True,
+    )
+    return "storefront:catalog:" + hashlib.sha256(identity.encode()).hexdigest()
 
 
 def read_snapshot(key: str | None) -> dict[str, Any] | None:
     if key is None:
         return None
-    try:
-        data = cache.get(key)
-    except Exception:
-        logger.warning("Catalog snapshot read unavailable", exc_info=True)
-        return None
+    data = cache.get(key)
     if not isinstance(data, dict) or not data.get("results"):
         return None
     items = {item["id"]: item for item in data["results"]}
@@ -101,12 +104,13 @@ def read_snapshot(key: str | None) -> dict[str, Any] | None:
     return data
 
 
-def write_snapshot(key: str | None, data: dict[str, Any]) -> None:
+def write_snapshot(
+    key: str | None, data: dict[str, Any], warm_url: str | None = None
+) -> None:
     if key is None or not data.get("results"):
         return
-    try:
-        cache.set(
-            key, data, timeout=getattr(settings, "PUBLIC_CATALOG_CACHE_SECONDS", 15)
-        )
-    except Exception:
-        logger.warning("Catalog snapshot write unavailable", exc_info=True)
+    cache.set(
+        key, data, timeout=getattr(settings, "PUBLIC_CATALOG_CACHE_SECONDS", 15)
+    )
+    if warm_url:
+        cache.set(WARM_URL_KEY, warm_url, timeout=3600)

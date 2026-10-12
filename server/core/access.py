@@ -1,7 +1,25 @@
 """Shared role policies for both current and legacy API routes."""
+from typing import Any
+
 from rest_framework.permissions import IsAuthenticated, BasePermission
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
+from rest_framework_simplejwt.settings import api_settings
+
+
+class VersionedTokenRefreshSerializer(TokenRefreshSerializer):
+    def validate(self, attrs: dict[str, Any]) -> dict[str, str]:
+        from core.models import User
+
+        token = self.token_class(attrs['refresh'])
+        user = User.objects.filter(
+            pk=token.get(api_settings.USER_ID_CLAIM), is_active=True,
+        ).first()
+        if user is None or token.get('credential_version', 0) != user.credential_version:
+            raise TokenError('Session expired. Sign in again.')
+        return super().validate(attrs)
 
 
 def is_admin(user):

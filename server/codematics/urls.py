@@ -61,4 +61,6 @@ if settings.LOCAL_PROFILING_ENABLED:
 
 
 if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+    from utils.public_media import serve_public_media
+
+    urlpatterns += static(settings.MEDIA_URL, view=serve_public_media, document_root=settings.MEDIA_ROOT)

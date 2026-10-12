@@ -405,6 +405,35 @@ class StorefrontTests(TestCase):
         self.client.force_authenticate(None)
         self.assertFalse(self.client.get(url).data['is_own_store'])
 
+    def test_official_store_products_are_not_serialized_as_merchant_owned(self):
+        admin = User.objects.create_superuser(
+            email='official-owner@test.com',
+            password='Admin-password-123',
+        )
+        official_store = Store.objects.create(
+            user=admin,
+            name='Official Catalog',
+            username='official-catalog',
+            status=Store.STATUS_ACTIVE,
+            verified_at=timezone.now(),
+            is_official=True,
+        )
+        official_product = Product.objects.create(
+            store=official_store,
+            title='Admin onboarded product',
+            description='Official platform listing',
+            category='electronics',
+            price='25.00',
+            discount=0,
+            available=10,
+        )
+
+        self.client.force_authenticate(admin)
+        response = self.client.get(f'/api/v1/products/{official_product.pk}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['is_own_store'])
+
     def test_cart_and_address_delete_accept_documented_query_parameters(self):
         self.add(1)
         removed_item = self.client.delete(f'/api/v1/cart/?product={self.product.pk}')
@@ -629,7 +658,7 @@ class StorefrontTests(TestCase):
         result = deliver_notification_task.run(delivery.pk)
         self.assertEqual(result['status'], NotificationDelivery.STATUS_SENT)
         self.assertEqual(len(mail.outbox), 1)
-        token = signing.dumps({'user': user.pk}, salt='proace-verify')
+        token = signing.dumps({'user': user.pk, 'version': user.credential_version}, salt='proace-verify')
         response = self.client.post('/api/v1/auth/verify/', {'token': token}, format='json')
         self.assertEqual(response.status_code, 200)
         user.refresh_from_db()
@@ -775,8 +804,8 @@ class StorefrontTests(TestCase):
         self.add()
         order_resp = self.checkout()
         order_id = order_resp.data['id']
-        Order.objects.filter(pk=order_id).update(created=timezone.now() - timedelta(days=8))
-        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {'reason': 'Late return'}, format='json')
+        Order.objects.filter(pk=order_id).update(delivered_at=timezone.now() - timedelta(days=8))
+        refund_resp = self.client.post(f'/api/v1/orders/{order_id}/refund/', {'reason': 'item_damaged', 'product_ids': [self.product.pk]}, format='json')
         self.assertEqual(refund_resp.status_code, 400)
         self.assertIn('expired', refund_resp.data['error']['message'])
 

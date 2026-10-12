@@ -79,11 +79,14 @@ Frontend configuration:
 | `E2E_DEMO_PASSWORD` | Password used by e2e tests for seeded demo accounts |
 | `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` | Optional browser executable override |
 | `NEXT_PUBLIC_FIREBASE_*` | Public Firebase Web app config and VAPID key for optional browser push |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Public Google OAuth client ID used by Google Identity Services |
+| `NEXT_PUBLIC_APPLE_CLIENT_ID` | Public Apple Services ID used by Sign in with Apple JS |
 
 ## Social Authentication (Google & Apple)
 
 Customers can sign in or register with one click using Google or Apple:
 - **UI Components**: Rendered on `/login` and `/register` above an `or with email` divider.
+- **Provider SDKs**: Google Identity Services and Sign in with Apple JS are loaded on demand from the browser. The frontend sends only provider identity tokens through the same-origin `/api/auth/google` or `/api/auth/apple` proxy.
 - **Dual-Theme Contrast**: Buttons support Light and Dark themes (`data-theme='light'` / `data-theme='dark'`) via semantic CSS variables (`var(--paper)`, `var(--ink)`, `var(--line)`, `var(--soft)`). The Google icon uses official 4-color SVG paths; the Apple icon uses `fill: currentColor` ensuring maximum WCAG AA/AAA visual contrast.
 - **Security Guardrail**: Administrative and staff members are blocked with an explicit error alert if they attempt social sign-in.
 - **Affiliate Referral Preservation**: Referral codes (`?ref=CODE`) are captured on arrival, preserved in `sessionStorage` across auth page transitions, and forwarded to the backend on social signup, immediately rewarding the referring marketer.
