@@ -11,13 +11,17 @@ import { displayDate } from '@/lib/datetime';
 import { OrderStatusTracker } from './order-status-tracker';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { FormEvent, ReactNode, useEffect, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, ChartNoAxesCombined, Check, Clock, ChevronRight, ExternalLink, Eye, EyeOff, FileText, Printer, Heart, LockKeyhole, LogOut, MapPin, Package, Pencil, Plus, RotateCcw, ShoppingBag, Settings, Store, Trash2, Truck, UserRound, UsersRound, WalletCards, X } from 'lucide-react';
 
 import { api, money } from '@/lib/api';
 import type { Address, Order, User, UserWallet } from '@/lib/types';
-import { getSocialCredential, type SocialProvider } from '@/lib/social-auth';
+import {
+  getAppleCredential,
+  renderGoogleSignInButton,
+  type SocialCredential,
+} from '@/lib/social-auth';
 import { UserAvatarUpload } from './user-avatar';
 import {
   COUNTRIES,
@@ -52,34 +56,70 @@ export function Gate({ children, next = '/account' }: { children: ReactNode; nex
   return <>{children}</>;
 }
 
-function GoogleIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        fill="#4285F4"
-        d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3h3.88c2.27-2.09 3.66-5.17 3.66-9.09z"
-      />
-      <path
-        fill="#34A853"
-        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.09C3.26 21.48 7.31 24 12 24z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M5.28 14.32c-.25-.72-.38-1.49-.38-2.32 0-.83.13-1.6.38-2.32V6.59H1.24C.45 8.16 0 9.93 0 12c0 2.07.45 3.84 1.24 5.41l4.04-3.09z"
-      />
-      <path
-        fill="#EA4335"
-        d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.52 1.24 6.59l4.04 3.09c.95-2.83 3.6-4.93 6.72-4.93z"
-      />
-    </svg>
-  );
-}
-
 function AppleIcon({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
       <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.38c.62-.75 1.04-1.8 0.93-2.85-.9.04-1.99.6-2.64 1.35-.56.65-1.06 1.7-0.93 2.71 1.01.08 2.02-.46 2.64-1.21z" />
     </svg>
+  );
+}
+
+function GoogleSignInButton({
+  text,
+  disabled,
+  onCredential,
+  onError,
+}: {
+  text: 'signin_with' | 'signup_with';
+  disabled: boolean;
+  onCredential: (credential: string) => void;
+  onError: (error: Error) => void;
+}) {
+  const targetRef = useRef<HTMLDivElement>(null);
+  const onCredentialRef = useRef(onCredential);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => {
+    onCredentialRef.current = onCredential;
+    onErrorRef.current = onError;
+  }, [onCredential, onError]);
+
+  useEffect(() => {
+    const target = targetRef.current;
+    if (!target) return;
+
+    let mounted = true;
+    void renderGoogleSignInButton(
+      target,
+      text,
+      credential => {
+        if (mounted) onCredentialRef.current(credential);
+      },
+      error => {
+        if (mounted) onErrorRef.current(error);
+      },
+    ).catch(error => {
+      if (mounted) {
+        onErrorRef.current(
+          error instanceof Error
+            ? error
+            : new Error('Google sign-in is unavailable right now.'),
+        );
+      }
+    });
+
+    return () => {
+      mounted = false;
+      target.replaceChildren();
+    };
+  }, [text]);
+
+  return (
+    <div
+      ref={targetRef}
+      className={`google-signin-button${disabled ? ' is-disabled' : ''}`}
+      aria-disabled={disabled}
+    />
   );
 }
 
@@ -115,14 +155,23 @@ export function AuthPage({ mode }: { mode: string }) {
     staleTime: Infinity,
   });
 
-  async function handleSocial(provider: SocialProvider) {
+  async function completeSocialLogin(
+    provider: 'google' | 'apple',
+    socialCredential: SocialCredential,
+  ) {
     setBusy(true);
     setError('');
-    const storedRef = typeof window !== 'undefined' ? sessionStorage.getItem('proace_referral') || '' : '';
+    let storedRef = '';
+    if (typeof window !== 'undefined') {
+      try {
+        storedRef = sessionStorage.getItem('proace_referral') || '';
+      } catch {
+        /* Continue without a stored referral when browser storage is unavailable. */
+      }
+    }
     const referralCode = (params.get('ref') || storedRef || '').trim();
 
     try {
-      const socialCredential = await getSocialCredential(provider);
       await socialLogin(provider, {
         ...socialCredential,
         referral_code: referralCode,
@@ -147,6 +196,22 @@ export function AuthPage({ mode }: { mode: string }) {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleAppleSignIn() {
+    try {
+      await completeSocialLogin('apple', await getAppleCredential());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Apple sign-in is unavailable right now.');
+    }
+  }
+
+  function handleGoogleCredential(credential: string) {
+    void completeSocialLogin('google', { credential });
+  }
+
+  function handleGoogleError(providerError: Error) {
+    setError(providerError.message);
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -273,20 +338,17 @@ export function AuthPage({ mode }: { mode: string }) {
             {!isForgot && !isReset && (
               <>
                 <div className="social-auth-group">
-                  <button
-                    type="button"
-                    className="social-auth-btn"
+                  <GoogleSignInButton
+                    text={isRegister ? 'signup_with' : 'signin_with'}
                     disabled={busy}
-                    onClick={() => handleSocial('google')}
-                  >
-                    <GoogleIcon />
-                    <span>{isRegister ? 'Sign up with Google' : 'Continue with Google'}</span>
-                  </button>
+                    onCredential={handleGoogleCredential}
+                    onError={handleGoogleError}
+                  />
                   <button
                     type="button"
                     className="social-auth-btn apple-btn"
                     disabled={busy}
-                    onClick={() => handleSocial('apple')}
+                    onClick={handleAppleSignIn}
                   >
                     <AppleIcon />
                     <span>{isRegister ? 'Sign up with Apple' : 'Continue with Apple'}</span>

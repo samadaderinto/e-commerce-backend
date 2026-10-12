@@ -1807,6 +1807,7 @@ class CheckoutView(APIView):
                     }
                 )
             price = unit_price(product, item.variant)
+            variant_download = str(option.get('digital_file_url') or '') if option else ''
             snapshots.append(
                 {
                     "product": product.pk,
@@ -1820,7 +1821,7 @@ class CheckoutView(APIView):
                     "digital_preview_watermark": bool(
                         getattr(product, "digital_preview_watermark", False)
                     ),
-                    "download_url": product.digital_file_url
+                    "download_url": variant_download or product.digital_file_url
                     if product.is_digital
                     else "",
                 }

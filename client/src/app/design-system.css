@@ -533,6 +533,17 @@ td { line-height: 1.6; }
 .affiliate-workspace .field { display: grid; gap: 8px; margin-bottom: 16px; }
 .affiliate-workspace input { width: 100%; min-width: 0; }
 
+.loading.compact {
+  min-height: 36px;
+  justify-content: flex-start;
+  margin: 0 0 12px;
+}
+
+.loading.compact .spinner {
+  height: 16px;
+  width: 16px;
+}
+
 /* Social Authentication Buttons (Google & Apple) */
 .social-auth-group {
   display: flex;
@@ -584,6 +595,23 @@ td { line-height: 1.6; }
 
 .social-auth-btn svg {
   flex-shrink: 0;
+}
+
+.google-signin-button {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  overflow: hidden;
+}
+
+.google-signin-button > div {
+  max-width: 100%;
+}
+
+.google-signin-button.is-disabled {
+  pointer-events: none;
+  opacity: 0.6;
 }
 
 .social-auth-btn.apple-btn {

@@ -50,7 +50,7 @@ async function assertStableControl(
   const original = await control.elementHandle();
   if (!original) throw new Error(`Missing ${label}`);
   await control.selectOption(option);
-  await expect(page.getByRole('status').filter({ hasText: 'Updating results…' }).first()).toBeVisible();
+  await expect(page.locator('.loading.compact').first()).toBeVisible();
   expect(await original.evaluate(element => element.isConnected)).toBe(true);
   await expect(control).toHaveValue(option);
 }
@@ -80,7 +80,7 @@ for (const profile of profiles) {
     const input = page.getByPlaceholder('Search notifications by keyword, reference, order…');
     try {
       await input.fill('matching');
-      await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toBeVisible();
+      await expect(page.locator('.loading.compact')).toBeVisible();
       await expect(page.getByRole('heading', { name: 'Existing notice' })).toBeVisible();
       await expect(input).toBeFocused();
       release?.();
@@ -111,7 +111,7 @@ for (const profile of [undefined, ...profiles.filter(profile => !profile.is_staf
       await expect(page).toHaveURL(/ordering=price/);
       await expect(page.getByRole('heading', { name: 'No finds just yet' })).toBeVisible();
       release?.();
-      await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toHaveCount(0);
+      await expect(page.locator('.loading.compact')).toHaveCount(0);
       await page.goBack();
       await expect(page.getByRole('combobox', { name: 'Sort products' })).toHaveValue('-created');
       expect(navigations).toBe(0);
@@ -135,7 +135,7 @@ for (const profile of profiles.filter(profile => profile.is_staff)) {
     try {
       await assertStableControl(page, 'users: Role', 'staff');
       release?.();
-      await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toHaveCount(0);
+      await expect(page.locator('.loading.compact')).toHaveCount(0);
     } finally {
       release?.();
     }
@@ -157,7 +157,7 @@ for (const profile of profiles.filter(profile => !['shopper', 'buyer'].includes(
     try {
       await assertStableControl(page, 'Sort products', 'created');
       release?.();
-      await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toHaveCount(0);
+      await expect(page.locator('.loading.compact')).toHaveCount(0);
     } finally {
       release?.();
     }
@@ -185,7 +185,7 @@ for (const profile of profiles.filter(profile => profile.is_staff)) {
       await assertStableControl(page, 'Filter orders by status', 'shipped');
       await expect(page.getByRole('heading', { name: 'Test Customer', exact: true })).toBeVisible();
       release?.();
-      await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toHaveCount(0);
+      await expect(page.locator('.loading.compact')).toHaveCount(0);
     } finally {
       release?.();
     }
@@ -211,7 +211,7 @@ for (const profile of profiles) {
     await expect(control).toBeVisible({ timeout: 30000 });
     await expect(page.locator('main .loading, main [aria-label="Loading products"]')).toHaveCount(0, { timeout: 30000 });
     await expect(page.getByRole('heading', { name: 'Something interrupted your visit' })).toHaveCount(0);
-    await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toHaveCount(0);
+    await expect(page.locator('.loading.compact')).toHaveCount(0);
     let release: (() => void) | undefined;
     const pending = new Promise<void>(resolve => { release = resolve; });
     await page.route('**/api/**', async route => {
@@ -229,7 +229,7 @@ for (const profile of profiles) {
     try {
       await assertStableControl(page, label, option);
       release?.();
-      await expect(page.getByRole('status').filter({ hasText: 'Updating results…' })).toHaveCount(0);
+      await expect(page.locator('.loading.compact')).toHaveCount(0);
       await expect(control).toHaveValue(option);
       expect(documentRequests).toBe(0);
       await expect(page.getByRole('heading', { name: 'Something interrupted your visit' })).toHaveCount(0);

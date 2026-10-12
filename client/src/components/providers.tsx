@@ -201,17 +201,9 @@ function ShopProvider({ children }: { children: ReactNode }) {
     if (user && product.is_own_store) {
       throw new Error('You cannot buy products from any store you own.');
     }
-    if (!product.selected_variant && product.variants?.length) {
-      const option = product.variants[0];
-      product = {
-        ...product,
-        sale_price: String(Number(product.sale_price) + Number(option.price_delta || 0)),
-        available: Math.min(product.available, option.available ?? product.available),
-      };
-    }
     product = {
       ...product,
-      selected_variant: product.selected_variant || product.variants?.[0]?.name || '',
+      selected_variant: product.selected_variant || '',
     };
     if (pendingAdds.current.has(product.id)) return;
     if (!Number.isSafeInteger(quantity) || quantity < 1) {

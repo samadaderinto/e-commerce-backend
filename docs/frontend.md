@@ -82,11 +82,15 @@ Frontend configuration:
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Public Google OAuth client ID used by Google Identity Services |
 | `NEXT_PUBLIC_APPLE_CLIENT_ID` | Public Apple Services ID used by Sign in with Apple JS |
 
+For Docker builds, these `NEXT_PUBLIC_*` values are embedded into the browser
+bundle at build time. Rebuild the client after changing either value; changing
+only the running container environment does not update the sign-in buttons.
+
 ## Social Authentication (Google & Apple)
 
 Customers can sign in or register with one click using Google or Apple:
 - **UI Components**: Rendered on `/login` and `/register` above an `or with email` divider.
-- **Provider SDKs**: Google Identity Services and Sign in with Apple JS are loaded on demand from the browser. The frontend sends only provider identity tokens through the same-origin `/api/auth/google` or `/api/auth/apple` proxy.
+- **Provider SDKs**: Google Identity Services renders its official sign-in button so users can explicitly choose a Google account even when One Tap is skipped. Sign in with Apple JS is loaded on demand. The frontend sends only provider identity tokens through the same-origin `/api/auth/google` or `/api/auth/apple` proxy.
 - **Dual-Theme Contrast**: Buttons support Light and Dark themes (`data-theme='light'` / `data-theme='dark'`) via semantic CSS variables (`var(--paper)`, `var(--ink)`, `var(--line)`, `var(--soft)`). The Google icon uses official 4-color SVG paths; the Apple icon uses `fill: currentColor` ensuring maximum WCAG AA/AAA visual contrast.
 - **Security Guardrail**: Administrative and staff members are blocked with an explicit error alert if they attempt social sign-in.
 - **Affiliate Referral Preservation**: Referral codes (`?ref=CODE`) are captured on arrival, preserved in `sessionStorage` across auth page transitions, and forwarded to the backend on social signup, immediately rewarding the referring marketer.
@@ -238,7 +242,7 @@ Time handling: Django stores timezone-aware UTC instants (`TIME_ZONE=UTC`, `USE_
 
 Military postal delivery: APO/FPO/DPO destinations use USPS only with the currently supported integrations. Checkout disables other carrier options and the server rejects unsupported carriers in both demo and live rating and payment flows. Address city/state/ZIP must agree: AA uses 340xx, AE uses 090xx–098xx, AP uses 962xx–966xx, with country United States. This is a supported-service policy, not a claim that all commercial postal handoff services are prohibited: UPS Ground Saver and Mail Innovations have military-address support but are not integrated here. See [USPS military addressing standards](https://pe.usps.com/text/dmm300/703.htm) and [UPS supported services](https://www.ups.com/us/en/support/shipping-support/print-shipping-labels/how-to-write-address). ZIP blocks alone do not guarantee an active destination or eligibility for every USPS service; live carrier availability and military mail content/customs requirements still apply.
 
-Cart mutations submit a `variant` option name alongside product and quantity, and rendered cart products expose `selected_variant`. Distinct options have separate cart rows. CSV imports limit files to 2 MB / 500 rows, reject ambiguous numeric price formats and show failed row numbers. The same-origin proxy deduplicates refresh calls, preserves sessions during upstream outages and sets access-cookie lifetime from the upstream JWT expiry. See [audit remediation](security-audit-remediation.md) for verification and operational boundaries.
+Cart mutations submit an optional `variant` option name alongside product and quantity, and rendered cart products expose `selected_variant`. Every product with options also shows a selectable **Original edition** choice that uses the main price, stock, image, and digital asset; distinct options have separate cart rows. CSV imports limit files to 2 MB / 500 rows, reject ambiguous numeric price formats and show failed row numbers. The same-origin proxy deduplicates refresh calls, preserves sessions during upstream outages and sets access-cookie lifetime from the upstream JWT expiry. See [audit remediation](security-audit-remediation.md) for verification and operational boundaries.
 
 ## ClickBank Partner Storefront & Editor Experience
 
@@ -267,6 +271,8 @@ Store profile pages (`/shop?store=<id>`) list only that store’s products. Filt
 The catalog supports 29 departments shared by homepage category tiles, shop/store filters, and merchant product forms: Electronics, Fashion, Phones, Computing, Sports & outdoors, Books, Toys & games, Kids & baby, Home & living, Kitchen & dining, Beauty & personal care, Health & wellness, Pet supplies, Gaming, Tablets, Fishing, Lingerie & sleepwear, Coffee, tea & drinks, Garden & tools, Automotive, Jewelry & watches, Software & apps, Courses & learning, Templates & planners, Design assets, Photos & video, Music & audio, Business resources, Digital tools & presets. New department keys are validated by Django product choices; apply product migrations before using them. Existing product category keys are preserved.
 
 Backoffice user profiles use a compact identity card with contact and activity details, three financial summary cards, and bordered wallet, activity, and order panels. The layout stacks on smaller screens and respects the active theme.
+
+Every digital product can have an uploaded downloadable file per variant. Merchants declare each option as Image, Audio, Video, or Document/software before upload; the server enforces that the file matches the declared option type. Digital-artwork gallery uploads and image variants are converted into watermarked carousel previews, while original downloads remain private until an authorized purchase. Completed orders use the file mapped to the option purchased.
 
 Dates across customer, merchant, and backoffice records use the shared `DateStamp` component: an unambiguous date (e.g. `10 Oct 2026`) and local 24-hour time without seconds. Table timestamps have separate columns, including Created, Updated, Last active, Requested, Processed, Valid from, and Valid to where applicable. Date fields are never stacked together or joined with slashes in a table cell. Tables scroll horizontally on narrow screens; profile activity uses aligned label/value rows. API timestamps and calendar-input timezone handling remain unchanged.
 
@@ -300,6 +306,8 @@ Customer order tracking reflects backend Pending, Confirmed, Shipped, Delivered,
 
 Customer payment labels derive Paid, Awaiting payment, Partial payment, and refund outcomes from authoritative `paid_total`, `refunded_total`, and `total` amounts, rather than labelling every order as paid.
 
+Collection refreshes use the shared compact spinner across storefront search, seller workspaces, backoffice listings, store management, and notifications. The spinner preserves the existing results and controls while data is fetching, and announces “Updating results” to assistive technology without showing that text in the interface.
+
 The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts the invite code visibly in an optional field. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped) and `/api/v1/admin/affiliates/` (backoffice-only).
 
 Digital product onboarding & variant enhancements:
@@ -309,3 +317,5 @@ Digital product onboarding & variant enhancements:
 
 
 Product-page interaction hooks, including share-link feedback state, are initialized before loading/error returns. This keeps hook order stable when asynchronous catalog data arrives and prevents the product page from crashing during guest browsing and checkout.
+
+The backoffice overview shows pending merchant payouts, recent requests with detail dialogs, and the affiliate/referral board directly below the summary cards. Payout details remain available for pending, completed, and rejected requests. Authorized staff, business administrators, and technical administrators can inspect, complete, or decline pending requests from the list or details dialog. Account and routing numbers show only their first two and last two characters; legacy last-four-only values show only their final two characters. Approval initiates a Stripe Connect transfer. Bank transfers are sent outside the app and must be confirmed before marking the request completed.

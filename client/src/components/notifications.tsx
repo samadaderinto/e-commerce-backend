@@ -346,9 +346,7 @@ export function NotificationsPage() {
 
         {/* List Content */}
         <div className="notifications-main">
-          {notificationsQuery.isFetching && !notificationsQuery.isLoading && (
-            <p role="status" aria-live="polite">Updating results…</p>
-          )}
+          {notificationsQuery.isFetching && !notificationsQuery.isLoading && <Loading compact />}
           {notificationsQuery.isLoading ? (
             <Loading />
           ) : notificationsQuery.error ? (

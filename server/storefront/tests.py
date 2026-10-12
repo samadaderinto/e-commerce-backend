@@ -145,6 +145,25 @@ class StorefrontTests(TestCase):
         self.product.refresh_from_db()
         self.assertEqual(self.product.variants[1]['available'], 3)
 
+    def test_default_product_remains_purchasable_with_variants(self) -> None:
+        self.product.price = Decimal('20')
+        self.product.discount = 0
+        self.product.variants = [
+            {'name': 'Premium edition', 'available': 2, 'price_delta': '5'},
+        ]
+        self.product.save()
+
+        response = self.client.post(
+            '/api/v1/cart/',
+            {'product': self.product.pk, 'variant': '', 'quantity': 1},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['subtotal'], '20.00')
+        item = CartItem.objects.get(product=self.product)
+        self.assertEqual(item.variant, '')
+
     def test_cancelled_digital_orders_cannot_download(self) -> None:
         self.product.is_digital = True
         self.product.digital_file_url = 'digital_products/book.pdf'
@@ -1082,6 +1101,16 @@ class StorefrontTests(TestCase):
         self.assertEqual(len(resp.data['variants']), 2)
         self.assertEqual(resp.data['variants'][1]['name'], 'Size: Large')
         self.assertIsNotNone(resp.data['flash_sale_end'])
+
+    def test_catalog_serializes_digital_preview_watermark(self):
+        self.product.is_digital = True
+        self.product.digital_preview_watermark = True
+        self.product.save(update_fields=['is_digital', 'digital_preview_watermark'])
+
+        response = self.client.get(f'/api/v1/products/{self.product.pk}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['digital_preview_watermark'])
 
 
     def test_digital_receipt_omits_address_and_missing_phone(self) -> None:

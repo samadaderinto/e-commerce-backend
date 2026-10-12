@@ -9,9 +9,13 @@ RUN --mount=type=cache,target=/root/.npm \
 FROM node:22-alpine AS builder
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
+ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID
+ARG NEXT_PUBLIC_APPLE_CLIENT_ID
 ENV NEXT_TELEMETRY_DISABLED=1 \
     DOCKER_BUILD=true \
-    NODE_ENV=production
+    NODE_ENV=production \
+    NEXT_PUBLIC_GOOGLE_CLIENT_ID=$NEXT_PUBLIC_GOOGLE_CLIENT_ID \
+    NEXT_PUBLIC_APPLE_CLIENT_ID=$NEXT_PUBLIC_APPLE_CLIENT_ID
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
 COPY client/package.json client/tsconfig.json client/next.config.ts ./client/

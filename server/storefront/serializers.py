@@ -223,6 +223,7 @@ class CatalogSerializer(serializers.ModelSerializer):
             'width',
             'height',
             'is_digital',
+            'digital_preview_watermark',
             'specifications',
             'updated',
             'product_type',

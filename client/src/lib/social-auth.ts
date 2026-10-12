@@ -1,15 +1,11 @@
-export type SocialProvider = 'google' | 'apple';
+export type SocialCredential = {
+  credential: string;
+  user?: AppleAuthResponse['user'];
+};
 
 type GoogleCredentialResponse = {
   credential?: string;
   select_by?: string;
-};
-
-type GooglePromptMomentNotification = {
-  isNotDisplayed: () => boolean;
-  isSkippedMoment: () => boolean;
-  getNotDisplayedReason?: () => string;
-  getSkippedReason?: () => string;
 };
 
 type GoogleIdApi = {
@@ -19,7 +15,18 @@ type GoogleIdApi = {
     auto_select?: boolean;
     cancel_on_tap_outside?: boolean;
   }) => void;
-  prompt: (callback?: (notification: GooglePromptMomentNotification) => void) => void;
+  renderButton: (
+    parent: HTMLElement,
+    options: {
+      type: 'standard';
+      theme: 'outline';
+      size: 'large';
+      text: 'signin_with' | 'signup_with';
+      shape: 'rectangular';
+      logo_alignment: 'left';
+      width: number;
+    }
+  ) => void;
 };
 
 type AppleAuthResponse = {
@@ -87,7 +94,12 @@ export function loadSocialScript(src: string, id: string): Promise<void> {
   return promise;
 }
 
-export async function getGoogleCredential(): Promise<{ credential: string }> {
+export async function renderGoogleSignInButton(
+  target: HTMLElement,
+  text: 'signin_with' | 'signup_with',
+  onCredential: (credential: string) => void,
+  onError: (error: Error) => void,
+): Promise<void> {
   const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID?.trim();
   if (!clientId) {
     throw new Error('Google sign-in is not configured yet.');
@@ -99,48 +111,32 @@ export async function getGoogleCredential(): Promise<{ credential: string }> {
     throw new Error('Google sign-in is unavailable right now.');
   }
 
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const fail = (message: string) => {
-      if (settled) return;
-      settled = true;
-      reject(new Error(message));
-    };
-
-    const timeout = window.setTimeout(() => {
-      fail('Google sign-in timed out. Please try again.');
-    }, 60000);
-
-    idApi.initialize({
-      client_id: clientId,
-      auto_select: false,
-      cancel_on_tap_outside: true,
-      callback: (response) => {
-        if (settled) return;
-        window.clearTimeout(timeout);
-        if (!response.credential) {
-          fail('Google did not return a sign-in credential.');
-          return;
-        }
-        settled = true;
-        resolve({ credential: response.credential });
-      },
-    });
-
-    idApi.prompt((notification) => {
-      if (settled) return;
-      if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-        window.clearTimeout(timeout);
-        fail('Google sign-in was not completed. Please try again or sign in with your email.');
+  idApi.initialize({
+    client_id: clientId,
+    auto_select: false,
+    cancel_on_tap_outside: true,
+    callback: (response) => {
+      if (response.credential) {
+        onCredential(response.credential);
+      } else {
+        onError(new Error('Google did not return a sign-in credential.'));
       }
-    });
+    },
+  });
+
+  target.replaceChildren();
+  idApi.renderButton(target, {
+    type: 'standard',
+    theme: 'outline',
+    size: 'large',
+    text,
+    shape: 'rectangular',
+    logo_alignment: 'left',
+    width: Math.max(200, Math.round(target.getBoundingClientRect().width)),
   });
 }
 
-export async function getAppleCredential(): Promise<{
-  credential: string;
-  user?: AppleAuthResponse['user'];
-}> {
+export async function getAppleCredential(): Promise<SocialCredential> {
   const clientId = process.env.NEXT_PUBLIC_APPLE_CLIENT_ID?.trim();
   if (!clientId) {
     throw new Error('Apple sign-in is not configured yet.');
@@ -173,11 +169,4 @@ export async function getAppleCredential(): Promise<{
     credential,
     user: response.user,
   };
-}
-
-export async function getSocialCredential(provider: SocialProvider): Promise<{
-  credential: string;
-  user?: AppleAuthResponse['user'];
-}> {
-  return provider === 'google' ? getGoogleCredential() : getAppleCredential();
 }

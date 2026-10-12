@@ -93,7 +93,9 @@ Open <http://127.0.0.1:3000>. The client defaults to
 `http://127.0.0.1:8000/api/v1`; override `API_URL` in `client/.env` when needed.
 Set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` / `NEXT_PUBLIC_APPLE_CLIENT_ID` in
 `client/.env` and matching `GOOGLE_CLIENT_ID` / `APPLE_CLIENT_ID` values in
-`server/.env` to enable real Google and Apple customer sign-in.
+`server/.env` to enable real Google and Apple customer sign-in. Rebuild the
+client container after changing either `NEXT_PUBLIC_*` value because Next.js
+embeds them into the browser bundle at build time.
 Customer email verification and password-reset links print to the API terminal with the local console email backend. Staff credential issuance requires a private email backend such as Resend or SMTP.
 Set `FRONTEND_URL=http://127.0.0.1:3000` to keep email links on that exact host.
 
@@ -215,7 +217,7 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 
 - Storefront with product photography, categories, deals, and Elasticsearch fuzzy search.
 - Search, category/price filters, sorting, and pagination.
-- **Product Variants**: Selectable size, color, and material options with real-time price delta and inventory updates.
+- **Product Variants**: The base product remains a selectable **Original edition**, with opt-in size, color, material, and digital-format options that apply their own price delta and inventory updates.
 - **Verified Reviews & Photos**: In-place review submission and 1–3 photo uploads exclusively for verified product purchasers, with real-time rating updates and photo gallery lightbox.
 - **Flash Deals & Live Countdowns**: Urgency badges and real-time countdown clocks on limited-time discounts.
 - **Store Profiles & Announcements**: Dedicated merchant showcase pages with marquee announcements, pinned items, and direct "Message Store" contact actions.
@@ -223,7 +225,7 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 - **ClickBank Affiliate & Partner Offers**: Seamless integration of external ClickBank partner products coexisting alongside native marketplace listings. Features partner badges, custom CTA labels ("Buy on Partner Site"), and transparent partner fulfillment notes. Secure outbound routing via `/api/affiliates/clickbank/outbound/<id>` attaches tracking tokens (`tid=cb_*`) and logs outbound clicks while blocking local cart checkout.
 - Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
 - Email-verified registration, sign-in, password reset, and session management.
-- **Google & Apple Social Authentication**: One-click customer registration and sign-in with Google or Apple identity tokens, dual-theme WCAG high-contrast buttons, strict security guardrails (administrative and staff accounts cannot sign in via social providers), and seamless affiliate referral synchronization awarding \$25 promotional store credit to referring marketers on new customer social signups.
+- **Google & Apple Social Authentication**: Customer registration and sign-in with Google or Apple identity tokens. Google Identity Services renders its official account-selection button, with dual-theme Apple styling, strict staff/admin sign-in guardrails, and affiliate referral synchronization awarding \$25 promotional store credit to referring marketers on new customer social signups.
 - **Product Sharing & Instant Link Copy**: One-click Share button integrated into product purchase actions, rating header, and operator/merchant preview banners. Supports native Web Share API with clipboard copy fallback, dynamic "Copied!" feedback, and toast notifications across both public product pages and draft preview modes.
 - Profile, personal avatars with circular 512x512 crop dialog, delivery addresses, order history, and detailed order pages.
 - **User Avatar & Photo Management**: Profile picture upload with client-side circular crop tool (`UserAvatarCropDialog`), 512x512 server validation, MinIO media persistence, managed centrally in Personal details (`/account/profile`) with instant reflection across customer account, merchant workspaces, and backoffice staff tables.
@@ -399,6 +401,8 @@ The catalog supports 29 departments shared by homepage category tiles, shop/stor
 
 Backoffice user profiles use a compact identity card with contact and activity details, three financial summary cards, and bordered wallet, activity, and order panels. The layout stacks on smaller screens and respects the active theme.
 
+Every digital product can have an uploaded downloadable file per variant. Merchants declare each option as Image, Audio, Video, or Document/software before upload; the server enforces that the file matches the declared option type. Digital-artwork gallery uploads and image variants are converted into watermarked carousel previews, while original downloads remain private until an authorized purchase. Completed orders use the file mapped to the option purchased.
+
 Dates across customer, merchant, and backoffice records use the shared `DateStamp` component: an unambiguous date (e.g. `10 Oct 2026`) and local 24-hour time without seconds. Table timestamps have separate columns, including Created, Updated, Last active, Requested, Processed, Valid from, and Valid to where applicable. Date fields are never stacked together or joined with slashes in a table cell. Tables scroll horizontally on narrow screens; profile activity uses aligned label/value rows. API timestamps and calendar-input timezone handling remain unchanged.
 
 Backoffice user-profile order history supports debounced reference/coupon/carrier/tracking search, status (including pickup), courier, payment method, sorting, reset, and 15-row server pagination. Profile order totals and lifetime spend remain independent of order filters.
@@ -474,4 +478,8 @@ The API runs two Gunicorn processes with 32 request threads each by default. Asy
 
 Product-page interaction hooks, including share-link feedback state, are initialized before loading/error returns. This keeps hook order stable when asynchronous catalog data arrives and prevents the product page from crashing during guest browsing and checkout.
 
+Collection refetches retain visible results and controls while a compact, accessible spinner indicates that fresh data is loading in shopper search, seller, store, backoffice, and notification listings.
+
 Elasticsearch search reuses one thread-safe client and its persistent connection pool per process instead of creating a client for every request. Forked workers reset the inherited client and lock; configuration changes replace the local pool. Search still queries Elasticsearch for current IDs/counts and retains the existing database fallback. This is connection reuse, not caching search results or an ASGI migration. See [the official Python client's connection/thread guarantees](https://github.com/elastic/elasticsearch-py).
+
+The backoffice overview shows pending merchant payouts, recent requests with detail dialogs, and the affiliate/referral board directly below the summary cards. Payout details remain available for pending, completed, and rejected requests. Authorized staff, business administrators, and technical administrators can inspect, complete, or decline pending requests from the list or details dialog. Account and routing numbers show only their first two and last two characters; legacy last-four-only values show only their final two characters. Approval initiates a Stripe Connect transfer. Bank transfers are sent outside the app and must be confirmed before marking the request completed.

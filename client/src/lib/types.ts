@@ -33,6 +33,8 @@ export type ProductVariant = {
   price?: string;
   price_delta?: string;
   image_url?: string;
+  digital_file_url?: string;
+  digital_file_type?: 'image' | 'audio' | 'video' | 'document';
   available?: number;
 };
 

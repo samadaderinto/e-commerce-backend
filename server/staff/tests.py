@@ -26,6 +26,34 @@ class StaffAdministrationTests(TestCase):
         )
         self.client = APIClient()
 
+    def test_staff_can_complete_and_decline_pending_payouts(self) -> None:
+        from store.models import Store, StorePayout
+
+        seller = User.objects.create_user(email='payout-owner@test.com', password='Test-password-123!')
+        store = Store.objects.create(user=seller, name='Payout store')
+        self.client.force_authenticate(self.staff)
+        for action, expected in [('approve', 'completed'), ('reject', 'rejected')]:
+            payout = StorePayout.objects.create(store=store, amount='25.00', reference=f'STAFF-{action}')
+            response = self.client.post(
+                f'/staffs/payouts/{payout.pk}/process/',
+                {'action': action, 'reason': 'Destination could not be verified'},
+                format='json',
+            )
+            self.assertEqual(response.status_code, 200, response.data)
+            payout.refresh_from_db()
+            self.assertEqual(payout.status, expected)
+            self.assertEqual(payout.processed_by_id, self.staff.pk)
+            repeated = self.client.post(
+                f'/staffs/payouts/{payout.pk}/process/', {'action': action}, format='json',
+            )
+            self.assertEqual(repeated.status_code, 400)
+
+    def test_customer_cannot_process_payout(self) -> None:
+        customer = User.objects.create_user(email='payout-customer@test.com', password='Test-password-123!')
+        self.client.force_authenticate(customer)
+        response = self.client.post('/staffs/payouts/1/process/', {'action': 'approve'}, format='json')
+        self.assertEqual(response.status_code, 403)
+
     def test_user_detail_serializes_notification_timestamp(self) -> None:
         from django.contrib.contenttypes.models import ContentType
         from notification.models import Notification

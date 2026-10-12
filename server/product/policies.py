@@ -32,10 +32,12 @@ def validate_purchase(product: Any, user: Any) -> None:
 
 
 def selected_variant(product: Any, name: str = '') -> dict[str, Any] | None:
-    if not product.variants:
-        if name:
-            raise ValidationError({'variant': 'This product has no variant options.'})
+    if not name:
+        # The main listing is always purchasable. Variants are opt-in
+        # alternatives rather than a required replacement for the product.
         return None
+    if not product.variants:
+        raise ValidationError({'variant': 'This product has no variant options.'})
     variant = next((row for row in product.variants if row.get('name') == name), None)
     if variant is None:
         raise ValidationError({'variant': 'Select an available product option.'})

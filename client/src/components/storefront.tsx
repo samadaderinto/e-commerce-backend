@@ -715,9 +715,7 @@ export function ShopPage() {
               </select>
             </label>
           </div>
-          {products.isFetching && !products.isLoading && (
-            <p role="status" aria-live="polite">Updating results…</p>
-          )}
+          {products.isFetching && !products.isLoading && <Loading compact />}
           {products.isLoading ? (
             <Loading cards />
           ) : products.error ? (
@@ -765,7 +763,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState("details");
   const [reviewBusy, setReviewBusy] = useState(false);
-  const [selectedVariantIdx, setSelectedVariantIdx] = useState<number>(0);
+  const [selectedVariantIdx, setSelectedVariantIdx] = useState<number | null>(null);
   const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
 
@@ -792,7 +790,9 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
   const product = productQuery.data!;
   const isAffiliate = product.product_type === "affiliate_clickbank";
   const isSoldOut = !product.is_digital && !isAffiliate && (product.available <= 0 || product.label === "sold out");
-  const activeVariant = product.variants && product.variants.length > 0 ? product.variants[selectedVariantIdx] : null;
+  const activeVariant = selectedVariantIdx !== null && product.variants && product.variants.length > 0
+    ? product.variants[selectedVariantIdx]
+    : null;
   const variantStock = activeVariant && typeof activeVariant.available === "number"
     ? Math.min(product.available, activeVariant.available)
     : product.available;
@@ -1038,9 +1038,31 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
           {product.variants && product.variants.length > 0 && (
             <div className="product-variants" style={{ margin: "16px 0" }}>
               <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--ink)", display: "block", marginBottom: "8px" }}>
-                Option: <strong style={{ color: "var(--green)" }}>{activeVariant?.name || "Select"}</strong>
+                Option: <strong style={{ color: "var(--green)" }}>{activeVariant?.name || "Original edition"}</strong>
               </span>
               <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  aria-pressed={selectedVariantIdx === null}
+                  onClick={() => {
+                    setSelectedVariantIdx(null);
+                    setSelectedGalleryImage(product.image);
+                    setQuantity(1);
+                  }}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "8px",
+                    border: selectedVariantIdx === null ? "2px solid var(--green)" : "1px solid var(--line)",
+                    background: selectedVariantIdx === null ? "var(--green-light)" : "var(--paper)",
+                    color: selectedVariantIdx === null ? "var(--green)" : "var(--ink)",
+                    fontWeight: selectedVariantIdx === null ? 600 : 500,
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  Original edition
+                </button>
                 {product.variants.map((variant, idx) => {
                   const isSelected = selectedVariantIdx === idx;
                   return (

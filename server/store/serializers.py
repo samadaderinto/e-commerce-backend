@@ -19,6 +19,7 @@ from store.models import (
 
 from store.services import calculate_store_tier
 from utils.functions import normalize_media_url
+from utils.digital_previews import is_image_digital_asset
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -185,6 +186,10 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             if 'available' in row:
                 row['available'] = serializers.IntegerField(min_value=0, max_value=1000000).run_validation(row['available'])
             row['price_delta'] = str(serializers.DecimalField(max_digits=12, decimal_places=2).run_validation(row.get('price_delta') or '0'))
+            if 'digital_file_type' in row:
+                row['digital_file_type'] = serializers.ChoiceField(
+                    choices=['image', 'audio', 'video', 'document'],
+                ).run_validation(row['digital_file_type'])
         return value
 
     def validate_image_url(self, value: str) -> str:
@@ -276,9 +281,7 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     'digital_file_url': 'Add a download URL for a digital product.',
                 })
-            image_exts = ('.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.avif', '.bmp', '.tiff')
-            clean_path = (file_url or '').split('?')[0].split('#')[0].lower()
-            is_image_asset = clean_path.endswith(image_exts)
+            is_image_asset = is_image_digital_asset(file_url)
             if not is_image_asset:
                 attrs['digital_preview_watermark'] = False
             elif 'digital_preview_watermark' not in attrs and not getattr(self.instance, 'digital_preview_watermark', False):

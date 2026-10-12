@@ -173,11 +173,44 @@ function ActionDialog({
   );
 }
 
+function payoutAccountField(key: string, value: unknown): [string, string] {
+  const text = String(value);
+  if (/last_?4$/i.test(key)) {
+    return [key.replace(/_?last_?4$/i, '').replaceAll('_', ' '), `********${text.slice(-2)}`];
+  }
+  if (/account_number|routing_number|iban/i.test(key)) {
+    const compact = text.replace(/\s/g, '');
+    return [key.replaceAll('_', ' '), compact.length > 4
+      ? `${compact.slice(0, 2)}${'*'.repeat(compact.length - 4)}${compact.slice(-2)}`
+      : '*'.repeat(compact.length)];
+  }
+  return [key.replaceAll('_', ' '), text];
+}
+
+function payoutDetail(payout: StorePayout): DashboardDetail {
+  const rows: [string, string][] = [
+    ['Reference', payout.reference],
+    ['Store', payout.store_name || (payout.store ? `Store #${payout.store}` : 'Merchant wallet')],
+    ['Amount', money(payout.amount)],
+    ['Status', payout.status],
+    ['Method', payout.payout_method.replaceAll('_', ' ')],
+    ['Requested', activityDate(payout.created)],
+  ];
+  if (payout.processed_at) rows.push(['Processed', activityDate(payout.processed_at)]);
+  if (payout.notes) rows.push(['Notes', payout.notes]);
+  for (const [key, value] of Object.entries(payout.account_details || {})) {
+    if (value !== null && value !== undefined && String(value).trim()) {
+      rows.push(payoutAccountField(key, value));
+    }
+  }
+  return { title: `Payout ${payout.reference}`, category: 'Payout', rows };
+}
+
 export function AdminDashboardPage() {
   const { user, sessionLoading, notify } = useShop();
   const [days, setDays] = useState('30');
   const actionDialog = useActionDialog();
-  const [detail, setDetail] = useState<{ title: string; rows: Array<[string, string]> } | null>(null);
+  const [detail, setDetail] = useState<DashboardDetail | null>(null);
   const dashboard = useQuery({
     queryKey: ['admin', 'dashboard', days, user?.id],
     placeholderData: (previousData, previousQuery) =>
@@ -195,6 +228,11 @@ export function AdminDashboardPage() {
     queryFn: () => api<Page<AdminRefund>>('admin/staff/refunds?limit=5'),
     enabled: !!(user?.is_staff || user?.is_superuser || user?.is_business_admin),
   });
+  const payouts = useQuery({
+    queryKey: ['admin', 'payouts', 'overview', user?.id],
+    queryFn: () => api<Page<StorePayout>>('admin/staff/payouts?limit=5'),
+    enabled: Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin),
+  });
   const client = useQueryClient();
 
   async function refreshOperations() {
@@ -203,6 +241,7 @@ export function AdminDashboardPage() {
       client.invalidateQueries({ queryKey: ['admin', 'coupons'] }),
       client.invalidateQueries({ queryKey: ['admin', 'refunds'] }),
       client.invalidateQueries({ queryKey: ['admin', 'orders'] }),
+      client.invalidateQueries({ queryKey: ['admin', 'payouts'] }),
     ]);
   }
 
@@ -278,9 +317,7 @@ export function AdminDashboardPage() {
         </select>
       </div>
 
-      {dashboard.isFetching && !dashboard.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {dashboard.isFetching && !dashboard.isLoading && <Loading compact />}
 
       {dashboard.isLoading ? (
         <Loading />
@@ -348,6 +385,11 @@ export function AdminDashboardPage() {
               <strong>{data.pending_actions.withdrawals + data.pending_actions.refunds}</strong>
               <small>{data.pending_actions.withdrawals} withdrawals · {data.pending_actions.refunds} refunds/disputes</small>
             </div>
+            <Link href="/admin/payouts?status=pending" className="stat-item stat-0">
+              <div><span>Pending Payouts</span><Landmark size={19} /></div>
+              <strong>{data.pending_actions.withdrawals}</strong>
+              <small>Review merchant withdrawal requests</small>
+            </Link>
             <div className="stat-item stat-3">
               <div>
                 <span>Store Growth</span>
@@ -357,6 +399,53 @@ export function AdminDashboardPage() {
               <small>{data.stores.new_last_30_days} new stores in the last 30 days</small>
             </div>
           </div>
+
+          <section className="analytics-panel" style={{ marginTop: '2rem' }}>
+            <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <h2>Affiliate & referral promotions</h2>
+                <p>Customer acquisition invites, enrolled marketers, and wallet rewards.</p>
+              </div>
+              <Link href="/admin/affiliates" className="button secondary">
+                View affiliates & referrals &rarr;
+              </Link>
+            </div>
+            <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginTop: '1rem' }}>
+              <div className="stat-item stat-0">
+                <div>
+                  <span>Total Referrals</span>
+                  <UserRound size={19} />
+                </div>
+                <strong>{data.referrals?.total ?? 0}</strong>
+                <small>Referred customer signups</small>
+              </div>
+              <div className="stat-item stat-1">
+                <div>
+                  <span>Rewarded Signups</span>
+                  <Check size={19} />
+                </div>
+                <strong>{data.referrals?.rewarded ?? 0}</strong>
+                <small>{data.referrals?.pending ?? 0} signups pending</small>
+              </div>
+              <div className="stat-item stat-2">
+                <div>
+                  <span>Promotional Credit Awarded</span>
+                  <DollarSign size={19} />
+                </div>
+                <strong>{money(data.referrals?.rewarded_amount ?? '0')}</strong>
+                <small>Store credit in wallets</small>
+              </div>
+              <div className="stat-item stat-3">
+                <div>
+                  <span>Enrolled Affiliates</span>
+                  <Share2 size={19} />
+                </div>
+                <strong>{data.marketers?.total ?? 0}</strong>
+                <small>Active program marketers</small>
+              </div>
+            </div>
+          </section>
+
 
           <div className="dashboard-columns" style={{ marginTop: '2rem' }}>
             <section className="analytics-panel">
@@ -418,6 +507,43 @@ export function AdminDashboardPage() {
               </div>
             </section>
           </div>
+
+          <section className="analytics-panel" style={{ marginTop: '2rem' }}>
+            <div className="section-heading">
+              <div>
+                <h2>Merchant payouts</h2>
+                <p>{data.pending_actions.withdrawals} requests awaiting backoffice review</p>
+              </div>
+              <Link href="/admin/payouts" className="button secondary">View all payouts <ArrowRight size={16} /></Link>
+            </div>
+            {payouts.isLoading ? <Loading compact /> : payouts.error ? (
+              <ErrorState error={payouts.error} retry={() => payouts.refetch()} />
+            ) : !payouts.data?.results.length ? (
+              <p className="muted">No merchant payout requests yet.</p>
+            ) : (
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th>Reference</th><th>Store</th><th>Amount</th><th>Status</th><th>Requested</th><th>Action</th></tr></thead>
+                  <tbody>
+                    {payouts.data.results.map(payout => (
+                      <tr key={payout.id}>
+                        <td>{payout.reference}</td>
+                        <td>{payout.store_name || 'Merchant wallet'}</td>
+                        <td>{money(payout.amount)}</td>
+                        <td><Status value={payout.status} /></td>
+                        <td><DateStamp value={payout.created} dateOnly /></td>
+                        <td>
+                          <button type="button" className="button secondary" onClick={() => setDetail(payoutDetail(payout))}>
+                            Details
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
 
           <section className="merchant-section" style={{ marginTop: '2.5rem' }}>
             <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -558,9 +684,7 @@ export function AdminDashboardPage() {
                   <Link href="/admin/coupons" className="button secondary">View all coupons &rarr;</Link>
                 </div>
               </div>
-              {coupons.isFetching && !coupons.isLoading && (
-                <p role="status" aria-live="polite">Updating results…</p>
-              )}
+              {coupons.isFetching && !coupons.isLoading && <Loading compact />}
               {coupons.isLoading ? (
                 <Loading />
               ) : coupons.error ? (
@@ -642,9 +766,7 @@ export function AdminDashboardPage() {
                   </Link>
                 </div>
               </div>
-              {refunds.isFetching && !refunds.isLoading && (
-                <p role="status" aria-live="polite">Updating results…</p>
-              )}
+              {refunds.isFetching && !refunds.isLoading && <Loading compact />}
               {refunds.isLoading ? (
                 <Loading />
               ) : refunds.error ? (
@@ -711,51 +833,6 @@ export function AdminDashboardPage() {
             </section>
           </div>
 
-          <section className="analytics-panel" style={{ marginTop: '2rem' }}>
-            <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <h2>Affiliate & referral promotions</h2>
-                <p>Customer acquisition invites, enrolled marketers, and wallet rewards.</p>
-              </div>
-              <Link href="/admin/affiliates" className="button secondary">
-                View affiliates & referrals &rarr;
-              </Link>
-            </div>
-            <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', marginTop: '1rem' }}>
-              <div className="stat-item stat-0">
-                <div>
-                  <span>Total Referrals</span>
-                  <UserRound size={19} />
-                </div>
-                <strong>{data.referrals?.total ?? 0}</strong>
-                <small>Referred customer signups</small>
-              </div>
-              <div className="stat-item stat-1">
-                <div>
-                  <span>Rewarded Signups</span>
-                  <Check size={19} />
-                </div>
-                <strong>{data.referrals?.rewarded ?? 0}</strong>
-                <small>{data.referrals?.pending ?? 0} signups pending</small>
-              </div>
-              <div className="stat-item stat-2">
-                <div>
-                  <span>Promotional Credit Awarded</span>
-                  <DollarSign size={19} />
-                </div>
-                <strong>{money(data.referrals?.rewarded_amount ?? '0')}</strong>
-                <small>Store credit in wallets</small>
-              </div>
-              <div className="stat-item stat-3">
-                <div>
-                  <span>Enrolled Affiliates</span>
-                  <Share2 size={19} />
-                </div>
-                <strong>{data.marketers?.total ?? 0}</strong>
-                <small>Active program marketers</small>
-              </div>
-            </div>
-          </section>
 
           <DashboardDetailDialog detail={detail} onClose={() => setDetail(null)} />
           {actionDialog.dialog}
@@ -880,9 +957,7 @@ export function AdminUsersPage() {
       {typeof users.data?.count === 'number' && (
         <CollectionCount count={users.data.count} />
       )}
-      {users.isFetching && !users.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {users.isFetching && !users.isLoading && <Loading compact />}
 
       {users.isLoading ? (
         <Loading />
@@ -1056,9 +1131,7 @@ export function AdminUserDetailPage({ id }: { id: string }) {
         All users
       </Link>
 
-      {profile.isFetching && !profile.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {profile.isFetching && !profile.isLoading && <Loading compact />}
 
       <section className="admin-profile-card">
         <div className="admin-profile-identity">
@@ -1376,7 +1449,10 @@ export function AdminUserDetailPage({ id }: { id: string }) {
 export function AdminPayoutsPage() {
   const { user, sessionLoading, notify } = useShop();
   const filters = useCollectionFilters();
+  const [detail, setDetail] = useState<DashboardDetail | null>(null);
   const actionDialog = useActionDialog();
+  const [selectedPayout, setSelectedPayout] = useState<StorePayout | null>(null);
+  const [processing, setProcessing] = useState<boolean>(false);
   const client = useQueryClient();
 
   const payouts = useQuery({
@@ -1391,13 +1467,14 @@ export function AdminPayoutsPage() {
     const reason = await actionDialog.ask({
       title: `${action === 'approve' ? 'Approve' : 'Reject'} Payout #${payout.reference}`,
       message: action === 'approve'
-        ? `Approve payout of ${money(payout.amount)} to store "${payout.store_name || payout.store}"?`
+        ? `${payout.payout_method === 'stripe_connect' ? 'Send a Stripe Connect transfer' : 'Confirm the bank transfer has already been sent'} of ${money(payout.amount)} for ${payout.store_name || 'the merchant wallet'}?`
         : `Provide a reason for declining this payout request.`,
-      confirmLabel: action === 'approve' ? 'Approve payout' : 'Reject payout',
+      confirmLabel: action === 'approve' ? (payout.payout_method === 'stripe_connect' ? 'Approve & transfer' : 'Mark bank transfer completed') : 'Reject payout',
       reasonLabel: action === 'reject' ? 'Reason for rejection' : undefined,
     });
     if (reason === null) return;
 
+    setProcessing(true);
     try {
       await api(`admin/staff/payouts/${payout.id}/process`, 'POST', {
         action,
@@ -1408,6 +1485,8 @@ export function AdminPayoutsPage() {
       await client.invalidateQueries({ queryKey: ['admin', 'dashboard'] });
     } catch (error) {
       notify((error as Error).message, true);
+    } finally {
+      setProcessing(false);
     }
   }
 
@@ -1424,7 +1503,7 @@ export function AdminPayoutsPage() {
         <div>
           <span className="eyebrow green">MERCHANT SETTLEMENTS</span>
           <h1>Merchant Payout Approvals</h1>
-          <p>Review, verify, and disburse store balance withdrawals.</p>
+          <p>Staff and administrators process withdrawals. Stripe Connect transfers run on approval; bank transfers must be sent externally before marking them completed.</p>
         </div>
         <Link className="button secondary" href="/admin">Platform Dashboard</Link>
       </div>
@@ -1438,9 +1517,7 @@ export function AdminPayoutsPage() {
         <CollectionCount count={payouts.data.count} />
       )}
 
-      {payouts.isFetching && !payouts.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {payouts.isFetching && !payouts.isLoading && <Loading compact />}
 
       {payouts.isLoading ? (
         <Loading />
@@ -1480,7 +1557,7 @@ export function AdminPayoutsPage() {
                     <td>
                       <small style={{ fontFamily: 'monospace', fontSize: '11px' }}>
                         {Object.keys(payout.account_details || {}).length > 0
-                          ? Object.entries(payout.account_details).map(([k, v]) => `${k}: ${v}`).join(', ')
+                          ? Object.entries(payout.account_details).map(([key, value]) => payoutAccountField(key, value).join(': ')).join(', ')
                           : 'Default account'}
                       </small>
                     </td>
@@ -1488,22 +1565,35 @@ export function AdminPayoutsPage() {
                     <td><DateStamp value={payout.processed_at} dateOnly /></td>
                     <td><Status value={payout.status} /></td>
                     <td>
+                      <button
+                        type="button"
+                        className="button secondary"
+                        aria-label={`View payout ${payout.reference} details`}
+                        onClick={() => {
+                          setSelectedPayout(payout);
+                          setDetail(payoutDetail(payout));
+                        }}
+                      >
+                        Details
+                      </button>
                       {payout.status === 'pending' && (
-                        Boolean(user && (user.is_superuser || user.is_business_admin)) ? (
+                        Boolean(user && (user.is_staff || user.is_superuser || user.is_business_admin)) ? (
                           <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
                             <button
                               className="button"
                               style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }}
-                              onClick={() => handleProcess(payout, 'approve')}
+                              disabled={processing}
+                              onClick={() => void handleProcess(payout, 'approve')}
                             >
-                              Approve
+                              {payout.payout_method === 'stripe_connect' ? 'Pay out' : 'Mark paid'}
                             </button>
                             <button
                               className="button secondary"
                               style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem', color: 'var(--red, #e11d48)' }}
-                              onClick={() => handleProcess(payout, 'reject')}
+                              disabled={processing}
+                              onClick={() => void handleProcess(payout, 'reject')}
                             >
-                              Reject
+                              Decline
                             </button>
                           </div>
                         ) : (
@@ -1520,6 +1610,26 @@ export function AdminPayoutsPage() {
         </>
       )}
 
+      <DashboardDetailDialog
+        detail={detail}
+        onClose={() => setDetail(null)}
+        actions={selectedPayout?.status === 'pending' ? (
+          <>
+            <button type="button" className="button" disabled={processing} onClick={() => {
+              setDetail(null);
+              void handleProcess(selectedPayout, 'approve');
+            }}>
+              {selectedPayout.payout_method === 'stripe_connect' ? 'Pay out' : 'Mark paid'}
+            </button>
+            <button type="button" className="button secondary" disabled={processing} onClick={() => {
+              setDetail(null);
+              void handleProcess(selectedPayout, 'reject');
+            }}>
+              Decline
+            </button>
+          </>
+        ) : undefined}
+      />
       {actionDialog.dialog}
     </div>
   );
@@ -1579,9 +1689,7 @@ export function AdminStaffPage() {
       {typeof staff.data?.count === 'number' && (
         <CollectionCount count={staff.data.count} />
       )}
-      {staff.isFetching && !staff.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {staff.isFetching && !staff.isLoading && <Loading compact />}
       {staff.isLoading ? (
         <Loading />
       ) : staff.error ? (
@@ -1673,7 +1781,7 @@ export function AdminStaffPage() {
 
 type DashboardDetail = { title: string; category?: string; rows: [string, string][] };
 
-function DashboardDetailDialog({ detail, onClose }: { detail: DashboardDetail | null; onClose: () => void }): React.JSX.Element | null {
+function DashboardDetailDialog({ detail, onClose, actions }: { detail: DashboardDetail | null; onClose: () => void; actions?: React.ReactNode }): React.JSX.Element | null {
   const dialogRef = useDialogFocus(Boolean(detail), onClose);
   if (!detail) return null;
   const category: string = detail.category || (detail.title.startsWith('Coupon ') ? 'Coupon' : detail.title.startsWith('Refund #') ? 'Refund' : detail.title.startsWith('Order #') ? 'Order' : 'Store');
@@ -1700,6 +1808,7 @@ function DashboardDetailDialog({ detail, onClose }: { detail: DashboardDetail | 
           </dl>
         </div>
         <footer className="admin-detail-footer no-print">
+          {actions}
           <button type="button" className="button secondary" onClick={() => window.print()}><Printer size={16} />Print details</button>
           <button type="button" className="button" onClick={onClose}>Done</button>
         </footer>
@@ -1885,9 +1994,7 @@ export function AdminStoresPage() {
         setSearch('');
         setStatusFilter(''); setOrdering('-created'); setOffset(0);
       }}>Reset all filters</button>
-      {stores.isFetching && !stores.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {stores.isFetching && !stores.isLoading && <Loading compact />}
 
       {stores.isLoading ? (
         <Loading />
@@ -2208,9 +2315,7 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
         setSearch('');
         setTypeFilter('all'); setStatusFilter('all'); setAssetFilter('all'); setOrdering('-created'); setOffset(0);
       }}>Reset all filters</button>
-      {products.isFetching && !products.isLoading && (
-          <p role="status" aria-live="polite">Updating results…</p>
-        )}
+      {products.isFetching && !products.isLoading && <Loading compact />}
 
         {products.isLoading ? (
           <Loading />
@@ -2442,9 +2547,7 @@ export function AdminOrdersPage() {
         )}
       </div>
 
-      {orders.isFetching && !orders.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {orders.isFetching && !orders.isLoading && <Loading compact />}
 
       {orders.isLoading ? (
         <Loading />
@@ -2727,9 +2830,7 @@ export function AdminCouponsPage() {
         setSearch('');
         setActiveFilter(''); setOrdering('-created'); setPage(1);
       }}>Reset all filters</button>
-      {coupons.isFetching && !coupons.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {coupons.isFetching && !coupons.isLoading && <Loading compact />}
 
       {coupons.isLoading ? (
         <Loading />
@@ -3024,9 +3125,7 @@ export function AdminRefundsPage() {
         )}
       </div>
 
-      {refunds.isFetching && !refunds.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {refunds.isFetching && !refunds.isLoading && <Loading compact />}
 
       {refunds.isLoading ? (
         <Loading />
@@ -3197,9 +3296,7 @@ export function AdminCommissionPage() {
         </div>
         <Link className="button secondary" href="/admin">Dashboard</Link>
       </div>
-      {wallet.isFetching && !wallet.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {wallet.isFetching && !wallet.isLoading && <Loading compact />}
       {wallet.isLoading ? (
         <Loading />
       ) : wallet.error ? (
@@ -3554,9 +3651,7 @@ export function AdminTaxesPage() {
         )}
       </div>
 
-      {taxes.isFetching && !taxes.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {taxes.isFetching && !taxes.isLoading && <Loading compact />}
 
       {taxes.isLoading ? (
         <Loading />

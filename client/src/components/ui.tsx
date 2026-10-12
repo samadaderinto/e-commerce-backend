@@ -442,7 +442,13 @@ export function ProductGrid({ products }: { products: Product[] }) {
   );
 }
 
-export function Loading({ cards = false }: { cards?: boolean }) {
+export function Loading({
+  cards = false,
+  compact = false,
+}: {
+  cards?: boolean;
+  compact?: boolean;
+}): React.JSX.Element {
   return cards ? (
     <div className="product-grid" aria-label="Loading products">
       {Array.from({ length: 8 }, (_, i) => (
@@ -454,9 +460,9 @@ export function Loading({ cards = false }: { cards?: boolean }) {
       ))}
     </div>
   ) : (
-    <div className="loading" role="status">
+    <div className={compact ? 'loading compact' : 'loading'} role="status">
       <span className="spinner" />
-      Loading…
+      {compact ? <span className="sr-only">Updating results</span> : 'Loading…'}
     </div>
   );
 }
@@ -694,7 +700,7 @@ export function AddToBagButton({
       (row) =>
         row.product.id === product.id &&
         (row.product.selected_variant || "") ===
-          (product.selected_variant || product.variants?.[0]?.name || "")
+          (product.selected_variant || "")
     )?.quantity || 0;
   const committed = current >= quantity;
   const capped = !product.is_digital && current >= product.available;

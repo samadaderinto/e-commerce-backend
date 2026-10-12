@@ -42,6 +42,7 @@ from store.services import (
     get_or_create_merchant_wallet, request_merchant_payout,
 )
 from utils.functions import normalize_media_url
+from utils.digital_previews import is_image_digital_asset
 
 
 class MerchantPagination(LimitOffsetPagination):
@@ -52,6 +53,10 @@ class MerchantPagination(LimitOffsetPagination):
 def invalidate_store_products(store):
     for product in Product.objects.filter(store=store):
         invalidate_catalog(product)
+
+
+def is_protected_digital_preview_url(value: object) -> bool:
+    return isinstance(value, str) and 'digital-previews/' in value
 
 
 class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
@@ -988,14 +993,127 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
             return Response(MerchantImageSerializer(product.images.all(), many=True, context={'request': request}).data)
         serializer = MerchantImageSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        img_obj = serializer.save(product=product)
+        image = serializer.validated_data['image']
+        should_protect_preview = (
+            product.is_digital
+            and product.digital_preview_watermark
+            and is_image_digital_asset(product.digital_file_url)
+        )
+        if should_protect_preview:
+            from django.core.files.storage import default_storage
+            from utils.digital_previews import create_digital_preview
+
+            preview_path = create_digital_preview(image, product.store_id, product.pk)
+            if not preview_path:
+                raise ValidationError({
+                    'image': 'Unable to create a protected preview from this image.'
+                })
+            # ProductImg keeps the public derivative in the ordinary gallery. The
+            # submitted artwork is never saved as a publicly-addressable gallery file.
+            img_obj = ProductImg.objects.create(product=product, image=preview_path)
+        else:
+            img_obj = serializer.save(product=product)
         is_cover = request.data.get('is_cover') in {'true', '1', True} or not product.image_url
         if is_cover and img_obj.image:
             image_url = normalize_media_url(request.build_absolute_uri(img_obj.image.url) if request else img_obj.image.url)
             product.image_url = image_url
             product.save(update_fields=['image_url', 'updated'])
         invalidate_catalog(product)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            MerchantImageSerializer(img_obj, context={'request': request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @extend_schema(
+        methods=['POST'],
+        request=MerchantImageSerializer,
+        responses={201: serializers.DictField(child=serializers.CharField())},
+    )
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='variant-image',
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def variant_image(self, request, store_pk=None, pk=None):
+        """Upload a gallery image for one digital product option."""
+        product = self.get_object()
+        if not product.is_digital:
+            raise ValidationError({
+                'detail': 'Variant image uploads are available for digital products only.'
+            })
+
+        serializer = MerchantImageSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        image = serializer.validated_data['image']
+
+        from utils.digital_previews import is_image_digital_asset
+
+        should_watermark = (
+            product.digital_preview_watermark
+            and is_image_digital_asset(product.digital_file_url)
+        )
+        if should_watermark:
+            from django.core.files.storage import default_storage
+            from utils.digital_previews import create_digital_preview
+
+            preview_path = create_digital_preview(image, product.store_id, product.pk)
+            if not preview_path:
+                raise ValidationError({
+                    'image': 'Unable to create a protected preview from this image.'
+                })
+            image_url = normalize_media_url(request.build_absolute_uri(default_storage.url(preview_path)))
+        else:
+            image_record = serializer.save(product=product)
+            image_url = normalize_media_url(request.build_absolute_uri(image_record.image.url))
+
+        invalidate_catalog(product)
+        return Response({'image_url': image_url}, status=status.HTTP_201_CREATED)
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='variant-file',
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def variant_file(self, request, store_pk=None, pk=None):
+        """Store a private downloadable asset for one digital product option."""
+        product = self.get_object()
+        if not product.is_digital:
+            raise ValidationError({'detail': 'Variant files are available for digital products only.'})
+        file_obj = request.FILES.get('file')
+        if not file_obj:
+            raise ValidationError({'file': 'Select a variant digital file to upload.'})
+        if file_obj.size > 50 * 1024 * 1024:
+            raise ValidationError({'file': 'Variant digital files must be 50 MB or smaller.'})
+        asset_type = serializers.ChoiceField(
+            choices=['image', 'audio', 'video', 'document'],
+        ).run_validation(request.data.get('asset_type'))
+
+        from django.core.files.storage import default_storage
+        from uuid import uuid4
+        from utils.digital_previews import (
+            create_digital_preview,
+            digital_asset_kind,
+            is_image_digital_asset,
+        )
+
+        upload_kind = digital_asset_kind(file_obj.name)
+        if upload_kind != asset_type:
+            raise ValidationError({
+                'file': f'Upload a {asset_type} file for this variant.'
+            })
+
+        safe_name = f'digital_products/{product.store_id}/{product.pk}/variants/{uuid4().hex[:12]}_{file_obj.name}'
+        digital_file_url = default_storage.save(safe_name, file_obj)
+        response_data = {'digital_file_url': digital_file_url}
+        if is_image_digital_asset(file_obj.name):
+            preview_path = create_digital_preview(file_obj, product.store_id, product.pk)
+            if not preview_path:
+                raise ValidationError({'file': 'Unable to create a protected preview from this image.'})
+            preview_url = normalize_media_url(request.build_absolute_uri(default_storage.url(preview_path)))
+            response_data['image_url'] = preview_url
+        return Response(response_data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['patch'], url_path=r'images/(?P<image_pk>\d+)/cover')
     def set_cover_image(self, request, store_pk=None, pk=None, image_pk=None):
@@ -1074,10 +1192,10 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         product.is_digital = True
         product.digital_file_url = file_url
         product.weight = Decimal('0.00')
-        image_exts = ('.jpg', '.jpeg', '.png', '.webp', '.svg', '.gif', '.avif', '.bmp', '.tiff')
-        clean_name = file_obj.name.lower()
+        from utils.digital_previews import is_image_digital_asset
+
         update_fields = ['is_digital', 'digital_file_url', 'weight', 'updated']
-        if clean_name.endswith(image_exts):
+        if is_image_digital_asset(file_obj.name):
             from utils.digital_previews import create_digital_preview
 
             preview_path = create_digital_preview(file_obj, product.store_id, product.pk)
@@ -1091,6 +1209,16 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         else:
             product.digital_preview_watermark = False
             update_fields.append('digital_preview_watermark')
+            cleaned_variants = [
+                {
+                    **variant,
+                    'image_url': '',
+                } if isinstance(variant, dict) and is_protected_digital_preview_url(variant.get('image_url')) else variant
+                for variant in product.variants
+            ]
+            if cleaned_variants != product.variants:
+                product.variants = cleaned_variants
+                update_fields.append('variants')
         product.save(update_fields=update_fields)
         invalidate_catalog(product)
 

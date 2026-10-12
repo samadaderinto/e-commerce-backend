@@ -15,6 +15,13 @@
 			"api": "S3v4",
 			"path": "auto"
 		},
+		"local-admin-sync": {
+			"url": "http://minio:9000",
+			"accessKey": "admin@proace.local",
+			"secretKey": "HardPass@2022",
+			"api": "s3v4",
+			"path": "auto"
+		},
 		"play": {
 			"url": "https://play.min.io",
 			"accessKey": "Q3AM3UQ867SPQQA43P2F",

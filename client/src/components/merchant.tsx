@@ -550,9 +550,7 @@ function MerchantDashboard({ store }: { store: Store }) {
         </select>
       </div>
 
-      {stats.isFetching && !stats.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {stats.isFetching && !stats.isLoading && <Loading compact />}
 
       {stats.isLoading ? (
         <Loading />
@@ -793,9 +791,7 @@ function MerchantDashboard({ store }: { store: Store }) {
                   View all orders <ArrowRight size={16} />
                 </Link>
               </div>
-              {orders.isFetching && !orders.isLoading && (
-                <p role="status" aria-live="polite">Updating results…</p>
-              )}
+              {orders.isFetching && !orders.isLoading && <Loading compact />}
               {orders.isLoading ? (
                 <Loading />
               ) : orders.error ? (
@@ -826,9 +822,7 @@ function MerchantDashboard({ store }: { store: Store }) {
                   {payouts.data?.length || 0} payout requests
                 </span>
               </div>
-              {payouts.isFetching && !payouts.isLoading && (
-                <p role="status" aria-live="polite">Updating results…</p>
-              )}
+              {payouts.isFetching && !payouts.isLoading && <Loading compact />}
               {payouts.isLoading ? (
                 <Loading />
               ) : payouts.error ? (
@@ -1179,9 +1173,7 @@ function parseCsvRows(text: string): string[][] {
         setOrdering('-updated');
         setOffset(0);
       }}>Reset all filters</button>
-      {products.isFetching && !products.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {products.isFetching && !products.isLoading && <Loading compact />}
 
       {products.isLoading ? (
         <Loading />
@@ -1320,6 +1312,17 @@ function isDigitalImage(file: File | null, url: string | null | undefined): bool
   return false;
 }
 
+function isProtectedDigitalPreview(url: string | undefined): boolean {
+  return Boolean(url && url.includes('digital-previews/'));
+}
+
+function variantAssetAccepts(kind: ProductVariant['digital_file_type']): string | undefined {
+  if (kind === 'audio') return 'audio/*';
+  if (kind === 'video') return 'video/*';
+  if (kind === 'image') return 'image/*';
+  return undefined;
+}
+
 function ProductEditor({ store, id }: { store: Store; id: string }) {
   const [savedProductId, setSavedProductId] = useState<number | null>(null);
   const persistedId = useRef<number | null>(id === 'new' ? null : Number(id));
@@ -1338,6 +1341,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   const effectiveVariants = variants ?? product.data?.variants ?? [];
   const [coverImage, setCoverImage] = useState<string | null>(null);
   const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [variantAssetFiles, setVariantAssetFiles] = useState<Record<number, File>>({});
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [showCoverUrlInput, setShowCoverUrlInput] = useState(false);
 
@@ -1381,6 +1385,26 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     }
   }
 
+  function selectVariantAsset(index: number, file: File | undefined): void {
+    if (!file) return;
+    if (file.size > 50 * 1024 * 1024) {
+      notify('Variant digital files must be 50 MB or smaller.', true);
+      return;
+    }
+    setVariantAssetFiles((current) => ({ ...current, [index]: file }));
+  }
+
+  function clearProtectedVariantImages(): void {
+    const nextVariants = effectiveVariants.map((variant) => (
+      isProtectedDigitalPreview(variant.image_url)
+        ? { ...variant, image_url: '' }
+        : variant
+    ));
+    if (nextVariants.some((variant, index) => variant !== effectiveVariants[index])) {
+      setVariants(nextVariants);
+    }
+  }
+
   function handleDigitalFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1392,6 +1416,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     setDigitalFile(file);
     if (!isDigitalImage(file, null)) {
       setDigitalWatermark(false);
+      clearProtectedVariantImages();
     } else {
       setDigitalWatermark(true);
     }
@@ -1527,7 +1552,12 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   }
 
   function addVariant() {
-    setVariants([...effectiveVariants, { name: '', price_delta: '0.00', available: 10 }]);
+    setVariants([...effectiveVariants, {
+      name: '',
+      price_delta: '0.00',
+      available: 10,
+      digital_file_type: isImageDigitalAsset ? 'image' : 'document',
+    }]);
   }
 
   function updateVariant(index: number, field: keyof ProductVariant, value: string | number) {
@@ -1611,6 +1641,35 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         setDigitalFile(null);
       }
 
+      const pendingVariantIndexes = Object.keys(variantAssetFiles).map(Number);
+      if (pendingVariantIndexes.length > 0) {
+        const uploadedVariants = [...validVariants];
+        for (const index of pendingVariantIndexes) {
+          const assetFile = variantAssetFiles[index];
+          if (!assetFile || !uploadedVariants[index]) continue;
+          const variantForm = new FormData();
+          variantForm.append('file', assetFile);
+          variantForm.append('asset_type', uploadedVariants[index].digital_file_type || 'document');
+          const asset = await api<{ digital_file_url: string; image_url?: string }>(
+            `stores/${store.id}/products/${targetId}/variant-file`,
+            'POST',
+            variantForm,
+          );
+          uploadedVariants[index] = {
+            ...uploadedVariants[index],
+            digital_file_url: asset.digital_file_url,
+            image_url: asset.image_url || uploadedVariants[index].image_url || '',
+          };
+        }
+        await api<MerchantProduct>(
+          `stores/${store.id}/products/${targetId}`,
+          'PATCH',
+          { variants: uploadedVariants },
+        );
+        setVariants(uploadedVariants);
+        setVariantAssetFiles({});
+      }
+
       await client.invalidateQueries({ queryKey: ['merchant-products'] });
       await client.invalidateQueries({ queryKey: ['dashboard'] });
       await client.invalidateQueries({ queryKey: ['merchant-product'] });
@@ -1628,6 +1687,20 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     }
   }
   if (!isNew && product.isLoading) return <Loading />;
+  const productErrorStatus = typeof product.error === 'object' && product.error !== null && 'status' in product.error
+    ? (product.error as { status?: unknown }).status
+    : undefined;
+  const productIsOutsideSelectedStore = productErrorStatus === 404 || product.error?.message === 'No Product matches the given query.';
+  if (productIsOutsideSelectedStore) {
+    return (
+      <Empty
+        title="This product is not in the selected store"
+        text="Switch to the store that owns this listing, or manage another seller’s product from Backoffice."
+        href="/merchant/products"
+        label="View selected store products"
+      />
+    );
+  }
   if (product.error) return <ErrorState error={product.error} />;
 
   const data = product.data;
@@ -1907,6 +1980,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
               setDigitalUrlInput(e.target.value);
               if (!isDigitalImage(digitalFile, e.target.value)) {
                 setDigitalWatermark(false);
+                clearProtectedVariantImages();
               }
             }}
           />
@@ -2061,6 +2135,41 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
                   ))}
                 </select>
               </Field>
+              {effectiveIsDigital && (
+                <Field label="Variant digital file">
+                  <select
+                    aria-label={`Variant ${index + 1} digital file type`}
+                    value={variant.digital_file_type || 'document'}
+                    onChange={(event) => updateVariant(
+                      index,
+                      'digital_file_type',
+                      event.target.value,
+                    )}
+                  >
+                    <option value="image">Image</option>
+                    <option value="audio">Audio</option>
+                    <option value="video">Video</option>
+                    <option value="document">Document, software, or other</option>
+                  </select>
+                  <input
+                    type="file"
+                    accept={variantAssetAccepts(variant.digital_file_type || 'document')}
+                    onChange={(event) =>
+                      selectVariantAsset(index, event.target.files?.[0])
+                    }
+                  />
+                  {variantAssetFiles[index] && (
+                    <small className="muted">
+                      {variant.digital_file_type === 'image'
+                        ? `${variantAssetFiles[index].name} becomes this option's private image download and a watermarked carousel preview.`
+                        : `${variantAssetFiles[index].name} becomes this option's downloadable file when you save.`}
+                    </small>
+                  )}
+                  {variant.digital_file_url && (
+                    <small className="muted">A file is already mapped to this option.</small>
+                  )}
+                </Field>
+              )}
               {variant.image_url && (
                 <div
                   style={{
@@ -2337,6 +2446,7 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
   const { notify } = useShop(); const client = useQueryClient(); const [uploading, setUploading] = useState(false);
   const [digitalUploading, setDigitalUploading] = useState(false);
   const base = `stores/${store.id}/products/${product.id}`;
+  const protectsGalleryPreviews = product.is_digital && product.digital_preview_watermark;
   const specs = useQuery({
     queryKey: ['specs', product.id],
     queryFn: () => api<Record<string, string>>(`${base}/specifications`),
@@ -2428,6 +2538,11 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
           <input type="file" multiple accept="image/jpeg,image/png,image/webp" disabled={uploading} onChange={uploadImages} />
         </label>
       </div>
+      {protectsGalleryPreviews && (
+        <p className="fine-print">
+          Gallery images for this digital artwork are converted into watermarked previews. The original files stay private.
+        </p>
+      )}
       <div className="asset-gallery">
         {product.images.map(image => {
           const isCover = image.image === product.image_url;
@@ -3082,9 +3197,7 @@ function MerchantOrders({
         )}
       </div>
 
-      {orders.isFetching && !orders.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {orders.isFetching && !orders.isLoading && <Loading compact />}
 
       {orders.isLoading ? (
         <Loading />
@@ -3640,9 +3753,7 @@ function MerchantNotifications({ store }: { store: Store }) {
         { key: 'state', label: 'State', options: [{ value: 'unread', label: 'Unread' }, { value: 'read', label: 'Read' }, { value: 'archived', label: 'Archived' }] },
         { key: 'category', label: 'Category', options: ['order', 'refund', 'payout', 'wallet', 'store', 'affiliates', 'account', 'general'].map(value => ({ value, label: value })) },
       ]} />
-      {notifications.isFetching && !notifications.isLoading && (
-        <p role="status" aria-live="polite">Updating results…</p>
-      )}
+      {notifications.isFetching && !notifications.isLoading && <Loading compact />}
 
       {notifications.isLoading ? (
         <Loading />
@@ -3886,7 +3997,7 @@ function MerchantSettings({ store }: { store: Store }) {
 
 export function ProductPreviewPage(): React.JSX.Element {
   const { notify } = useShop();
-  const [selectedVariant, setSelectedVariant] = useState<number>(0);
+  const [selectedVariant, setSelectedVariant] = useState<number | null>(null);
   const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
   const [preview, setPreview] = useState<PreviewProduct | null>(null);
@@ -3989,7 +4100,9 @@ export function ProductPreviewPage(): React.JSX.Element {
 
   if (!ready) return <Loading />;
   if (!preview) return <Empty title="No product preview available" text="Open Preview from your product editor to see your unsaved listing here." href="/merchant/products" label="Back to products" />;
-  const activeVariant: ProductVariant | undefined = preview.variants[selectedVariant];
+  const activeVariant: ProductVariant | undefined = selectedVariant === null
+    ? undefined
+    : preview.variants[selectedVariant];
   const displayedPrice: number = preview.sale_price + Number(activeVariant?.price_delta || 0);
   const isSoldOut: boolean = !preview.is_digital && (preview.available <= 0 || preview.label === 'sold out');
   const variantStock: number = typeof activeVariant?.available === 'number'
@@ -4097,8 +4210,30 @@ export function ProductPreviewPage(): React.JSX.Element {
             <p className="description">{preview.description}</p>
             {preview.variants.length > 0 && (
               <div className="product-variants" style={{ margin: '16px 0' }}>
-                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Option: <strong style={{ color: 'var(--green)' }}>{activeVariant?.name || 'Select'}</strong></span>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--ink)', display: 'block', marginBottom: '8px' }}>Option: <strong style={{ color: 'var(--green)' }}>{activeVariant?.name || 'Original edition'}</strong></span>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    aria-pressed={selectedVariant === null}
+                    onClick={() => {
+                      setSelectedVariant(null);
+                      setSelectedGalleryImage(preview.image);
+                      setQuantity(1);
+                    }}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '8px',
+                      border: selectedVariant === null ? '2px solid var(--green)' : '1px solid var(--line)',
+                      background: selectedVariant === null ? 'var(--green-light)' : 'var(--paper)',
+                      color: selectedVariant === null ? 'var(--green)' : 'var(--ink)',
+                      fontWeight: selectedVariant === null ? 600 : 500,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    Original edition
+                  </button>
                   {preview.variants.map((variant, index) => (
                     <button
                       type="button"

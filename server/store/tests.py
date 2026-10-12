@@ -687,6 +687,265 @@ class MerchantTests(TestCase):
         self.assertTrue(product.image_url)
         self.assertIn('artwork.png', product.digital_file_url)
 
+    def test_digital_image_gallery_upload_stores_only_a_watermarked_preview(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Protected Artwork Gallery',
+            description='Original digital illustration',
+            category='design_assets',
+            price='35.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/artwork.png',
+            digital_preview_watermark=True,
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='purple').save(image_bytes, format='PNG')
+        gallery_image = SimpleUploadedFile(
+            'gallery-original.png',
+            image_bytes.getvalue(),
+            content_type='image/png',
+        )
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/images/',
+            {'image': gallery_image, 'is_cover': 'true'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn('digital-previews', response.data['image'])
+        product.refresh_from_db()
+        self.assertIn('digital-previews', product.image_url)
+        stored_image = ProductImg.objects.get(product=product)
+        self.assertIn('digital-previews', stored_image.image.name)
+        self.assertNotIn('gallery-original.png', stored_image.image.name)
+
+    def test_merchant_can_upload_a_watermarked_digital_variant_preview(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Digital Variant Artwork',
+            description='Original digital illustration',
+            category='design_assets',
+            price='35.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/artwork.png',
+            digital_preview_watermark=True,
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='orange').save(image_bytes, format='PNG')
+        image = SimpleUploadedFile('variant.png', image_bytes.getvalue(), content_type='image/png')
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/variant-image/',
+            {'image': image},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn('digital-previews', response.data['image_url'])
+
+    def test_image_variant_asset_returns_a_watermarked_carousel_image(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Digital Artwork Editions',
+            description='Original digital illustration',
+            category='design_assets',
+            price='35.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/artwork.png',
+            digital_preview_watermark=True,
+            variants=[{'name': 'Phone', 'price_delta': '0.00'}],
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='orange').save(image_bytes, format='PNG')
+        image = SimpleUploadedFile('phone-wallpaper.png', image_bytes.getvalue(), content_type='image/png')
+
+        asset_response = self.client.post(
+            f'{self.products_url}{product.id}/variant-file/',
+            {'file': image, 'asset_type': 'image'},
+            format='multipart',
+        )
+
+        self.assertEqual(asset_response.status_code, 201, asset_response.data)
+        self.assertIn('digital-previews', asset_response.data['image_url'])
+        self.assertNotIn('digital_products', asset_response.data['image_url'])
+        response = self.client.patch(
+            f'{self.products_url}{product.id}/',
+            {'variants': [{
+                'name': 'Phone',
+                'price_delta': '0.00',
+                'digital_file_type': 'image',
+                'digital_file_url': asset_response.data['digital_file_url'],
+                'image_url': asset_response.data['image_url'],
+            }]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['variants'][0]['image_url'], asset_response.data['image_url'])
+
+    def test_merchant_can_upload_an_unwatermarked_variant_image_for_other_digital_files(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Digital Audio Variant',
+            description='Original audio download',
+            category='music_audio',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/audio.mp3',
+            digital_preview_watermark=False,
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='blue').save(image_bytes, format='PNG')
+        image = SimpleUploadedFile('album-art.png', image_bytes.getvalue(), content_type='image/png')
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/variant-image/',
+            {'image': image},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertNotIn('digital-previews', response.data['image_url'])
+        self.assertTrue(ProductImg.objects.filter(product=product).exists())
+
+    def test_audio_variant_upload_is_not_watermarked_when_an_old_flag_remains(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Edited Audio Product',
+            description='Audio download that replaced an artwork download',
+            category='music_audio',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/audio.mp3',
+            digital_preview_watermark=True,
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='green').save(image_bytes, format='PNG')
+        image = SimpleUploadedFile('audio-cover.png', image_bytes.getvalue(), content_type='image/png')
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/variant-image/',
+            {'image': image},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertNotIn('digital-previews', response.data['image_url'])
+
+    def test_replacing_an_image_download_with_audio_clears_protected_variant_images(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Artwork Turned Audio Download',
+            description='An audio release that replaced a previous artwork download',
+            category='music_audio',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/previous-artwork.png',
+            digital_preview_watermark=True,
+            variants=[{
+                'name': 'Album edition',
+                'price_delta': '0.00',
+                'image_url': 'http://testserver/media/images/digital-previews/1/1/old_preview.jpg',
+            }],
+        )
+        audio = SimpleUploadedFile('new-release.mp3', b'fake audio content', content_type='audio/mpeg')
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/digital-file/',
+            {'file': audio},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        product.refresh_from_db()
+        self.assertFalse(product.digital_preview_watermark)
+        self.assertEqual(product.variants[0]['image_url'], '')
+
+    def test_merchant_can_upload_an_audio_file_for_a_digital_variant(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Audio Editions',
+            description='Audio download with multiple editions',
+            category='music_audio',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/album.mp3',
+        )
+        audio = SimpleUploadedFile('extended.mp3', b'extended audio', content_type='audio/mpeg')
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/variant-file/',
+            {'file': audio, 'asset_type': 'audio'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn('/variants/', response.data['digital_file_url'])
+        self.assertNotIn('image_url', response.data)
+
+    def test_variant_file_must_match_its_declared_media_type(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Audio-only Editions',
+            description='Audio download with multiple editions',
+            category='music_audio',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/album.mp3',
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='red').save(image_bytes, format='PNG')
+        image = SimpleUploadedFile('cover.png', image_bytes.getvalue(), content_type='image/png')
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/variant-file/',
+            {'file': image, 'asset_type': 'audio'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('audio file', str(response.data))
+
+    def test_audio_product_can_have_a_video_variant_when_declared_as_video(self):
+        product = Product.objects.create(
+            store=self.store,
+            title='Concert Editions',
+            description='Audio album with a concert-film edition',
+            category='music_audio',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/album.mp3',
+        )
+        video = SimpleUploadedFile('concert.mp4', b'video content', content_type='video/mp4')
+
+        response = self.client.post(
+            f'{self.products_url}{product.id}/variant-file/',
+            {'file': video, 'asset_type': 'video'},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertIn('/variants/', response.data['digital_file_url'])
+
     def test_digital_product_with_variants_preserves_options_and_validates_prices(self):
         payload = {
             'title': '4K Wallpaper Pack',

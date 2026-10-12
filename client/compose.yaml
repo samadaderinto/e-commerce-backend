@@ -5,6 +5,9 @@ services:
     build:
       context: ..
       dockerfile: client/Dockerfile
+      args:
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
+        NEXT_PUBLIC_APPLE_CLIENT_ID: ${NEXT_PUBLIC_APPLE_CLIENT_ID:-}
     restart: unless-stopped
     ports:
       - '${CLIENT_BIND_ADDRESS:-127.0.0.1}:${CLIENT_PORT:-3000}:3000'

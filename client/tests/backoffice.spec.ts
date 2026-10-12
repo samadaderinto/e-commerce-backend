@@ -161,3 +161,58 @@ test('Grafana links are shown only to the technical admin', async ({ page }) => 
     await expect(page.getByText('Technical admin only')).toHaveCount(visible ? 1 : 0);
   }
 });
+
+for (const theme of ['light', 'dark']) {
+  test(`payout details remain available to staff in ${theme} mode`, async ({page}) => {
+    await mockApi(page);
+    await page.addInitScript((value: string) => localStorage.setItem('proace-theme', value), theme);
+    await page.route(/\/api\/admin\/staff\/payouts(?:\?|$)/, route => route.fulfill({json: {
+      count: 1,
+      results: [{
+        id: 42, reference: 'PAY-DETAIL-42', store: 1, store_name: 'Test store',
+        amount: '125.00', status: 'completed', payout_method: 'bank_transfer',
+        account_details: {bank_name: 'Test bank', account_number: '1234567890'},
+        notes: 'Transfer verified', created: '2026-10-01T09:00:00Z',
+        processed_at: '2026-10-02T10:00:00Z',
+      }],
+    }}));
+    await page.goto('/admin/payouts');
+    await page.getByRole('button', {name: 'View payout PAY-DETAIL-42 details'}).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('heading', {name: 'Payout PAY-DETAIL-42'})).toBeVisible();
+    await expect(dialog.getByText('Test bank', {exact: true})).toBeVisible();
+    await expect(dialog.getByText('Transfer verified', {exact: true})).toBeVisible();
+    await expect(dialog.getByText('12******90', {exact: true})).toBeVisible();
+    await expect(dialog.getByText('1234567890', {exact: true})).toHaveCount(0);
+    await expect(page.getByRole('button', {name: 'Approve', exact: true})).toHaveCount(0);
+    await dialog.getByRole('button', {name: 'Done', exact: true}).click();
+    await expect(dialog).toHaveCount(0);
+  });
+}
+
+test('staff can decline a pending payout from its details', async ({page}) => {
+  await mockApi(page);
+  let submitted: Record<string, unknown> | undefined;
+  await page.route(/\/api\/admin\/staff\/payouts(?:\/42\/process|\?|$)/, async route => {
+    if (route.request().method() === 'POST') {
+      submitted = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({json: {detail: 'Payout declined'}});
+    }
+    return route.fulfill({json: {count: 1, results: [{
+      id: 42, reference: 'PAY-PENDING', amount: '25.00', status: 'pending',
+      payout_method: 'bank_transfer', account_details: {account_last4: '5676'},
+      created: '2026-10-01T09:00:00Z',
+    }]}});
+  });
+  await page.goto('/admin/payouts');
+  await page.getByRole('button', {name: 'View payout PAY-PENDING details'}).click();
+  const details = page.getByRole('dialog');
+  await expect(details.getByText('********76', {exact: true})).toBeVisible();
+  await expect(details.getByRole('button', {name: 'Mark paid', exact: true})).toBeVisible();
+  await details.getByRole('button', {name: 'Decline', exact: true}).click();
+  const confirmation = page.getByRole('dialog');
+  await confirmation.getByLabel('Reason for rejection').fill('Account needs verification');
+  await confirmation.getByRole('button', {name: 'Reject payout', exact: true}).click();
+  await expect.poll(() => submitted?.action).toBe('reject');
+  expect(submitted?.reason).toBe('Account needs verification');
+});

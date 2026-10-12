@@ -53,6 +53,33 @@ test('active store survives merchant navigation and reloads, and switching reset
   await expect(page.getByText('Your customer orders will appear here.')).toBeVisible();
 });
 
+test('a product outside the selected store explains the store boundary', async ({ page }) => {
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path === '/api/me') {
+      await route.fulfill({ json: { id: 7, first_name: 'Admin', email: 'admin@test.com', is_staff: true } });
+      return;
+    }
+    if (path === '/api/stores') {
+      await route.fulfill({ json: { count: 1, results: [{ id: 1, name: 'Official store', status: 'active', is_official: true }] } });
+      return;
+    }
+    if (path === '/api/stores/1/products/365') {
+      await route.fulfill({ status: 404, json: { detail: 'No Product matches the given query.' } });
+      return;
+    }
+    if (path === '/api/cart') {
+      await route.fulfill({ json: { items: [], subtotal: '0', shipping: '0', total: '0' } });
+      return;
+    }
+    await route.fulfill({ json: [] });
+  });
+
+  await page.goto('/merchant/products/365');
+  await expect(page.getByRole('heading', { name: 'This product is not in the selected store' })).toBeVisible();
+  await expect(page.getByText(/manage another seller’s product from Backoffice/)).toBeVisible();
+});
+
 test('official-store admin previews an unsaved digital product in a separate page', async ({ page, context }) => {
   let writes: number = 0;
   await context.route('**/api/**', async route => {

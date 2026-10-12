@@ -114,7 +114,6 @@ class StaffViewSet(viewsets.GenericViewSet):
         "block_staff",
         "unblock_staff",
         "resend_staff_verification",
-        "process_payout",
         "commission_wallet",
         "withdraw_commission",
     }
