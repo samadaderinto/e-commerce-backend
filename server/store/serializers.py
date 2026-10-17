@@ -151,10 +151,11 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
         model = Product
         fields = ['id', 'store', 'title', 'description', 'category', 'price', 'brand', 'image_url',
                   'discount', 'sale_price', 'available', 'visibility', 'label',
+                  'is_blocked', 'blocked_reason', 'blocked_at',
                   'tags', 'images', 'specifications', 'sales', 'flash_sale_end', 'variants', 'average_rating',
                   'sponsored', 'weight', 'length', 'width', 'height', 'is_digital', 'digital_file_url', 'digital_preview_watermark',
                   'product_type', 'affiliate_hoplink', 'affiliate_vendor_nickname', 'affiliate_button_text', 'created', 'updated']
-        read_only_fields = ['id', 'store', 'sales', 'average_rating', 'sponsored',
+        read_only_fields = ['is_blocked', 'blocked_reason', 'blocked_at', 'id', 'store', 'sales', 'average_rating', 'sponsored',
                             'created', 'updated']
         extra_kwargs = {
             'price': {'min_value': Decimal('0.01')},
@@ -164,6 +165,11 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             'weight': {'min_value': Decimal('0.00'), 'default': Decimal('1.00')},
             'length': {'min_value': Decimal('0.01')}, 'width': {'min_value': Decimal('0.01')}, 'height': {'min_value': Decimal('0.01')},
         }
+
+    def validate_visibility(self, value: bool) -> bool:
+        if value and self.instance and self.instance.is_blocked and not self.instance.visibility:
+            raise serializers.ValidationError('This product is blocked by the platform. Only staff can restore it.')
+        return value
 
     def validate_variants(self, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not isinstance(value, list) or len(value) > 100:

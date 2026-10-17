@@ -14,7 +14,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, Printer, RotateCcw, Search, Settings, Share2, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
+import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Ban, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, Printer, RotateCcw, Search, Settings, Share2, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
 import type { Dashboard, MerchantProduct, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent, StoreProfile } from '@/lib/types';
 import { useShop } from './providers';
@@ -995,6 +995,10 @@ function MerchantProducts({ store }: { store: Store }) {
   });
 
   async function toggle(product: MerchantProduct) {
+    if (product.is_blocked) {
+      notify('This product is blocked by platform moderation. Only staff can restore it.', true);
+      return;
+    }
     setBusy(product.id);
     try {
       await api(`stores/${store.id}/products/${product.id}`, 'PATCH', {
@@ -1338,17 +1342,29 @@ function parseCsvRows(text: string): string[][] {
                       )}
                     </td>
                     <td>
-                      <button
-                        className={`publish-toggle ${product.visibility ? 'on' : ''}`}
-                        disabled={busy === product.id}
-                        role="switch"
-                        aria-checked={product.visibility}
-                        aria-label={`Publish ${product.title}`}
-                        onClick={() => toggle(product)}
-                      >
-                        <span />
-                        {product.visibility ? 'Published' : 'Draft'}
-                      </button>
+                      {product.is_blocked ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span
+                            className="status status-blocked"
+                            title={product.blocked_reason ? `Blocked: ${product.blocked_reason}. Contact support to request restoration.` : 'Blocked by platform moderation'}
+                          >
+                            Blocked
+                          </span>
+                          <small className="muted" style={{ fontSize: '9px' }}>Locked by moderation</small>
+                        </div>
+                      ) : (
+                        <button
+                          className={`publish-toggle ${product.visibility ? 'on' : ''}`}
+                          disabled={busy === product.id}
+                          role="switch"
+                          aria-checked={product.visibility}
+                          aria-label={`Publish ${product.title}`}
+                          onClick={() => toggle(product)}
+                        >
+                          <span />
+                          {product.visibility ? 'Published' : 'Draft'}
+                        </button>
+                      )}
                     </td>
                     <td>
                       <Link
@@ -1816,6 +1832,30 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           </Link>
         )}
       </div>
+
+      {data?.is_blocked && (
+        <div
+          className="analytics-panel"
+          style={{
+            borderLeft: '4px solid var(--red, #a44240)',
+            background: 'var(--soft)',
+            marginBottom: '1.5rem',
+            padding: '1.25rem',
+            borderRadius: '4px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--red, #a44240)', fontWeight: 700, marginBottom: '6px' }}>
+            <Ban size={18} />
+            <span>Product blocked by platform moderation</span>
+          </div>
+          <p style={{ margin: '0.25rem 0', color: 'var(--ink)' }}>
+            <strong>Reason:</strong> {data.blocked_reason || 'Policy violation'}
+          </p>
+          <p className="muted" style={{ margin: '0.5rem 0 0', fontSize: '12px', lineHeight: 1.6 }}>
+            <strong>Next steps:</strong> You can edit and update this listing below to address the flagged issue. Once compliant with platform policies, contact support or reply to your notification to request a review and restoration. Only authorized platform staff can restore this listing. Existing orders remain valid and must be fulfilled.
+          </p>
+        </div>
+      )}
 
       <form
         ref={formRef}
@@ -2500,14 +2540,20 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     )}
     <hr />
     <h3>Availability</h3>
-    <label className="check-row">
+    <label className="check-row" style={data?.is_blocked ? { opacity: 0.7, cursor: 'not-allowed' } : undefined}>
       <input
         type="checkbox"
         name="visibility"
+        disabled={data?.is_blocked}
         defaultChecked={data?.visibility || false}
       />
       Publish to the marketplace
     </label>
+    {data?.is_blocked && (
+      <small className="muted" style={{ display: 'block', marginTop: '-6px', marginBottom: '8px' }}>
+        This listing is blocked by platform moderation. Staff/admin review is required to restore it.
+      </small>
+    )}
     {error && <p className="form-error">{error}</p>}
     <div className="form-actions">
       <button type="button" className="button secondary" onClick={openPreview}>

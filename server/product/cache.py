@@ -26,7 +26,7 @@ def store_product_cache_key(store_id: int | str, product_id: int | str) -> str:
 
 def public_product_queryset() -> QuerySet[Product]:
     return Product.objects.filter(
-        visibility=True,
+        visibility=True, is_blocked=False,
         store__status="active",
         store__verified_at__isnull=False,
     ).annotate(

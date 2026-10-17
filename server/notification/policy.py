@@ -24,6 +24,8 @@ POLICIES: dict[str, ChannelPolicy] = {
     "store_verified": ChannelPolicy(template="store-status"),
     "store_blocked": ChannelPolicy(template="store-status"),
     "store_unblocked": ChannelPolicy(template="store-status"),
+    "product_blocked": ChannelPolicy(template="product-status"),
+    "product_restored": ChannelPolicy(template="product-status"),
     "account_access_changed": ChannelPolicy(template="account-security"),
     "password_changed": ChannelPolicy(template="account-security"),
     "inventory_low": ChannelPolicy(template="inventory-low"),
@@ -118,8 +120,11 @@ def destination_for(recipient: Any, category: str, data: dict[str, Any]) -> str:
         return "/account/wallet"
     if category == "store":
         store_id = data.get("store_id")
+        product_id = data.get("product_id")
         if recipient.is_staff or recipient.is_business_admin or recipient.is_superuser:
             return f"/admin/stores/{store_id}" if store_id else "/admin/stores"
+        if product_id and store_id:
+            return f"/merchant/products/{product_id}?store={store_id}"
         return f"/merchant?store={store_id}" if store_id else "/merchant"
     if category == "affiliates":
         return "/admin/affiliates" if recipient.is_staff or recipient.is_business_admin or recipient.is_superuser else "/account/affiliates"

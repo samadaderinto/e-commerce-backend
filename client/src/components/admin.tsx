@@ -53,6 +53,7 @@ type ActionDialogRequest = {
   message: string;
   confirmLabel?: string;
   reasonLabel?: string;
+  reasonPresets?: string[];
 };
 
 function isOrderAllDigital(order: { items_snapshot?: Array<Record<string, unknown>> }): boolean {
@@ -149,6 +150,29 @@ function ActionDialog({
         <p>{request.message}</p>
         {requiresReason && (
           <Field label={request.reasonLabel!}>
+            {request.reasonPresets && request.reasonPresets.length > 0 && (
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '8px' }}>
+                {request.reasonPresets.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className="button secondary compact"
+                    style={{
+                      fontSize: '11px',
+                      padding: '4px 10px',
+                      minHeight: '28px',
+                      borderRadius: '14px',
+                      background: reason === preset ? 'var(--green-light)' : 'var(--paper)',
+                      borderColor: reason === preset ? 'var(--green)' : 'var(--line)',
+                      color: reason === preset ? 'var(--green)' : 'var(--ink)',
+                    }}
+                    onClick={() => setReason(preset)}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            )}
             <textarea
               autoFocus
               value={reason}
@@ -2566,6 +2590,7 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
   if (typeFilter === 'affiliate') params.set('product_type', 'affiliate_clickbank');
   if (statusFilter === 'published') params.set('visibility', 'true');
   if (statusFilter === 'draft') params.set('visibility', 'false');
+  if (statusFilter === 'blocked') params.set('is_blocked', 'true');
   if (assetFilter === 'has_asset') params.set('has_asset', 'true');
   if (assetFilter === 'no_asset') params.set('has_asset', 'false');
   if (ordering) params.set('ordering', ordering);
@@ -2598,6 +2623,20 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
       notify(action === 'block' ? 'Store suspended' : 'Store reactivated');
     } catch (caught) {
       setStoreActionError((caught as Error).message);
+    }
+  }
+
+  async function moderateProduct(product: import('@/lib/types').StoreAuditProduct, action: 'block' | 'restore', reason: string): Promise<void> {
+    try {
+      await api(`admin/staff/products/${product.id}/moderation`, 'POST', { action, reason });
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['admin', 'store', id, 'products'] }),
+        client.invalidateQueries({ queryKey: ['products'] }),
+        client.invalidateQueries({ queryKey: ['catalog'] }),
+      ]);
+      notify(action === 'block' ? `Product "${product.title}" has been blocked` : `Product "${product.title}" has been restored`);
+    } catch (caught) {
+      notify((caught as Error).message, true);
     }
   }
 
@@ -2696,6 +2735,7 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
             <option value="all">All statuses</option>
             <option value="published">Published</option>
             <option value="draft">Draft</option>
+            <option value="blocked">Blocked</option>
           </select>
           <select
             aria-label="Filter by digital asset"
@@ -2747,6 +2787,7 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
                     <th>Units sold</th>
                     <th>Status</th>
                     <th>Audit asset</th>
+                    <th>Moderation</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2785,7 +2826,24 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
                           product.sales.toLocaleString()
                         )}
                       </td>
-                      <td>{product.visibility ? 'Published' : 'Draft'}</td>
+                      <td>
+                        {product.is_blocked ? (
+                          <div>
+                            <Status value="blocked" />
+                            {product.blocked_reason && (
+                              <small
+                                className="muted"
+                                style={{ display: 'block', fontSize: '10px', marginTop: '3px', maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                title={`Blocked reason: ${product.blocked_reason}${product.blocked_by_email ? ` (${product.blocked_by_email})` : ''}`}
+                              >
+                                {product.blocked_reason}
+                              </small>
+                            )}
+                          </div>
+                        ) : (
+                          product.visibility ? 'Published' : 'Draft'
+                        )}
+                      </td>
                       <td>
                         {product.product_type === 'affiliate_clickbank' ? (
                           product.affiliate_hoplink ? (
@@ -2812,6 +2870,64 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
                           </a>
                         ) : (
                           <span className="muted">—</span>
+                        )}
+                      </td>
+                      <td>
+                        {product.is_blocked ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                            <button
+                              type="button"
+                              className="button secondary compact"
+                              style={{ fontSize: '11px', padding: '4px 8px' }}
+                              onClick={async () => {
+                                const reason = await actionDialog.ask({
+                                  title: `Restore ${product.title}`,
+                                  message: `Restore this product to the marketplace? It will become visible and purchasable again if published.`,
+                                  confirmLabel: 'Restore listing',
+                                  reasonLabel: 'Reason for restoration',
+                                });
+                                if (reason !== null && reason.trim()) {
+                                  void moderateProduct(product, 'restore', reason.trim());
+                                }
+                              }}
+                            >
+                              <Check size={13} /> Restore
+                            </button>
+                            {product.moderation_events && product.moderation_events.length > 0 && (
+                              <span
+                                className="muted"
+                                style={{ fontSize: '10px', cursor: 'help' }}
+                                title={product.moderation_events.map(e => `${new Date(e.created).toLocaleString()}: ${e.action.toUpperCase()} by ${e.actor_email} (${e.reason})`).join('\n')}
+                              >
+                                Audit: {product.moderation_events.length} event{product.moderation_events.length === 1 ? '' : 's'}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="button secondary danger compact"
+                            style={{ fontSize: '11px', padding: '4px 8px' }}
+                            onClick={async () => {
+                              const reason = await actionDialog.ask({
+                                title: `Block ${product.title}`,
+                                message: `Block this product from the marketplace? Shoppers will be unable to find, view, or purchase it, including items already in carts. Existing orders and fulfillment will remain intact.`,
+                                confirmLabel: 'Block product',
+                                reasonLabel: 'Required reason for blocking',
+                                reasonPresets: [
+                                  'Suspected scam',
+                                  'Prohibited item',
+                                  'Misleading description',
+                                  'Policy violation',
+                                ],
+                              });
+                              if (reason !== null && reason.trim()) {
+                                void moderateProduct(product, 'block', reason.trim());
+                              }
+                            }}
+                          >
+                            <Ban size={13} /> Block
+                          </button>
                         )}
                       </td>
                     </tr>

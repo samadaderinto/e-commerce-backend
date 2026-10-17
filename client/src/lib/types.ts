@@ -346,6 +346,9 @@ export type MerchantProduct = LifecycleTimestamps & {
   available: number;
   discount: number;
   visibility: boolean;
+  is_blocked?: boolean;
+  blocked_reason?: string;
+  blocked_at?: string | null;
   brand: string;
   image_url: string;
   images: { id: number; image: string }[];
@@ -620,6 +623,14 @@ export type AdminRefund = {
   created: string;
 };
 
+export type ProductModerationEvent = {
+  id: number;
+  action: 'block' | 'unblock' | 'restore';
+  reason: string;
+  actor_email: string;
+  created: string;
+};
+
 export type StoreAuditProduct = LifecycleTimestamps & {
   id: number;
   title: string;
@@ -627,6 +638,11 @@ export type StoreAuditProduct = LifecycleTimestamps & {
   price: string;
   sales: number;
   visibility: boolean;
+  is_blocked?: boolean;
+  blocked_reason?: string;
+  blocked_at?: string | null;
+  blocked_by_email?: string | null;
+  moderation_events?: ProductModerationEvent[];
   is_digital: boolean;
   has_digital_asset: boolean;
   available: number | null;

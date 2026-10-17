@@ -16,6 +16,8 @@ def is_own_store(product: Any, user: Any) -> bool:
 
 
 def validate_purchase(product: Any, user: Any) -> None:
+    if product.is_blocked:
+        raise ValidationError({'detail': 'This product is blocked and cannot be purchased.'})
     if product.product_type == 'affiliate_clickbank':
         raise ValidationError({
             'detail': 'This partner listing uses the vendor checkout. Open its official partner link.'

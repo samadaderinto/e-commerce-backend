@@ -31,6 +31,11 @@ Admin and staff record details share a responsive dialog with a labeled header, 
    - Instant search by state code, jurisdiction name, or postal code prefix, with active status filters.
    - Interactive modal dialog with focus trapping for adding ZIP overrides, editing statutory rates, and toggling shipping or digital goods taxability.
    - One-click "Restore 50 US Baselines" action with confirmation to initialize statutory state rates.
+7. **Individual Product Moderation Dialog & Alert Banner (`AdminStoreDetailPage`, `MerchantProductDetailPage`)**:
+   - Backoffice store detail catalog audit table provides a "Moderation" column with Block and Restore actions.
+   - Quick-select preset reason pills (`Suspected scam`, `Prohibited item`, `Misleading description`, `Policy violation`) automatically populate the required reason input.
+   - Blocked listings display a distinctive `Blocked` badge with tooltip revealing moderation reason, timestamp, and processor.
+   - The merchant product editor renders a prominent moderation warning banner displaying the violation reason and seller resolution steps, while disabling the marketplace publish checkbox until the listing is restored by authorized staff.
 
 ## Shared pagination
 
@@ -87,6 +92,8 @@ Domain event dictionary:
 | `order.changed` | `order_id` | Customer tracking/payment screens. |
 | `inventory_low` | `store_id`, `product_id`, `available` | Assigned staff and administrators; emitted on crossing five units or reaching zero. |
 | `inventory.changed` | `store_id`, `product_id` | Store owner, assigned staff, administrators. |
+| `product_blocked` | `product_id`, `store_id`, `reason` | Store owner; triggers in-app notification and `product-status.html` email with next steps. |
+| `product_restored` | `product_id`, `store_id`, `reason` | Store owner; triggers in-app notification and `product-status.html` email. |
 | `notification.created` | Notification ID, title, underlying domain data | That notification's recipient only. |
 | `notification.changed` | Notification ID when available | Recipient; includes read/unread/archive/delete and mark-all-read. |
 

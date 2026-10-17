@@ -71,6 +71,13 @@ class Product(DatesMixin):
     category = models.CharField(choices=CATEGORIES_CHOICE, max_length=15)
     label = models.CharField(choices=LABEL_CHOICE, max_length=50, default='new')
     visibility = models.BooleanField(default=True)
+    is_blocked = models.BooleanField(default=False, db_index=True)
+    blocked_reason = models.TextField(blank=True, default='')
+    blocked_at = models.DateTimeField(null=True, blank=True)
+    blocked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.SET_NULL, related_name='blocked_products',
+    )
     average_rating = models.DecimalField(
         max_digits=4,
         decimal_places=2,
@@ -166,6 +173,12 @@ class Product(DatesMixin):
     def set_sponsorship(self, switch_to: bool) -> None:
         self.sponsored = switch_to
 
+    def delete(self, *args, **kwargs):
+        if self.is_blocked and not kwargs.pop('force_moderation_override', False):
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({'detail': 'Blocked products cannot be deleted while under platform moderation.'})
+        return super().delete(*args, **kwargs)
+
 
 
 class ProductImg(DatesMixin):
@@ -184,3 +197,11 @@ class Specification(DatesMixin):
     breadth = models.DecimalField(max_digits=4, decimal_places=2)
     weight = models.DecimalField(decimal_places=2, max_digits=4)
     color = models.CharField(max_length=25)
+
+
+class ProductModerationEvent(models.Model):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='moderation_events')
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    action = models.CharField(max_length=10, choices=[('block', 'Block'), ('unblock', 'Unblock'), ('restore', 'Restore')])
+    reason = models.TextField()
+    created = models.DateTimeField(auto_now_add=True)

@@ -133,9 +133,18 @@ Stores automatically earn tier rankings based on cumulative gross sales, dynamic
 - Main and variant digital assets are limited to 50 MiB. Nginx accepts 55 MiB request bodies for multipart framing and allows up to 60 seconds between body reads. Variant download paths must remain inside that exact product's private `digital_products/{store_id}/{product_id}/variants/` directory. Failed image-preview generation occurs before the private original is stored; if storing the original fails, the generated preview is removed.
 - Private originals remain available after a listing is replaced or removed because completed orders retain immutable download paths and buyers may still have valid entitlements. Unreferenced files from abandoned staged uploads can accumulate; safe cleanup requires a retention period and reference checks against live listings and paid order snapshots.
 
-### Media upload limits and digital asset isolation
-- Main and variant digital assets are limited to 50 MiB. Nginx accepts 55 MiB request bodies for multipart framing and allows up to 60 seconds between body reads. Variant download paths must remain inside that exact product's private `digital_products/{store_id}/{product_id}/variants/` directory. Failed image-preview generation occurs before the private original is stored; if storing the original fails, the generated preview is removed.
-- Private originals remain available after a listing is replaced or removed because completed orders retain immutable download paths and buyers may still have valid entitlements. Unreferenced files from abandoned staged uploads can accumulate; safe cleanup requires a retention period and reference checks against live listings and paid order snapshots.
+### Individual Product Moderation & Listing Blocking
+- **Granular Moderation vs. Store Suspension**: Staff and business administrators can block an individual listing (`POST /api/v1/admin/staff/products/<pk>/moderation/`) with a mandatory reason without suspending the merchant's entire store.
+- **Required Reason & Presets**: Blocking requires a reason text (presets: `suspected_scam`, `prohibited_item`, `misleading_description`, `policy_violation`, or custom reason). Restoring also records a reason.
+- **Immediate Purchase Blocking**: Setting `is_blocked=True` immediately:
+  - Excludes the product from public catalog listings, category filters, and Elasticsearch/DB search.
+  - Causes public product detail lookups to return HTTP 404 (while allowing backoffice staff/admin preview via `?preview=1` or `is_staff_operator`).
+  - Marks cart items as `purchasable: false` and rejects checkout with HTTP 400 validation error if a customer attempts to purchase a blocked product.
+- **Store Owner Notification**: Automatically sends both an in-app notification (`product_blocked` / `product_restored`) and a branded transactional HTML email (`product-status.html`) detailing the blocked product title, reason, policy explanations, next steps, and a direct link to the merchant product editor.
+- **Order Integrity**: Blocking a product does not cancel existing orders or issue forced refunds; completed transactions and fulfillment records remain intact.
+- **Merchant Bypass Prevention**: Merchant publishing status (`visibility`) is decoupled from platform moderation status (`is_blocked`). Merchants can edit product details, descriptions, and specifications to address compliance issues, but cannot toggle `visibility=True` or unblock the item while `is_blocked=True`. Only authorized backoffice staff/administrators can restore the listing.
+- **Strict Deletion Lockout**: Stores cannot delete blocked products. Both the merchant API endpoint and the core `Product.delete()` model method strictly forbid deletion while `is_blocked=True` ("Blocked products cannot be deleted while under platform moderation."), preventing sellers from wiping away problematic listings, erasing the moderation audit trail, or re-onboarding the identical scam item after deleting the original.
+- **Immutable Audit Trail**: All moderation actions log an immutable `ProductModerationEvent` record capturing `action` (`block`, `unblock`, `restore`), `reason`, `actor` (staff/admin user), and timestamp.
 
 ### Merchant escrow and payouts
 - **Platform Commission (4%)**: Automatically items and deducts a 4% platform fee (`PLATFORM_FEE_PERCENT = 4.00`) from gross item sales.
@@ -395,6 +404,7 @@ All transactional email templates reside in `server/templates/email-templates/` 
 | `affiliate` | `server/templates/email-templates/affiliate.html` | Partner welcome detailing referral links, HopLinks, commission rules, and affiliate dashboard. |
 | `password-reset` | `server/templates/email-templates/password-reset.html` | Secure password reset email with signed, expiring token link. |
 | `account-delete-confirmation` | `server/templates/email-templates/account-delete-confirmation.html` | Account closure notice detailing data purge and financial audit archival policies. |
+| `product-status` | `server/templates/email-templates/product-status.html` | Product listing moderation notice (blocked or restored) with policy violation reason, next steps, and direct merchant product dashboard link. |
 
 Emails are rendered and enqueued via `server/utils/functions.py:send_mail(file_name, reciever_email, data)` which auto-injects base context (`frontend_url`, `shop_url`, `support_email`) and sets `is_html=True` for multipart delivery.
 

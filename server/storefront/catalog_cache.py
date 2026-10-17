@@ -105,7 +105,7 @@ def read_snapshot(key: str | None) -> dict[str, Any] | None:
     # or return an old checkout price/stock value.
     rows = Product.objects.filter(
         pk__in=items,
-        visibility=True,
+        visibility=True, is_blocked=False,
         store__status=Store.STATUS_ACTIVE,
         store__verified_at__isnull=False,
     ).values("id", "updated", "store_id", "price", "discount", "available", "variants")

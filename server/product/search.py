@@ -79,7 +79,7 @@ def product_document(product: Product) -> dict[str, Any]:
         "store_id": product.store_id,
         "store_status": product.store.status,
         "store_verified": product.store.verified_at is not None,
-        "visibility": product.visibility,
+        "visibility": product.visibility and not getattr(product, "is_blocked", False),
         "price": float(product.price),
         "discount": product.discount,
         "available": product.available,

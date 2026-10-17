@@ -70,6 +70,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "price",
             "sale_price",
             "visibility",
+                  'is_blocked', 'blocked_reason', 'blocked_at',
             "tags",
             "images",
             "average_rating",
@@ -78,7 +79,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "is_digital",
             "label",
         ]
-        read_only_fields = ["sale_price", "average_rating", "likes_count", "is_liked"]
+        read_only_fields = ["is_blocked", "blocked_reason", "blocked_at", "sale_price", "average_rating", "likes_count", "is_liked"]
 
     def to_representation(self, instance: Product) -> dict[str, Any]:
         data = super().to_representation(instance)

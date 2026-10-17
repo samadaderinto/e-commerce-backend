@@ -1142,7 +1142,7 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         products = Product.objects.filter(store=self.get_store()).prefetch_related('tags', 'images').select_related('specification')
         products = filter_records(
             products, self.request.query_params,
-            fields={"is_digital": "is_digital", "product_type": "product_type"},
+            fields={"is_digital": "is_digital", "product_type": "product_type", "is_blocked": "is_blocked"},
         )
         if self.action in {'update', 'partial_update'}:
             # Lock only the product: the optional specification uses an outer join.
@@ -1191,6 +1191,8 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         transaction.on_commit(lambda: invalidate_catalog(product))
 
     def perform_destroy(self, instance):
+        if instance.is_blocked:
+            raise ValidationError({'detail': 'Blocked products cannot be deleted while under platform moderation.'})
         raise ValidationError({'detail': 'Unpublish products with visibility=false to preserve carts and order history.'})
 
     @action(detail=True, methods=['patch'])

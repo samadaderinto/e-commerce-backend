@@ -72,7 +72,7 @@ class ProductViewSet(viewsets.GenericViewSet):
             return Response(cached_product, status=status.HTTP_200_OK)
 
         products = Product.objects.filter(
-            visibility=True,
+            visibility=True, is_blocked=False,
         ).annotate(
             likes_count=Count("wishlist", distinct=True)
         ).prefetch_related("images")
@@ -90,7 +90,7 @@ class ProductViewSet(viewsets.GenericViewSet):
         serializer = ProductSerializer(product, context={"request": request})
         related_products = Product.objects.filter(
                 category=product.category,
-                visibility=True,
+                visibility=True, is_blocked=False,
             ).exclude(id=product.id)[:5]
         data = get_cached_product_data(product.id)
         cache.set(product_cache_key(product.id), data, PRODUCT_CACHE_TIMEOUT)
@@ -98,7 +98,10 @@ class ProductViewSet(viewsets.GenericViewSet):
 
 
     def delete_product(self, request, productId):
+        from rest_framework.exceptions import ValidationError
         product = get_object_or_404(Product, id=productId)
+        if product.is_blocked:
+            raise ValidationError({'detail': 'Blocked products cannot be deleted while under platform moderation.'})
         invalidate_product_cache(product)
         product.delete()
         return Response(status=status.HTTP_202_ACCEPTED)
@@ -155,7 +158,10 @@ class ProductViewSet(viewsets.GenericViewSet):
     @extend_schema(request=ProductSerializer, responses={status.HTTP_200_OK: dict})
     @action(detail=False, methods=['delete'], url_path='product/delete')
     def delete(self, request, store, product):
+        from rest_framework.exceptions import ValidationError
         product = get_object_or_404(self.store_product, store=store, id=product)
+        if product.is_blocked:
+            raise ValidationError({'detail': 'Blocked products cannot be deleted while under platform moderation.'})
         invalidate_product_cache(product)
         product.delete()
         return Response(status=status.HTTP_202_ACCEPTED)
@@ -192,7 +198,7 @@ class ProductViewSet(viewsets.GenericViewSet):
             self.store_product,
             store=storeId,
             id=productId,
-            visibility=True,
+            visibility=True, is_blocked=False,
         )
 
         
@@ -281,7 +287,7 @@ class SearchProductViewSet(ListAPIView):
 
     def get_queryset(self):
         return Product.objects.filter(
-            visibility=True,
+            visibility=True, is_blocked=False,
         ).annotate(
             likes_count=Count("wishlist", distinct=True)
         )

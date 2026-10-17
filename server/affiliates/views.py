@@ -115,7 +115,8 @@ class AffiliatesViewSet(viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         product = get_object_or_404(Product, pk=serializer.validated_data["product"])
         if (
-            not product.visibility
+            product.is_blocked
+            or not product.visibility
             or product.store.status != "active"
             or not product.store.verified_at
         ):
@@ -165,6 +166,7 @@ class AffiliatesViewSet(viewsets.ViewSet):
             identifier=identifier,
             active=True,
             product__visibility=True,
+            product__is_blocked=False,
             product__store__status="active",
             product__store__verified_at__isnull=False,
         )
@@ -205,7 +207,7 @@ class AffiliatesViewSet(viewsets.ViewSet):
         from affiliates.models import ClickBankOutboundClick
 
         product = get_object_or_404(
-            Product, pk=product_id, visibility=True,
+            Product, pk=product_id, visibility=True, is_blocked=False,
             store__status='active', store__verified_at__isnull=False,
         )
         if product.product_type != 'affiliate_clickbank' or not product.affiliate_hoplink:

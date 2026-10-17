@@ -1,0 +1,25 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  {% if event == "product_blocked" %}
+    <p>Your product <strong>{{ product_title }}</strong> has been blocked from the marketplace by platform moderation.</p>
+    {% if reason %}
+      <p><strong>Reason:</strong> {{ reason }}</p>
+    {% endif %}
+    <p><strong>Next steps:</strong></p>
+    <ul>
+      <li>Review our seller policies and community guidelines.</li>
+      <li>Open your merchant dashboard to edit the product details and address the flagged policy issue.</li>
+      <li>Once the listing complies with platform rules, contact support or reply to this notice to request a review and listing restoration.</li>
+    </ul>
+    <p>Existing orders containing this product remain valid and must be fulfilled normally.</p>
+  {% elif event == "product_restored" %}
+    <p>Your product <strong>{{ product_title }}</strong> has been restored and is available to shoppers.</p>
+    {% if reason %}
+      <p><strong>Note:</strong> {{ reason }}</p>
+    {% endif %}
+  {% else %}
+    <p>Open your merchant dashboard to review your product status and manage your catalog.</p>
+  {% endif %}
+{% endblock %}
+{% block action_url %}{{ dashboard_url }}{% endblock %}
+{% block action_label %}View product in dashboard{% endblock %}

@@ -6,6 +6,7 @@ from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 
+from django.conf import settings
 from django.db.models import Count, Q, Sum
 from django.db import transaction
 from django.shortcuts import get_object_or_404
@@ -67,6 +68,7 @@ from staff.serializers import (
     TreasuryWithdrawalDecisionSerializer,
     StoreModerationSerializer,
     StoreAuditProductSerializer,
+    ProductModerationSerializer,
 )
 from staff.digital_assets import stream_digital_asset
 
@@ -511,7 +513,7 @@ class StaffViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=["get"], url_path=r"stores/(?P<store_pk>\d+)/products")
     def store_products(self, request, store_pk=None):
         get_object_or_404(Store, pk=store_pk)
-        products = Product.objects.filter(store_id=store_pk).order_by("-created", "-pk")
+        products = Product.objects.filter(store_id=store_pk).select_related("blocked_by").prefetch_related("moderation_events__actor").order_by("-created", "-pk")
         search = request.query_params.get("search")
         if search:
             products = products.filter(Q(title__icontains=search) | Q(category__icontains=search))
@@ -536,8 +538,52 @@ class StaffViewSet(viewsets.GenericViewSet):
         ordering = request.query_params.get("ordering")
         if ordering in ("created", "-created", "title", "-title", "price", "-price"):
             products = products.order_by(ordering, "-pk")
-        products = filter_records(products, request.query_params, fields={"category": "category"})
+        products = filter_records(products, request.query_params, fields={"category": "category", "is_blocked": "is_blocked"})
         return self.paginate_response(products, StoreAuditProductSerializer)
+
+    @action(detail=False, methods=['post'], url_path=r'products/(?P<product_pk>\d+)/moderation')
+    @extend_schema(request=ProductModerationSerializer, responses=StoreAuditProductSerializer)
+    @transaction.atomic
+    def moderate_product(self, request: Request, product_pk: str | None = None) -> Response:
+        from product.models import ProductModerationEvent
+
+        serializer = ProductModerationSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        product = get_object_or_404(Product.objects.select_for_update(), pk=product_pk)
+        action_val = serializer.validated_data['action']
+        blocked = action_val == 'block'
+        if product.is_blocked == blocked:
+            return Response(StoreAuditProductSerializer(product).data)
+        reason = serializer.validated_data['reason']
+        product.is_blocked = blocked
+        product.blocked_reason = reason if blocked else ''
+        product.blocked_at = timezone.now() if blocked else None
+        product.blocked_by = request.user if blocked else None
+        product.save(update_fields=['is_blocked', 'blocked_reason', 'blocked_at', 'blocked_by', 'updated'])
+        ProductModerationEvent.objects.create(
+            product=product, actor=request.user,
+            action='block' if blocked else 'restore', reason=reason,
+        )
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+        create_notification(
+            recipient=product.store.user, actor=request.user, target=product,
+            verb='product blocked' if blocked else 'product restored',
+            description=f'"{product.title}" has been {"blocked by platform moderation" if blocked else "restored"}. Reason: {reason}',
+            level='warning' if blocked else 'success',
+            data={
+                'event': 'product_blocked' if blocked else 'product_restored',
+                'category': 'store',
+                'store_id': product.store_id,
+                'product_id': product.pk,
+                'product_title': product.title,
+                'reason': reason,
+                'action': 'blocked' if blocked else 'restored',
+                'dashboard_url': f'{frontend_url}/merchant/products/{product.pk}?store={product.store_id}',
+                'url': f'/merchant/products/{product.pk}?store={product.store_id}',
+            },
+        )
+        transaction.on_commit(lambda: invalidate_product_cache(product))
+        return Response(StoreAuditProductSerializer(product).data)
 
     @action(detail=False, methods=["get"], url_path=r"products/(?P<product_pk>\d+)/digital-asset")
     def digital_asset(self, request, product_pk=None):

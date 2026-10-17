@@ -10,7 +10,7 @@ from core.models import User
 from core.serializers import UserSerializer
 from payment.models import Coupon, CouponRedemption, Order
 from payment.serializers import CouponSerializer, OrdersSerializer
-from product.models import Product
+from product.models import Product, ProductModerationEvent
 from staff.models import Post, Content, Comment
 from store.models import Store
 from store.serializers import StoreSerializer
@@ -308,16 +308,28 @@ class DashboardQuerySerializer(serializers.Serializer):
     days = serializers.IntegerField(default=30, min_value=1, max_value=365)
 
 
+class ProductModerationEventSerializer(serializers.ModelSerializer):
+    actor_email = serializers.EmailField(source="actor.email", read_only=True, default="")
+
+    class Meta:
+        model = ProductModerationEvent
+        fields = ["id", "action", "reason", "actor_email", "created"]
+
+
 class StoreAuditProductSerializer(serializers.ModelSerializer):
     price = serializers.CharField()
     sales = serializers.IntegerField(read_only=True)
     has_digital_asset = serializers.SerializerMethodField()
     available = serializers.SerializerMethodField()
+    blocked_by_email = serializers.EmailField(source="blocked_by.email", read_only=True, default=None)
+    moderation_events = ProductModerationEventSerializer(many=True, read_only=True)
 
     class Meta:
         model = Product
         fields = [
             "id", "title", "category", "price", "sales", "visibility",
+            "is_blocked", "blocked_reason", "blocked_at", "blocked_by_email",
+            "moderation_events",
             "is_digital", "has_digital_asset", "available", "created", "updated",
             "product_type", "affiliate_hoplink", "affiliate_vendor_nickname", "affiliate_button_text",
         ]
@@ -382,3 +394,8 @@ class StaffUserOrderQuerySerializer(serializers.Serializer):
     order_payment = serializers.ChoiceField(choices=["", "card", "wallet", "cash_on_delivery", "stripe_wallet"], default="")
     order_ordering = serializers.ChoiceField(choices=["-created", "created", "-total", "total"], default="-created")
     order_offset = serializers.IntegerField(min_value=0, default=0)
+
+
+class ProductModerationSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=['block', 'unblock', 'restore'])
+    reason = serializers.CharField(max_length=2000, trim_whitespace=True, allow_blank=False)

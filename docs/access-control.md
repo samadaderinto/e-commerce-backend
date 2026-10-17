@@ -19,6 +19,7 @@ All active back-office accounts—staff, business administrators, and technical 
 
 - deactivate or reactivate coupons;
 - permanently delete coupons only when they have never been redeemed (used coupons remain as audit history and can only be deactivated);
+- block or restore individual product listings with a mandatory reason (presets: suspected scam, prohibited item, misleading description, policy violation; or custom text) without suspending the merchant's entire store;
 - approve or decline a pending refund once, recording the processor and processing time;
 - override a non-refunded order's operational status with a mandatory support reason. The change is appended to tracking history and the customer is notified.
 
@@ -50,6 +51,7 @@ Paths below have prefix `/api/v1/`. Staff members have global backoffice access 
 | Store products CRUD, images, specifications, visibility schedules | Owned store | Proace official stores | Proace official stores | Proace official stores |
 | Store order tracking POST | Owned store order | Proace official store orders | Proace official store orders | Proace official store orders |
 | `admin/stores` GET (Store directory & product catalog) | Denied | Allowed (read-only audit & catalog preview) | Allowed | Allowed |
+| `admin/staff/products/{id}/moderation/` POST | Denied | Allowed (moderate product listing) | Allowed | Allowed |
 | `admin/stores`, approve/block seller verification | Denied | Denied | Allowed | Allowed |
 | `admin/coupons` GET/POST | Denied | Denied | Allowed | Allowed |
 | `admin/staff` list/create/detail/block/unblock | Denied | Denied | Staff targets only | Staff targets only |

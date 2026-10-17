@@ -101,7 +101,7 @@ def with_catalog_details(products: QuerySet[Product]) -> QuerySet[Product]:
 def catalog() -> QuerySet[Product]:
     return with_catalog_details(
         Product.objects.filter(
-            visibility=True,
+            visibility=True, is_blocked=False,
             store__status=Store.STATUS_ACTIVE,
             store__verified_at__isnull=False,
         )
@@ -580,7 +580,12 @@ class ProductDetailView(APIView):
                     or getattr(user, 'is_business_admin', False)
                 )
             )
-            if not is_authorized or not raw_product.visibility:
+            is_staff_operator = bool(
+                getattr(user, 'is_staff', False)
+                or getattr(user, 'is_superuser', False)
+                or getattr(user, 'is_business_admin', False)
+            )
+            if not is_authorized or not raw_product.visibility or (raw_product.is_blocked and not is_staff_operator):
                 raise Http404('No Product matches the given query.')
             product = raw_product
         if request.user.is_authenticated:
@@ -911,6 +916,7 @@ def cart_data(cart: Cart, request: Request) -> dict[str, Any]:
             and product.product_type != Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
             and not is_own_store(product, request.user)
             and product.visibility
+            and not product.is_blocked
             and product.store.status == Store.STATUS_ACTIVE
             and product.store.verified_at is not None
             and (item.quantity == 1 if product.is_digital else (
@@ -2000,7 +2006,8 @@ class CheckoutView(APIView):
                     {"variant": "Insufficient stock for the selected option."}
                 )
             if (
-                not product.visibility
+                product.is_blocked
+                or not product.visibility
                 or product.store.status != Store.STATUS_ACTIVE
                 or product.store.verified_at is None
                 or (

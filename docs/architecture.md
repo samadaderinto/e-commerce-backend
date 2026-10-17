@@ -95,6 +95,7 @@ and permission details rather than inferring them from a prefix.
 | `/api/v1/admin/staff/payouts/` | Merchant payout request approval and rejection processing with audit notes |
 | `/api/v1/admin/staff/users/` | Customer and staff directory with role (`customer`, `staff`, `admin`) and status filters |
 | `/api/v1/admin/staff/staffs/` | Staff invitation, permission controls, and blocking (technical/business admin only) |
+| `/api/v1/admin/staff/products/<pk>/moderation/` | Individual product moderation: block with required reason, restore, and audit logging |
 
 OpenAPI schema, Swagger and ReDoc are served at `/api/schema/`, `/api/docs/`
 and `/api/redoc/` respectively. They are available on a running local backend.
@@ -122,6 +123,7 @@ is ready for production:
 | Hybrid destination sales tax engine (local DB rules with Stripe Tax fallback). | Destination state and ZIP jurisdiction rates, digital exemptions, and shipping fee taxability are calculated accurately and snapshotted per order. |
 | Use SQLite for direct local development/tests and PostgreSQL for Compose/production. | Direct setup is lightweight; production data must use persistent managed storage. |
 | Enforce disciplined error sanitization and sensitive data protection across client and server. | Stack traces, SQL queries, database schemas, secrets, and raw Python/DRF representations are strictly logged on the server. End users receive clean, human-readable guidance without sensitive leaks or code syntax. |
+| Separate merchant publishing status from platform product moderation. | Staff/admins can block problematic listings (suspected scam, prohibited item, misleading description, policy violations) without suspending the entire store. Blocking immediately hides items from public catalog/search and rejects checkout (including items already in carts), notifies the store owner with reasons and next steps, preserves existing order records, forbids product deletion to protect audit integrity and prevent re-onboarding scams, records an immutable audit trail (`ProductModerationEvent`), and prevents merchant bypass. |
 
 ## Deployment boundary
 
