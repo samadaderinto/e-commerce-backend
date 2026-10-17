@@ -318,6 +318,44 @@ class NotificationApiTests(TestCase):
         self.assertEqual(response.status_code, 503, response.data)
         self.assertFalse(PushDevice.objects.exists())
 
+    @override_settings(FCM_ENABLED=True)
+    def test_get_push_device_status_returns_registration_state(self):
+        # 1. When no devices are registered for user
+        response = self.client.get("/notifications/devices/")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["registered"])
+        self.assertFalse(response.data["has_devices"])
+        self.assertEqual(response.data["device_count"], 0)
+        self.assertTrue(response.data["fcm_enabled"])
+
+        # 2. Register a device for this user
+        PushDevice.objects.create(user=self.user, token="test-device-token-1")
+
+        response = self.client.get("/notifications/devices/")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["registered"])
+        self.assertTrue(response.data["has_devices"])
+        self.assertEqual(response.data["device_count"], 1)
+
+        # 3. Query with specific matching token
+        response = self.client.get("/notifications/devices/?token=test-device-token-1")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["registered"])
+
+        # 4. Query with non-matching token
+        response = self.client.get("/notifications/devices/?token=different-token")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["registered"])
+        self.assertTrue(response.data["has_devices"])
+
+        # 5. User boundary isolation: another user does not see this user's devices
+        self.client.force_authenticate(self.staff)
+        response = self.client.get("/notifications/devices/?token=test-device-token-1")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["registered"])
+        self.assertFalse(response.data["has_devices"])
+        self.assertEqual(response.data["device_count"], 0)
+
     @override_settings(FCM_ENABLED=True, FIREBASE_PROJECT_ID="test-project")
     def test_push_task_sends_data_only_messages_and_removes_expired_tokens(self):
         notification = create_notification(

@@ -13,7 +13,7 @@ from taggit.serializers import TaggitSerializer, TagListSerializerField
 from product.models import Product, ProductImg, Specification
 from store.models import (
     MerchantWallet, Schedule, Store, StoreAddress, StoreEarningsLedger,
-    StoreImg, StoreInfo, StorePayout,
+    StoreImg, StoreInfo, StorePayout, StoreTeamMember,
 )
 
 
@@ -25,16 +25,17 @@ from utils.image_uploads import ImageUploadError, normalize_public_image
 
 class StoreSerializer(serializers.ModelSerializer):
     seller_tier = serializers.SerializerMethodField()
+    user_role = serializers.SerializerMethodField()
 
     class Meta:
         model = Store
         fields = [
-            'id', 'user', 'username', 'name', 'status', 'is_official', 'seller_tier', 'assigned_staff',
+            'id', 'user', 'username', 'name', 'status', 'is_official', 'seller_tier', 'user_role', 'assigned_staff',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated', 'last_active_at',
         ]
         read_only_fields = [
-            'id', 'user', 'status', 'is_official', 'seller_tier', 'assigned_staff',
+            'id', 'user', 'status', 'is_official', 'seller_tier', 'user_role', 'assigned_staff',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated', 'last_active_at',
         ]
@@ -42,6 +43,52 @@ class StoreSerializer(serializers.ModelSerializer):
 
     def get_seller_tier(self, obj):
         return calculate_store_tier(obj)
+
+    def get_user_role(self, obj: Store) -> str:
+        request = self.context.get('request')
+        if not request or not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return 'owner'
+        from store.services import get_store_user_role
+        return get_store_user_role(obj, request.user) or 'owner'
+
+
+class StoreTeamMemberSerializer(serializers.ModelSerializer):
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    first_name = serializers.CharField(source='user.first_name', read_only=True)
+    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    avatar_url = serializers.SerializerMethodField()
+    role_display = serializers.CharField(source='get_role_display', read_only=True)
+    invited_by_email = serializers.EmailField(source='invited_by.email', read_only=True)
+
+    class Meta:
+        model = StoreTeamMember
+        fields = [
+            'id', 'user_id', 'email', 'first_name', 'last_name', 'avatar_url',
+            'role', 'role_display', 'invited_by_email', 'created', 'updated',
+        ]
+        read_only_fields = [
+            'id', 'user_id', 'email', 'first_name', 'last_name', 'avatar_url',
+            'role_display', 'invited_by_email', 'created', 'updated',
+        ]
+
+    def get_avatar_url(self, obj: StoreTeamMember) -> str:
+        avatar = getattr(obj.user, 'avatar', None)
+        if avatar:
+            return normalize_media_url(avatar.url)
+        return ''
+
+
+class StoreTeamMemberInviteSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+    role = serializers.ChoiceField(
+        choices=StoreTeamMember.ROLE_CHOICES,
+        default=StoreTeamMember.ROLE_CATALOG_MANAGER,
+    )
+
+
+class StoreTeamMemberUpdateSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=StoreTeamMember.ROLE_CHOICES, required=True)
 
 
 class StoreInfoSerializer(serializers.ModelSerializer):
@@ -53,6 +100,38 @@ class StoreInfoSerializer(serializers.ModelSerializer):
         extra_kwargs = {field: {'required': False, 'allow_blank': True}
                         for field in ['bio', 'announcement', 'avatar_url', 'banner_url', 'website',
                                       'instagram', 'twitter', 'facebook']}
+
+    def validate_pinned_products(self, value: Any) -> list[int]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError('Pinned products must be a list of product IDs.')
+        cleaned_ids: list[int] = []
+        for item in value:
+            try:
+                pid = int(item)
+                if pid <= 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                raise serializers.ValidationError(f'Invalid product ID: {item}')
+            if pid not in cleaned_ids:
+                cleaned_ids.append(pid)
+
+        if len(cleaned_ids) > 3:
+            raise serializers.ValidationError('You can pin at most 3 products on your store page.')
+
+        store = None
+        if self.instance and getattr(self.instance, 'store', None):
+            store = self.instance.store
+        elif 'store' in self.context:
+            store = self.context['store']
+
+        if store and cleaned_ids:
+            found_count = Product.objects.filter(store=store, pk__in=cleaned_ids).count()
+            if found_count != len(cleaned_ids):
+                raise serializers.ValidationError('All pinned products must belong to this store.')
+
+        return cleaned_ids
 
     def to_representation(self, instance: StoreInfo) -> dict[str, Any]:
         data = super().to_representation(instance)
@@ -146,17 +225,18 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     images = MerchantImageSerializer(many=True, read_only=True)
     specifications = MerchantSpecificationSerializer(source='specification', read_only=True)
     sale_price = serializers.DecimalField(max_digits=15, decimal_places=2, read_only=True)
+    is_upcoming_drop = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Product
         fields = ['id', 'store', 'title', 'description', 'category', 'price', 'brand', 'image_url',
                   'discount', 'sale_price', 'available', 'visibility', 'label',
                   'is_blocked', 'blocked_reason', 'blocked_at',
-                  'tags', 'images', 'specifications', 'sales', 'flash_sale_end', 'variants', 'average_rating',
+                  'tags', 'images', 'specifications', 'sales', 'flash_sale_end', 'drop_at', 'is_upcoming_drop', 'variants', 'average_rating',
                   'sponsored', 'weight', 'length', 'width', 'height', 'is_digital', 'digital_file_url', 'digital_preview_watermark',
                   'product_type', 'affiliate_hoplink', 'affiliate_vendor_nickname', 'affiliate_button_text', 'created', 'updated']
         read_only_fields = ['is_blocked', 'blocked_reason', 'blocked_at', 'id', 'store', 'sales', 'average_rating', 'sponsored',
-                            'created', 'updated']
+                            'is_upcoming_drop', 'created', 'updated']
         extra_kwargs = {
             'price': {'min_value': Decimal('0.01')},
             'discount': {'default': 0},
@@ -245,10 +325,15 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     'flash_sale_end': 'Flash deals cannot be scheduled for ClickBank affiliate partner offers.'
                 })
+            if attrs.get('drop_at'):
+                raise serializers.ValidationError({
+                    'drop_at': 'Scheduled drops cannot be configured for ClickBank affiliate partner offers.'
+                })
             attrs['product_type'] = Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
             attrs['affiliate_hoplink'] = hoplink
             attrs['discount'] = 0
             attrs['flash_sale_end'] = None
+            attrs['drop_at'] = None
             attrs['is_digital'] = False
             attrs['digital_file_url'] = ''
             attrs['variants'] = []
@@ -472,3 +557,48 @@ class MerchantTrackingSerializer(serializers.Serializer):
     carrier = UppercaseCarrierField(choices=['USPS', 'UPS', 'FEDEX', 'DHL'], default='USPS')
     tracking_number = serializers.CharField(max_length=100, allow_blank=True, required=False, default='')
     event_description = serializers.CharField(max_length=1000, allow_blank=True, required=False, default='')
+
+
+class MerchantRefundItemSerializer(serializers.Serializer):
+    product = serializers.IntegerField(allow_null=True, required=False)
+    title = serializers.CharField()
+    image = serializers.CharField(allow_blank=True, default='')
+    quantity = serializers.IntegerField(default=1)
+    unit_price = serializers.CharField()
+    line_total = serializers.CharField()
+    is_digital = serializers.BooleanField(default=False)
+    variant = serializers.DictField(required=False, allow_null=True, default=None)
+
+
+class MerchantRefundSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    order = serializers.IntegerField(allow_null=True, required=False)
+    order_reference = serializers.CharField(allow_blank=True, default='')
+    customer_email = serializers.EmailField()
+    customer_name = serializers.CharField(allow_blank=True, default='')
+    status = serializers.ChoiceField(choices=['pending', 'approved', 'declined', 'failed'])
+    refund_type = serializers.ChoiceField(choices=['store_credit', 'original_payment'])
+    reason = serializers.CharField()
+    processing_reason = serializers.CharField(allow_blank=True, default='')
+    amount = serializers.CharField()
+    total_order_refund_amount = serializers.CharField()
+    items = MerchantRefundItemSerializer(many=True)
+    processed_at = serializers.DateTimeField(allow_null=True, required=False)
+    processed_by_email = serializers.EmailField(allow_null=True, required=False, default=None)
+    created = serializers.DateTimeField()
+    updated = serializers.DateTimeField()
+
+
+class MerchantRefundQuerySerializer(serializers.Serializer):
+    search = serializers.CharField(required=False, allow_blank=True)
+    status = serializers.ChoiceField(choices=['pending', 'approved', 'declined', 'failed'], required=False)
+    refund_type = serializers.ChoiceField(choices=['store_credit', 'original_payment'], required=False)
+    order_id = serializers.CharField(required=False, allow_blank=True)
+    refund_id = serializers.CharField(required=False, allow_blank=True)
+    days = serializers.IntegerField(required=False, min_value=1)
+    date_from = serializers.CharField(required=False, allow_blank=True)
+    date_to = serializers.CharField(required=False, allow_blank=True)
+    start_date = serializers.CharField(required=False, allow_blank=True)
+    end_date = serializers.CharField(required=False, allow_blank=True)
+    ordering = serializers.ChoiceField(choices=['-created', 'created', '-updated', 'updated', '-amount', 'amount'], required=False, default='-created')
+

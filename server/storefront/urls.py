@@ -8,9 +8,10 @@ from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, Spec
 from .views import (
     PasswordChangeView, AddressesView, AuthView, CartView, CheckoutView, CouponAdminView, MeView, MeAvatarView, OrderDetailView, DigitalDownloadView,
     OrderRefundView, OrderCancelView, OrderTrackingView, ShippingRatesView, UserWalletView, WalletCheckoutConfirmView, WalletCheckoutSessionView,
-    OrdersView, ProductDetailView, ProductsView, PublicStoreView, PublicStoreImageView, PublicUserImageView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
+    OrdersView, ProductDetailView, ProductDropLiveView, ProductsView, PublicStoreView, PublicStoreImageView, PublicUserImageView, ReviewsView, WishlistView, WalletTopupSessionView, WalletTopupConfirmView,
     CouponValidateView, TaxJurisdictionAdminView, TaxJurisdictionDetailAdminView, TaxJurisdictionSeedDefaultsAdminView,
     WalletCheckoutCancelView, WalletTopupCancelView, StripeWebhookView,
+    VisualSearchView, VisualSearchPresetsView,
 )
 from store.views import StoreReviewViewSet
 from staff.views import StaffViewSet
@@ -36,7 +37,10 @@ urlpatterns = [
     path('api/v1/wallet/topup-confirm/', WalletTopupConfirmView.as_view()),
     path('api/v1/wallet/topup-cancel/', WalletTopupCancelView.as_view()),
     path('api/v1/products/', ProductsView.as_view()),
+    path('api/v1/products/visual-search/', VisualSearchView.as_view()),
+    path('api/v1/products/visual-search/presets/', VisualSearchPresetsView.as_view()),
     path('api/v1/products/<int:pk>/', ProductDetailView.as_view()),
+    path('api/v1/products/<int:pk>/drop-live/', ProductDropLiveView.as_view()),
     path('api/v1/products/<int:pk>/reviews/', ReviewsView.as_view()),
     path('api/v1/stores/<int:pk>/public/', PublicStoreView.as_view()),
     path('api/v1/stores/<int:pk>/public/images/<str:kind>/', PublicStoreImageView.as_view()),

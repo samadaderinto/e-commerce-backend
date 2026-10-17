@@ -13,6 +13,25 @@ The API is authoritative. The client shields consumer routes (`/`, `/cart`, `/ch
 
 `GET /api/v1/me/` and successful login responses include `role`, `is_staff`, `is_superuser`, `is_business_admin`, and `must_change_password`. Role flags are read-only in self-service serializers. Administrative peers cannot modify, block, or demote either kind of administrator. The staff list excludes both kinds of admin. Business admin creation is an operator-only management command; ordinary API payloads cannot grant that role or root permissions.
 
+## Store Team Access & Granular Roles
+
+Store owners can invite team members to collaborate on store management with scoped, least-privilege roles without sharing primary account credentials:
+
+| Store Role | Key Permissions | Restricted Surfaces |
+| --- | --- | --- |
+| **Owner** | Full unrestricted store ownership: product catalog, orders, fulfillment tracking, refunds, team roster management, bank/Stripe Connect, payouts, and store settings/deletion. | None |
+| **Store Admin** | Comprehensive store operations: manage product catalog, inventory, order processing, tracking numbers, customer refunds, store pickup/profile settings, and invite/manage staff team members. | Cannot withdraw payouts, connect/modify Stripe banking, appoint/modify Store Admins, or delete the store. |
+| **Catalog Manager** | Product and catalog management: create/edit listings, upload media gallery photos, manage variant options/stock, set pricing, and configure drops/schedules. | Cannot view or update customer orders, tracking, refunds, payouts, banking, or team roster. |
+| **Fulfillment Specialist** | Logistics and order fulfillment: view customer orders, inspect order items and packing info, print packing slips, add/update shipping carriers and tracking numbers, and process customer refunds. | Cannot edit product catalog, manage inventory, view banking/payouts, or manage team roster. |
+
+### Store Team API Endpoints
+- `GET /api/v1/stores/{id}/team/`: List all invited staff team members and their assigned roles. (Owner or Store Admin).
+- `POST /api/v1/stores/{id}/team/`: Invite an active registered user to the store team by email with an initial role (`store_admin`, `catalog_manager`, `fulfillment_specialist`). Store Admins cannot invite another Store Admin.
+- `PATCH /api/v1/stores/{id}/team/{member_pk}/`: Update an existing team member's role. Store Admins cannot promote anyone to Store Admin or demote/modify an existing Store Admin.
+- `DELETE /api/v1/stores/{id}/team/{member_pk}/`: Remove a staff team member from the store. Store Admins cannot remove another Store Admin.
+
+Store visibility and permissions are dynamically derived on the server: `Store.objects.filter(Q(user=request.user) | Q(team_members__user=request.user))` guarantees team members only see their authorized stores. Active store serializers expose `user_role` (`owner`, `store_admin`, `catalog_manager`, `fulfillment_specialist`), which powers the merchant frontend UI.
+
 ## Global operational dashboard
 
 All active back-office accounts—staff, business administrators, and technical administrators—can view the global commerce dashboard and its order-status chart, revenue and order totals, user/store/catalog health, top stores, and recent orders. They can also perform support operations when a merchant cannot access their account:

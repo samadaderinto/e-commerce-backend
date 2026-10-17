@@ -19,7 +19,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, models, transaction
 from django.db.models import Count, Q, F, Case, When, QuerySet, OuterRef, Subquery, IntegerField, Value, Prefetch
 from django.db.models.functions import Coalesce
-from django.http import Http404, FileResponse
+from django.http import Http404, FileResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
@@ -46,7 +46,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 
 from cart.models import Cart, CartItem
-from affiliates.services import reward_referral
+from affiliates.services import record_referral, reward_referral, process_referral_reward_for_order
 from core.models import Address, Refund, Review, User, Wishlist, UserWallet, UserWalletTransaction
 from core.serializers import UserWalletSerializer, UserWalletTransactionSerializer
 from core.services import get_or_create_user_wallet, credit_user_wallet, debit_user_wallet
@@ -74,6 +74,7 @@ from .serializers import (
     CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
     OrderSerializer, OrderTrackingSerializer, ProductIdRequestSerializer, PublicStoreSerializer, RefundRequestSerializer, RegisterSerializer,
     ReviewSerializer, ShippingRateSerializer, UserSerializer, UserAvatarImageSerializer, WalletCheckoutSerializer, unit_price,
+    VisualSearchResponseSerializer, VisualSearchPresetLookSerializer,
 )
 
 
@@ -243,7 +244,7 @@ class AuthView(APIView):
                     user.save(update_fields=['is_active', 'credential_version'])
                     ref = str(payload.get('ref') or '').strip()
                     if ref:
-                        reward_referral(ref, user)
+                        record_referral(ref, user)
             except (signing.BadSignature, User.DoesNotExist, KeyError, TypeError, ValueError):
                 raise ValidationError({'detail': 'This verification link is invalid or expired.'})
             return Response({'detail': 'Email verified. You can now sign in.'})
@@ -454,6 +455,7 @@ class ProductsView(APIView):
     def _get_uncached(self, request: Request) -> Response:
         params = request.query_params
         is_store_preview = False
+        store_obj = None
 
         if params.get('store'):
             store = serializers.IntegerField(min_value=1).run_validation(params['store'])
@@ -556,6 +558,15 @@ class ProductsView(APIView):
                     '-pk',
                 )
                 return self._page_response(products, request, page)
+        if store_obj:
+            store_info = StoreInfo.objects.filter(store=store_obj).only('pinned_products').first()
+            raw_pinned = store_info.pinned_products if store_info and isinstance(store_info.pinned_products, list) else []
+            pinned_ids = [int(p) for p in raw_pinned if str(p).isdigit()][:3]
+            if pinned_ids:
+                when_clauses = [When(pk=pid, then=Value(idx)) for idx, pid in enumerate(pinned_ids)]
+                pinned_order = Case(*when_clauses, default=Value(len(pinned_ids)), output_field=IntegerField())
+                return self._page_response(products.order_by(pinned_order, ordering, '-pk'), request, page)
+
         return self._page_response(products.order_by(ordering, '-pk'), request, page)
 
 
@@ -598,6 +609,218 @@ class ProductDetailView(APIView):
                 else:
                     Recent.objects.create(user=request.user, product=product)
         return Response(CatalogSerializer(product, context={'request': request}).data)
+
+
+class ProductDropLiveView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(
+        operation_id='storefront_product_drop_live',
+        responses={200: OpenApiTypes.OBJECT},
+        auth=[],
+        description='Real-time drop presence and countdown status stream via SSE or JSON.'
+    )
+    def get(self, request: Request, pk: int) -> Response | StreamingHttpResponse:
+        product = get_object_or_404(catalog(), pk=pk)
+
+        if request.query_params.get('format') == 'json' or request.headers.get('Accept') == 'application/json':
+            from django.core.cache import cache
+            cached_viewers = cache.get(f'drop_viewers:{pk}', 1)
+            return Response({
+                'product_id': product.pk,
+                'viewers': max(1, int(cached_viewers)),
+                'drop_at': product.drop_at.isoformat() if product.drop_at else None,
+                'is_dropped': not product.is_upcoming_drop,
+                'server_time': timezone.now().isoformat(),
+            })
+
+        import uuid
+        import time
+        from collections.abc import Iterator
+        from django.core.cache import cache
+        from notification.realtime import broker, encode_event
+
+        client_token = str(uuid.uuid4())
+        viewers_cache_key = f'drop_viewers:{pk}'
+
+        def events() -> Iterator[str]:
+            redis_client = None
+            try:
+                redis_client = broker()
+            except Exception:
+                redis_client = None
+
+            try:
+                if redis_client:
+                    try:
+                        redis_client.sadd(f'drop:viewers:set:{pk}', client_token)
+                        redis_client.expire(f'drop:viewers:set:{pk}', 60)
+                        count = redis_client.scard(f'drop:viewers:set:{pk}')
+                    except Exception:
+                        count = 1
+                else:
+                    count = cache.get(viewers_cache_key, 1)
+
+                yield 'retry: 3000\n\n'
+
+                deadline = time.monotonic() + 25
+                while time.monotonic() < deadline:
+                    from product.models import Product
+                    curr = Product.objects.filter(pk=pk).first()
+                    is_dropped = not (curr and curr.is_upcoming_drop)
+
+                    if redis_client:
+                        try:
+                            count = redis_client.scard(f'drop:viewers:set:{pk}')
+                        except Exception:
+                            count = 1
+
+                    data = {
+                        'product_id': pk,
+                        'viewers': max(1, count),
+                        'drop_at': curr.drop_at.isoformat() if curr and curr.drop_at else None,
+                        'is_dropped': is_dropped,
+                        'server_time': timezone.now().isoformat(),
+                    }
+                    yield encode_event('drop_status', data)
+
+                    if is_dropped and curr and curr.drop_at:
+                        yield encode_event('dropped', {'product_id': pk, 'is_dropped': True})
+
+                    time.sleep(3)
+            except GeneratorExit:
+                pass
+            finally:
+                if redis_client:
+                    try:
+                        redis_client.srem(f'drop:viewers:set:{pk}', client_token)
+                        redis_client.close()
+                    except Exception:
+                        pass
+
+        response = StreamingHttpResponse(events(), content_type='text/event-stream')
+        response['Cache-Control'] = 'no-cache, no-transform'
+        response['X-Accel-Buffering'] = 'no'
+        return response
+
+
+class VisualSearchPresetsView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        operation_id='storefront_visual_search_presets',
+        responses=VisualSearchPresetLookSerializer(many=True),
+        auth=[],
+        description='Returns curated sample looks for instant visual search and shop-the-look test drive.',
+    )
+    def get(self, request: Request) -> Response:
+        from product.visual_search import PRESET_LOOKS
+        return Response(list(PRESET_LOOKS.values()))
+
+
+class VisualSearchView(APIView):
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        operation_id='storefront_visual_search',
+        responses=VisualSearchResponseSerializer,
+        auth=[],
+        description='Upload a photo or choose a preset look to discover matching products across categories, colors, and silhouettes.',
+    )
+    def post(self, request: Request) -> Response:
+        import json
+        import re
+        from product.visual_search import VisualSearchEngine, PRESET_LOOKS
+
+        image_file = request.FILES.get('image')
+        preset_id = request.data.get('preset_id')
+        item_id = request.data.get('item_id')
+        user_query = str(request.data.get('query') or '').strip()
+        category_filter = str(request.data.get('category') or '').strip()
+        store_id = request.data.get('store_id')
+
+        focus_box = None
+        raw_box = request.data.get('focus_box')
+        if raw_box:
+            try:
+                if isinstance(raw_box, str):
+                    if raw_box.startswith('['):
+                        focus_box = json.loads(raw_box)
+                    else:
+                        focus_box = [float(v.strip()) for v in raw_box.split(',') if v.strip()]
+                elif isinstance(raw_box, (list, tuple)):
+                    focus_box = [float(v) for v in raw_box]
+            except Exception:
+                focus_box = None
+
+        if image_file:
+            image = VisualSearchEngine.load_and_validate_image(image_file)
+            analysis = VisualSearchEngine.analyze_look(
+                image=image,
+                focus_box=focus_box,
+                selected_item_id=item_id,
+                user_query=user_query,
+                category_filter=category_filter,
+                store_id=int(store_id) if store_id and str(store_id).isdigit() else None,
+            )
+        elif preset_id and preset_id in PRESET_LOOKS:
+            preset = PRESET_LOOKS[preset_id]
+            items = preset['items']
+            active_item = None
+            if item_id:
+                for item in items:
+                    if item['id'] == item_id:
+                        active_item = item
+                        break
+            if not active_item and items:
+                active_item = items[0]
+
+            target_category = category_filter or (active_item['category'] if active_item else '')
+            target_colors = active_item.get('dominant_colors', []) if active_item else []
+            target_keywords = list(active_item.get('keywords', [])) if active_item else []
+            if user_query:
+                target_keywords.extend([t.lower() for t in re.findall(r"\b[a-zA-Z0-9_-]+\b", user_query)])
+
+            matched_results = VisualSearchEngine.match_products(
+                target_category=target_category,
+                target_colors=target_colors,
+                target_keywords=target_keywords,
+                user_query=user_query,
+                store_id=int(store_id) if store_id and str(store_id).isdigit() else None,
+            )
+            analysis = {
+                'palette': [
+                    {'hex': color, 'name': 'Accent Tone', 'percentage': 30.0}
+                    for color in target_colors
+                ],
+                'detected_items': items,
+                'selected_item_id': active_item['id'] if active_item else None,
+                'selected_item': active_item,
+                'results': matched_results,
+                'query_applied': user_query or (active_item['label'] if active_item else preset['title']),
+            }
+        else:
+            raise ValidationError({'image': 'Provide an image file or a valid preset_id.'})
+
+        serialized_results = []
+        for item in analysis['results']:
+            serialized_results.append({
+                'similarity_score': item['similarity_score'],
+                'match_reasons': item['match_reasons'],
+                'product': CatalogSerializer(item['product'], context={'request': request}).data,
+            })
+
+        response_data = {
+            'palette': analysis['palette'],
+            'detected_items': analysis['detected_items'],
+            'selected_item_id': analysis['selected_item_id'],
+            'selected_item': analysis.get('selected_item'),
+            'results': serialized_results,
+            'query_applied': analysis['query_applied'],
+        }
+        return Response(response_data)
 
 
 class PublicStoreView(APIView):
@@ -962,6 +1185,8 @@ class CartView(APIView):
         else:
             quantity = serializers.IntegerField(min_value=1, max_value=1000).run_validation(request.data.get('quantity', 1))
             product = get_object_or_404(catalog(), pk=pk)
+            from product.policies import check_drop_bot_protection
+            check_drop_bot_protection(product, request)
             validate_purchase(product, request.user)
             if product.is_digital:
                 quantity = 1
@@ -2285,6 +2510,8 @@ class CheckoutView(APIView):
         # Record granular store ledger entries and update unified merchant wallet
         if order.paid_total > 0:
             record_order_earnings_for_merchant(order)
+
+        process_referral_reward_for_order(order)
 
         # The buyer's HTML receipt is the only buyer email for order creation.
         order._receipt_recipient_ids = {order.user_id} if order.user_id else set()

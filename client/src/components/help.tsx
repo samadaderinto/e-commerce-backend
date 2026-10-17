@@ -63,7 +63,7 @@ export function HelpPage() {
     ],
     [
       'How does the ProAce referral program work?',
-      `Join from My account → Affiliates & referrals, then share your invite link. Your first ${business.referralRewardLimit} referred signups earn $${business.referralRewardAmount} each in non-withdrawable ProAce Wallet store credit. Further referrals are recorded without rewards. View referral history and spendable balance from your account.`,
+      `Join from My account → Affiliates & referrals, then share your invite link. Your first ${business.referralRewardLimit} referred customers who complete a successful order earn $${business.referralRewardAmount} each in non-withdrawable ProAce Wallet store credit. Further referrals are recorded without rewards. View referral history and spendable balance from your account.`,
     ],
     [
       'How do Curated Partner & ClickBank affiliate listings work?',

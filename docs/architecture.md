@@ -70,6 +70,8 @@ and permission details rather than inferring them from a prefix.
 | `/api/v1/password/change/` | In-app password update (syncs technical super admin to MinIO & Grafana) |
 | `/api/v1/me/` | Current authenticated account |
 | `/api/v1/products/` | Public catalog with Elasticsearch full-text fuzzy search and product details |
+| `/api/v1/products/visual-search/` | AI visual search & 'Shop The Look' multimodal image matching engine |
+| `/api/v1/products/visual-search/presets/` | Curated sample showcase looks for instant visual search test-driving |
 | `/api/v1/products/<id>/reviews/` | Verified buyer reviews with photo attachments and author/moderator deletion (`DELETE ?review_id=<id>`) |
 | `/api/v1/wishlist/` | Customer saved products |
 | `/api/v1/addresses/` | Customer delivery addresses |
@@ -84,6 +86,7 @@ and permission details rather than inferring them from a prefix.
 | `/api/v1/orders/<id>/cancel/` | Customer order cancellation with automatic restock and wallet refund credit |
 | `/api/v1/orders/<id>/tracking/` | Recorded fulfillment milestones and official carrier links |
 | `/api/v1/stores/` | Merchant store, product, inventory, schedule, and payout routers |
+| `/api/v1/stores/<id>/team/` | Store team member management (invites, role scoping, member removal) |
 | `/api/v1/stores/<id>/orders/<order_id>/tracking/` | Merchant fulfillment tracking updates and shipment carrier management |
 | `/api/v1/stores/<id>/payouts/` | Merchant payout withdrawal requests against cleared escrow balance |
 | `/api/v1/notifications/` | Authenticated notification inbox and device registration |

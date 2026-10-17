@@ -766,6 +766,9 @@ def execute_order_status_transition(
                 delivered_at=order.delivered_at,
                 updated=now,
             )
+        if next_status in {"confirmed", "shipped", "delivered", "picked up"}:
+            from affiliates.services import process_referral_reward_for_order
+            process_referral_reward_for_order(order)
         if next_status == "cancelled":
             restore_order_inventory(order, inventory if order.items_snapshot else None)
             process_refund_deduction(order)

@@ -110,6 +110,13 @@ class Referral(DatesMixin):
         blank=True,
         related_name="referral",
     )
+    order = models.ForeignKey(
+        "payment.Order",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="referrals",
+    )
 
     class Meta:
         constraints = [

@@ -76,6 +76,43 @@ class Store(DatesMixin):
         return username
 
 
+class StoreTeamMember(DatesMixin):
+    ROLE_STORE_ADMIN = 'store_admin'
+    ROLE_CATALOG_MANAGER = 'catalog_manager'
+    ROLE_FULFILLMENT_SPECIALIST = 'fulfillment_specialist'
+
+    ROLE_CHOICES = (
+        (ROLE_STORE_ADMIN, 'Store Admin'),
+        (ROLE_CATALOG_MANAGER, 'Catalog Manager'),
+        (ROLE_FULFILLMENT_SPECIALIST, 'Fulfillment Specialist'),
+    )
+
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='team_members')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='store_team_memberships')
+    role = models.CharField(max_length=30, choices=ROLE_CHOICES, default=ROLE_CATALOG_MANAGER)
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='store_team_invitations_sent',
+    )
+
+    class Meta:
+        unique_together = ('store', 'user')
+        ordering = ('-created', 'pk')
+
+    def clean(self) -> None:
+        super().clean()
+        if self.store_id and self.user_id and self.store.user_id == self.user_id:
+            raise ValidationError("Store owners cannot be added as team members of their own store.")
+
+    def save(self, *args, **kwargs) -> None:
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{getattr(self.user, 'email', self.user_id)} - {self.get_role_display()} ({getattr(self.store, 'name', self.store_id)})"
 
 
 class Schedule(DatesMixin):

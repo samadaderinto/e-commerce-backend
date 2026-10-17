@@ -4,8 +4,13 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient, APIRequestFactory
 
 from affiliates.models import AffiliateWallet, Marketer, Referral
-from affiliates.services import reward_referral
+from affiliates.services import (
+    process_referral_reward_for_order,
+    record_referral,
+    reward_referral,
+)
 from core.models import User
+from payment.models import Order
 from storefront.views import AuthView
 
 
@@ -21,7 +26,7 @@ class AffiliateReferralTests(TestCase):
         )
         self.marketer = Marketer.objects.create(user=self.referrer, name="Referrer")
 
-    def test_reward_referral_adds_25_to_referrer_wallet(self):
+    def test_referral_is_pending_until_qualifying_order_is_placed(self):
         referred = User.objects.create_user(
             email="referred@test.com",
             password="Strong-test-password-123",
@@ -31,23 +36,44 @@ class AffiliateReferralTests(TestCase):
             phone1="+2348012345679",
         )
 
-        referral = reward_referral(self.marketer.marketer_id, referred)
+        referral = record_referral(self.marketer.marketer_id, referred)
+        self.assertIsNotNone(referral)
+        self.assertEqual(referral.status, Referral.PENDING)
+        self.assertEqual(referral.reward_amount, Decimal("25.00"))
+        # No wallet credit awarded upon registration/verification alone
+        self.assertFalse(AffiliateWallet.objects.filter(user=self.referrer).exists())
+
+        # Customer places a successful order
+        order = Order.objects.create(
+            user=referred,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("49.99"),
+            paid_total=Decimal("49.99"),
+        )
+        rewarded_ref = process_referral_reward_for_order(order)
+        self.assertIsNotNone(rewarded_ref)
 
         wallet = AffiliateWallet.objects.get(user=self.referrer)
-        self.assertIsNotNone(referral)
         self.assertEqual(wallet.balance, Decimal("25.00"))
         self.assertEqual(wallet.transactions.count(), 1)
+        referral.refresh_from_db()
         self.assertEqual(referral.status, Referral.REWARDED)
-        self.assertEqual(referral.reward_amount, Decimal("25.00"))
+        self.assertEqual(referral.order, order)
 
         # Verify Option A: The user's primary UserWallet was credited with $25.00 store credit
         from core.models import UserWallet, UserWalletTransaction
         user_wallet = UserWallet.objects.get(user=self.referrer)
         self.assertEqual(user_wallet.balance, Decimal("25.00"))
-        self.assertEqual(user_wallet.transactions.filter(source=UserWalletTransaction.SOURCE_REFERRAL).count(), 1)
+        self.assertEqual(
+            user_wallet.transactions.filter(
+                source=UserWalletTransaction.SOURCE_REFERRAL
+            ).count(),
+            1,
+        )
 
     def test_reward_referral_capped_at_four_users(self):
-        # Create and reward 4 users ($100 total)
+        # Create 4 referred users who each make a successful order ($100 total)
         for i in range(1, 5):
             u = User.objects.create_user(
                 email=f"user{i}@test.com",
@@ -57,16 +83,27 @@ class AffiliateReferralTests(TestCase):
                 gender="male",
                 phone1=f"+234801234568{i}",
             )
-            reward_referral(self.marketer.marketer_id, u)
+            record_referral(self.marketer.marketer_id, u)
+            order = Order.objects.create(
+                user=u,
+                ordered=True,
+                status="confirmed",
+                total=Decimal("20.00"),
+                paid_total=Decimal("20.00"),
+            )
+            process_referral_reward_for_order(order)
 
         from core.models import UserWallet
         user_wallet = UserWallet.objects.get(user=self.referrer)
         affiliate_wallet = AffiliateWallet.objects.get(user=self.referrer)
         self.assertEqual(user_wallet.balance, Decimal("100.00"))
         self.assertEqual(affiliate_wallet.balance, Decimal("100.00"))
-        self.assertEqual(Referral.objects.filter(marketer=self.marketer, status=Referral.REWARDED).count(), 4)
+        self.assertEqual(
+            Referral.objects.filter(marketer=self.marketer, status=Referral.REWARDED).count(),
+            4,
+        )
 
-        # 5th referred user is capped (status pending, no extra $25 credited)
+        # 5th referred user makes an order but is capped (status pending, no extra $25 credited)
         u5 = User.objects.create_user(
             email="user5@test.com",
             password="Strong-test-password-123",
@@ -75,7 +112,15 @@ class AffiliateReferralTests(TestCase):
             gender="female",
             phone1="+2348012345699",
         )
-        ref5 = reward_referral(self.marketer.marketer_id, u5)
+        record_referral(self.marketer.marketer_id, u5)
+        order5 = Order.objects.create(
+            user=u5,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("20.00"),
+            paid_total=Decimal("20.00"),
+        )
+        ref5 = process_referral_reward_for_order(order5)
         self.assertEqual(ref5.status, Referral.PENDING)
 
         user_wallet.refresh_from_db()
@@ -83,7 +128,7 @@ class AffiliateReferralTests(TestCase):
         self.assertEqual(user_wallet.balance, Decimal("100.00"))
         self.assertEqual(affiliate_wallet.balance, Decimal("100.00"))
 
-    def test_reward_referral_is_idempotent_for_same_referred_user(self):
+    def test_reward_referral_is_idempotent_for_multiple_orders_by_same_referred_user(self):
         referred = User.objects.create_user(
             email="duplicate@test.com",
             password="Strong-test-password-123",
@@ -92,9 +137,25 @@ class AffiliateReferralTests(TestCase):
             gender="female",
             phone1="+2348012345680",
         )
+        record_referral(self.marketer.marketer_id, referred)
 
-        first = reward_referral(self.marketer.marketer_id, referred)
-        second = reward_referral(self.marketer.marketer_id, referred)
+        order1 = Order.objects.create(
+            user=referred,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("30.00"),
+            paid_total=Decimal("30.00"),
+        )
+        first = process_referral_reward_for_order(order1)
+
+        order2 = Order.objects.create(
+            user=referred,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("60.00"),
+            paid_total=Decimal("60.00"),
+        )
+        second = process_referral_reward_for_order(order2)
 
         wallet = AffiliateWallet.objects.get(user=self.referrer)
         self.assertEqual(first, second)
@@ -110,15 +171,36 @@ class AffiliateReferralTests(TestCase):
         )
 
     def test_user_cannot_reward_their_own_referral_code(self):
-        referral = reward_referral(self.marketer.marketer_id, self.referrer)
+        referral = record_referral(self.marketer.marketer_id, self.referrer)
 
         self.assertIsNone(referral)
+        self.assertFalse(AffiliateWallet.objects.filter(user=self.referrer).exists())
+
+    def test_cancelled_or_refunded_order_does_not_trigger_referral_reward(self):
+        referred = User.objects.create_user(
+            email="cancelled-buyer@test.com",
+            password="Strong-test-password-123",
+            first_name="Cancel",
+            last_name="Buyer",
+            gender="male",
+            phone1="+2348012345687",
+        )
+        record_referral(self.marketer.marketer_id, referred)
+        cancelled_order = Order.objects.create(
+            user=referred,
+            ordered=True,
+            status="cancelled",
+            total=Decimal("35.00"),
+            paid_total=Decimal("0.00"),
+        )
+        res = process_referral_reward_for_order(cancelled_order)
+        self.assertIsNone(res)
         self.assertFalse(AffiliateWallet.objects.filter(user=self.referrer).exists())
 
 
 @override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
 class AffiliateRegistrationTests(TestCase):
-    def test_registration_with_referral_code_rewards_referrer(self):
+    def test_registration_with_referral_code_records_pending_and_rewards_on_first_order(self):
         referrer = User.objects.create_user(
             email="owner@test.com",
             password="Strong-test-password-123",
@@ -157,7 +239,7 @@ class AffiliateRegistrationTests(TestCase):
         self.assertIsNotNone(match)
         token = match.group(1)
 
-        # Verify email
+        # Verify email -> Creates Referral in PENDING status, NO credit awarded yet
         verify_req = factory.post(
             "/api/v1/auth/verify/",
             {"token": token},
@@ -166,8 +248,26 @@ class AffiliateRegistrationTests(TestCase):
         verify_resp = AuthView.as_view()(verify_req, action="verify")
         self.assertEqual(verify_resp.status_code, 200, verify_resp.data)
 
-        self.assertEqual(AffiliateWallet.objects.get(user=referrer).balance, Decimal("25.00"))
+        # Verified customer has a pending referral recorded, but referrer has not received credit
         self.assertEqual(Referral.objects.count(), 1)
+        ref = Referral.objects.first()
+        self.assertEqual(ref.status, Referral.PENDING)
+        self.assertFalse(AffiliateWallet.objects.filter(user=referrer).exists())
+
+        # Customer completes their first successful order -> Referral rewarded
+        order = Order.objects.create(
+            user=ref.referred_user,
+            ordered=True,
+            status="confirmed",
+            total=Decimal("40.00"),
+            paid_total=Decimal("40.00"),
+        )
+        process_referral_reward_for_order(order)
+
+        self.assertEqual(AffiliateWallet.objects.get(user=referrer).balance, Decimal("25.00"))
+        ref.refresh_from_db()
+        self.assertEqual(ref.status, Referral.REWARDED)
+        self.assertEqual(ref.order, order)
 
 
 @override_settings(ROOT_URLCONF="storefront.urls")

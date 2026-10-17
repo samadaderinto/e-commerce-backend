@@ -10,7 +10,7 @@ from django.contrib.auth.models import update_last_login
 from django.db import IntegrityError, transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from affiliates.services import reward_referral
+from affiliates.services import record_referral
 from core.activity import record_activity
 from core.models import Device, SocialAccount, User
 
@@ -242,7 +242,7 @@ def authenticate_social_user(provider: str, data: dict[str, Any], request: Any =
             is_new_user = False
         # Affiliate referral sync for new signups
         if referral_code and is_new_user:
-            reward_referral(referral_code, user)
+            record_referral(referral_code, user)
 
     from core.social_accounts import attach_identity
     already_known = SocialAccount.objects.filter(provider=clean_provider, subject=subject).exists()

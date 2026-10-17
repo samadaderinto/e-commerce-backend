@@ -187,7 +187,26 @@ def test_social_auth_syncs_with_affiliate_referral() -> None:
     referral = Referral.objects.filter(referred_user=referred_user).first()
     assert referral is not None
     assert referral.marketer == marketer
+    # On signup, referral is pending to prevent throwaway account abuse
+    assert referral.status == Referral.PENDING
+    marketer_wallet.refresh_from_db()
+    assert marketer_wallet.balance == initial_balance
+
+    # Referral reward unlocks once referred user places a successful order
+    from payment.models import Order
+    from affiliates.services import process_referral_reward_for_order
+    order = Order.objects.create(
+        user=referred_user,
+        ordered=True,
+        status="confirmed",
+        total=Decimal("45.00"),
+        paid_total=Decimal("45.00"),
+    )
+    process_referral_reward_for_order(order)
+
+    referral.refresh_from_db()
     assert referral.status == Referral.REWARDED
+    assert referral.order == order
 
     marketer_wallet.refresh_from_db()
     assert marketer_wallet.balance == initial_balance + Decimal('25.00')
@@ -279,7 +298,7 @@ def test_google_signup_imports_avatar_and_existing_login_does_not_repeat_referra
         STORAGES={'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'}},
     ), patch('core.social_auth.verify_google_credential', return_value=verified), patch(
         'core.social_avatar.requests.get', return_value=response
-    ), patch('core.social_auth.reward_referral') as reward:
+    ), patch('core.social_auth.record_referral') as reward:
         first = authenticate_social_user('google', {'credential': 'verified', 'referral_code': 'INVITE'})
         account = User.objects.get(email=verified['email'])
         assert account.avatar_image.name.startswith('user-profiles/avatars/google-')

@@ -47,7 +47,8 @@ TypeScript, React 19, React Query and shared UI components.
 - `client/src/app/[[...slug]]/page.tsx`: catch-all page router for storefront,
   account, merchant, admin, and help views.
 - `client/src/app/api/*`: same-origin API proxy routes that talk to Django.
-- `client/src/components/shell.tsx`: shared navigation, search bar, and layout shell.
+- `client/src/components/shell.tsx`: shared navigation, search bar with integrated AI Visual Lens camera trigger, and layout shell.
+- `client/src/components/visual-search-modal.tsx`: `VisualSearchModal` (multimodal AI visual shopping and "Shop The Look" workspace; drag-and-drop/browse/clipboard paste upload, interactive bounding box hotspot overlays on detected items, extracted color palette swatches, curated sample looks test drive, keyword refinement, and ranked visual affinity matches).
 - `client/src/components/storefront.tsx`: catalog, product detail with selectable variant chips,
   technical specifications and dimensions table, photo review gallery with lightbox, verified buyer review submission,
   secure HTTPS review-photo URL attachments, author/store-owner/backoffice review removal, flash deal countdowns, store profiles with marquee announcements,
@@ -62,16 +63,17 @@ TypeScript, React 19, React Query and shared UI components.
 - `client/src/components/help.tsx`: `HelpPage` (authoritative marketplace FAQs, multi-carrier delivery, 7-day return policy,
   12-hour cancellation, ClickBank affiliate disclosures, seller tiers, and escrow) and `PolicyPage` (`terms` and `privacy`).
 - `client/src/components/merchant.tsx`: seller onboarding, dashboard with milestone celebration banners,
-  product editor with variant option configuration, RFC 4180-compliant bulk CSV catalog importer (handling quoted fields and multiline data),
+  product editor with variant option configuration, scheduled store drop configuration (`drop_at`), RFC 4180-compliant bulk CSV catalog importer (handling quoted fields and multiline data),
   7-day escrow financial breakdown, 4% platform fee calculation, payout requests, inventory health, order fulfillment modal,
-  and searchable, multi-filtered merchant orders view with store switcher, search bar, status, timeframe, carrier, and sorting controls.
+  searchable, multi-filtered merchant orders view with store switcher, search bar, status, timeframe, carrier, and sorting controls,
+  and **Store Team Access (`MerchantTeam`)** at `/merchant/team` featuring member rosters, role badges (Owner, Admin, Catalog Manager, Fulfillment Specialist), invite modal with email lookup and role scoping descriptions, role modification, member removal confirmations, and role-aware navigation and deep-link route protection (`<Empty title="Access Restricted" ... />`).
   Stripe payout settings refresh Connect status after returning from onboarding, show connected or pending-review states, and allow merchants to resume only when Stripe reports required details still due.
 - `client/src/components/admin.tsx`: `AdminDashboardPage` (platform-wide business insights,
   order fulfillment distribution bar chart, store leaderboards), `AdminPayoutsPage` (merchant withdrawal review, approval,
   and rejection with audit notes), and `AdminCommissionPage` (treasury withdrawal requests with note-required external completion/failure actions), `AdminUsersPage` (customer and staff directory with role/status filters and activation toggles),
   and `AdminStaffPage` (staff account creation, permission controls, and blocking; photo/name links open the full staff profile, with a separate quick-details dialog). In the customer and user directory, the avatar/name link opens the profile; row actions are reserved for block/activate controls. Staff directory names and avatars also link to `/admin/users/:id`; staff actions remain separate. In admin listings, store names link to the dedicated store profile; payout references, order IDs, coupon codes, refund IDs, and refund order IDs open their detail dialogs, with redundant Details buttons removed.
 - `client/src/components/ui.tsx`: reusable controls, product cards, `VerifiedBadge` (seller rank tier icons),
-  `FlashCountdown` (real-time sale expiration timer), loading spinners, and small primitives.
+  `FlashCountdown` (real-time sale expiration timer), `DropCountdown` (live product drop release timer with zero-refresh client unlocking), live drop viewer presence indicators, loading spinners, and small primitives.
 - `client/src/lib/api.ts`: browser API helper, error normalization, money
   formatting and category constants.
 - `client/src/lib/geo.ts`: ISO 3166-1 alpha-2 country catalog, US states/territories dictionary, dynamic postal code validators, and address normalization.
@@ -138,7 +140,7 @@ for in-app notifications. Optional FCM browser alerts supplement that inbox:
 configure the `NEXT_PUBLIC_FIREBASE_*` values from the Firebase Web app, enable
 messaging and a Web Push certificate in Firebase, then enable FCM on the backend.
 The browser opt-in control registers/removes the device through the authenticated
-`/api/v1/notifications/devices/` endpoint. The service worker checks the current
+`/api/v1/notifications/devices/` endpoint, and queries device registration state directly from the backend database via `GET /api/v1/notifications/devices/?token=<token>` on startup to guarantee UI synchronization across tabs and browsers. The service worker checks the current
 session before showing a push notification, so a shared browser does not display
 an alert addressed to a different account.
 
@@ -146,7 +148,7 @@ Signed-in users can enable or disable browser alerts in the expandable Browser
 alerts section of `/settings`; it reports unsupported browsers and blocked
 permissions with recovery guidance. The backoffice notification menu provides
 the same device control, stays within the viewport, and synchronizes its state
-with App Settings when either control changes the device registration.
+with the backend database and App Settings when either control changes the device registration.
 Registration waits for the root-scope Firebase service worker to activate before
 requesting an FCM token. Store suspension and restoration notifications target
 the store owner; the backend sends browser registration tokens through Firebase
@@ -310,7 +312,7 @@ On product detail pages, the quantity selector is the desired total for that pro
 
 Checkout shipping/tax previews include the applied coupon in their query and cache key. Account refund actions require remaining settled funds; cancellation requires every store shipment to remain unfulfilled. Order DTOs expose paid/refunded totals, allocated line amounts, and store fulfillments. Backoffice customer orders (`/admin/orders`) provide multi-dimensional filtering across order lifecycle status, payment tender, and delivery courier (USPS, UPS, FedEx, DHL Express, and Digital) with instant reset and carrier search integration. Generated affiliate URLs enter the same-origin `/api/affiliates/r/` proxy.
 
-Store settings use plain customer-facing labels for store branding, the logo URL, cover image URL, and store announcement. Design references are kept out of the settings interface.
+Store settings use plain customer-facing labels for store branding, the logo URL, cover image URL, and store announcement. Design references are kept out of the settings interface. Merchants can pin up to 3 featured products to appear at the very top of their public storefront page (`/shop?store=<id>`), managed through 3 dedicated slots in `/merchant/settings` or via the one-click Pin toggle in the merchant products catalog table. Pinned products display high-contrast dual-theme `Pinned` badges on their product cards.
 
 ## User Profile Photo & Avatar Management
 
@@ -363,7 +365,7 @@ Customer payment labels derive Paid, Awaiting payment, Partial payment, and refu
 
 Collection refreshes use the shared compact spinner across storefront search, seller workspaces, backoffice listings, store management, and notifications. The spinner preserves the existing results and controls while data is fetching, and announces “Updating results” to assistive technology without showing that text in the interface.
 
-The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts an invite code visibly in an optional field; rewards are issued only after email verification. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit, and reward issuance is serialized per affiliate to enforce the cap under concurrent signups. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information; affiliate account, wallet, and referral routes reject backoffice accounts. Generated links can only target published products in active, verified stores and stop redirecting if a listing becomes unavailable. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped), `/api/v1/affiliates/referrals/` (owner-scoped, paginated), and `/api/v1/admin/affiliates/` (backoffice-only).
+The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts an invite code visibly in an optional field; referral attribution is recorded upon email verification, while rewards are issued only when a referred user completes their first successful order to prevent throwaway account abuse. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred customer orders; additional referrals remain pending without credit, and reward issuance is serialized per affiliate to enforce the cap under concurrent checkouts. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, qualifying orders, and account status, with links to existing user management. Customer history omits referred users’ personal information; affiliate account, wallet, and referral routes reject backoffice accounts. Generated links can only target published products in active, verified stores and stop redirecting if a listing becomes unavailable. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped), `/api/v1/affiliates/referrals/` (owner-scoped, paginated), and `/api/v1/admin/affiliates/` (backoffice-only).
 
 Digital product onboarding & variant enhancements:
 - **Auto-Cover & Smart Photography Card**: When onboarding digital image assets (artwork, wallpapers, photography), the uploaded file immediately populates the storefront cover preview. The Product photography section shows an auto-generated cover card with a `PROACE PREVIEW` badge indicating that no separate cover photo is needed, while preserving an optional upload button for custom promotional banners.
@@ -485,3 +487,13 @@ loading failures show a generic retry message without exposing backend internals
 The customer order detail header centers the order status above the Print receipt action, with consistent spacing on desktop and mobile.
 
 Order refund forms use compact item rows with separate titles, quantities and amounts, theme-aware separators, and wrapping actions. The shopping action is hidden while a refund request is being edited.
+
+## Merchant Product Refunds Workspace (`/merchant/refunds`)
+
+Merchants can inspect customer return and refund activity for their store at `/merchant/refunds`.
+- **Navigation & Routing**: Accessed via the Seller workspace sidebar under "Refunds" (`RotateCcw` icon). Supported dynamically through the Next.js catch-all router with store switcher support (`?store=<id>`).
+- **Product-Level Scoping**: Unlike backoffice order-level refunds, the merchant listing scopes refunded items, counts, and amounts specifically to products belonging to the active store. For mixed-cart orders, merchants see only their store's refunded line items and store refund total, preventing exposure of other vendors' items.
+- **Universal Search & Multi-Criteria Filtering**: Debounced search across refund #, order reference, customer email, product title, and return reasons. Orthogonal filters for status (`pending`, `approved`, `declined`, `failed`), refund method (`store_credit`, `original_payment`), timeframe (`Last 7 days`, `Last 30 days`, `Last 90 days`, `All time`), and sort order (`Newest first`, `Oldest first`, `Highest amount`, `Lowest amount`), with single-click "Reset filters" and live active filter indicators.
+- **Accessible Detail Dialog**: Accessible modal (`RefundDetailDialog`) with keyboard trapping and background dismissal. Shows customer email and name, order reference link, refund method, store refund amount, total order refund amount, request/processed timestamps, customer return reasons, staff moderation decision notes, and product table with thumbnails, titles, variant metadata, quantities, and line totals.
+- **Deep-Linking & Notifications**: Deep linking supported via `?refund=<id>`: auto-opens the refund detail modal, and clears the query parameter on modal dismissal without page reload. Merchant refund notifications route directly to `/merchant/refunds?store=<id>&refund=<id>` with action label "View refund".
+

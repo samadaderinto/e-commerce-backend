@@ -14,12 +14,12 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Ban, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, Printer, RotateCcw, Search, Settings, Share2, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
+import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Ban, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Pin, Plus, Printer, RotateCcw, Search, Settings, Share2, Shield, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Trash2, Truck, Upload, UserCheck, UserPlus, Users, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
-import type { Dashboard, MerchantProduct, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent, StoreProfile } from '@/lib/types';
+import type { Dashboard, MerchantProduct, MerchantRefund, MerchantRefundItem, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent, StoreProfile, StoreTeamMember, StoreTeamRole } from '@/lib/types';
 import { useShop } from './providers';
 import { Gate } from './account';
-import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, ProductImage, ProductGallery, FlashCountdown, Status, VerifiedBadge, normalizeImageUrl, ResponsiveMediaImage } from './ui';
+import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, ProductImage, ProductGallery, FlashCountdown, DropCountdown, Status, VerifiedBadge, normalizeImageUrl, ResponsiveMediaImage } from './ui';
 
 type MerchantOrder = {
   id: number;
@@ -44,7 +44,7 @@ type PreviewProduct = {
   title: string; description: string; brand: string; category: string; is_digital: boolean;
   price: number; sale_price: number; discount: number; available: number; image: string;
   variants: ProductVariant[]; digital_file_name?: string; digital_file_url?: string;
-  images: string[]; flash_sale_end?: string | null; digital_preview_watermark?: boolean;
+  images: string[]; flash_sale_end?: string | null; drop_at?: string | null; digital_preview_watermark?: boolean;
   label?: string;
   product_type?: 'standard' | 'affiliate_clickbank';
   affiliate_hoplink?: string;
@@ -120,14 +120,39 @@ export function MerchantPage({ segments }: { segments: string[] }) {
     refetchInterval: 12000,
   });
 
+  const role: StoreTeamRole = store?.user_role || 'owner';
+
   const links = [
     ['overview', 'Overview', LayoutDashboard],
     ['products', 'Products', Package],
     ['orders', 'Orders', ShoppingBag],
+    ['refunds', 'Refunds', RotateCcw],
     ['payments', 'Payments', WalletCards],
     ['notifications', 'Notifications', Bell],
+    ['team', 'Store team', Users],
     ['settings', 'Store settings', Settings],
   ] as const;
+
+  const isLinkAllowed = (key: string) => {
+    if (key === 'overview' || key === 'notifications') return true;
+    if (role === 'owner') {
+      if (key === 'payments' && user?.is_staff && !user?.is_superuser && !user?.is_business_admin) {
+        return false;
+      }
+      return true;
+    }
+    if (role === 'store_admin') {
+      if (key === 'payments') return false;
+      return true;
+    }
+    if (role === 'catalog_manager') {
+      return key === 'products';
+    }
+    if (role === 'fulfillment_specialist') {
+      return key === 'orders' || key === 'refunds';
+    }
+    return false;
+  };
 
   return (
     <Gate next="/merchant">
@@ -162,13 +187,7 @@ export function MerchantPage({ segments }: { segments: string[] }) {
 
           <nav>
             {links
-              .filter(
-                ([key]) =>
-                  key !== 'payments' ||
-                  !user?.is_staff ||
-                  user?.is_superuser ||
-                  user?.is_business_admin
-              )
+              .filter(([key]) => isLinkAllowed(key))
               .map(([key, name, Icon]) => (
                 <Link
                   key={key}
@@ -224,7 +243,15 @@ export function MerchantPage({ segments }: { segments: string[] }) {
                   {user?.first_name} {user?.last_name}
                 </strong>
                 <small>
-                  {user?.is_staff ? 'Official store operations' : 'Store owner'}
+                  {user?.is_staff
+                    ? 'Official store operations'
+                    : role === 'owner'
+                    ? 'Store owner'
+                    : role === 'store_admin'
+                    ? 'Store administrator'
+                    : role === 'catalog_manager'
+                    ? 'Catalog manager'
+                    : 'Fulfillment specialist'}
                 </small>
               </div>
             </div>
@@ -271,26 +298,98 @@ export function MerchantPage({ segments }: { segments: string[] }) {
               label="Visit help centre"
             />
           ) : section === 'products' && segments[1] ? (
-            <ProductEditor
-              key={`${store.id}-${segments[1]}`}
-              store={store}
-              id={segments[1]}
-            />
+            role === 'fulfillment_specialist' ? (
+              <Empty
+                title="Access Restricted"
+                text="Fulfillment specialists do not have permission to edit catalog products."
+                href="/merchant"
+                label="Return to workspace"
+              />
+            ) : (
+              <ProductEditor
+                key={`${store.id}-${segments[1]}`}
+                store={store}
+                id={segments[1]}
+              />
+            )
           ) : section === 'products' ? (
-            <MerchantProducts key={store.id} store={store} />
+            role === 'fulfillment_specialist' ? (
+              <Empty
+                title="Access Restricted"
+                text="Fulfillment specialists do not have permission to manage catalog products."
+                href="/merchant"
+                label="Return to workspace"
+              />
+            ) : (
+              <MerchantProducts key={store.id} store={store} />
+            )
           ) : section === 'orders' ? (
-            <MerchantOrders
-              key={store.id}
-              store={store}
-              stores={stores.data?.results || []}
-              onSelectStore={selectStore}
-            />
+            role === 'catalog_manager' ? (
+              <Empty
+                title="Access Restricted"
+                text="Catalog managers do not have permission to view store orders."
+                href="/merchant"
+                label="Return to workspace"
+              />
+            ) : (
+              <MerchantOrders
+                key={store.id}
+                store={store}
+                stores={stores.data?.results || []}
+                onSelectStore={selectStore}
+              />
+            )
+          ) : section === 'refunds' ? (
+            role === 'catalog_manager' ? (
+              <Empty
+                title="Access Restricted"
+                text="Catalog managers do not have permission to manage refunds."
+                href="/merchant"
+                label="Return to workspace"
+              />
+            ) : (
+              <MerchantRefunds
+                key={store.id}
+                store={store}
+                stores={stores.data?.results || []}
+                onSelectStore={selectStore}
+              />
+            )
           ) : section === 'payments' ? (
-            <MerchantPayments key={store.id} store={store} />
+            role !== 'owner' ? (
+              <Empty
+                title="Access Restricted"
+                text="Only the primary store owner can view financial payouts and banking."
+                href="/merchant"
+                label="Return to workspace"
+              />
+            ) : (
+              <MerchantPayments key={store.id} store={store} />
+            )
           ) : section === 'notifications' ? (
             <MerchantNotifications key={store.id} store={store} />
+          ) : section === 'team' ? (
+            role !== 'owner' && role !== 'store_admin' ? (
+              <Empty
+                title="Access Restricted"
+                text="Only store owners and administrators can manage team members."
+                href="/merchant"
+                label="Return to workspace"
+              />
+            ) : (
+              <MerchantTeam key={store.id} store={store} />
+            )
           ) : section === 'settings' ? (
-            <MerchantSettings key={store.id} store={store} />
+            role !== 'owner' && role !== 'store_admin' ? (
+              <Empty
+                title="Access Restricted"
+                text="Only store owners and administrators can manage store settings."
+                href="/merchant"
+                label="Return to workspace"
+              />
+            ) : (
+              <MerchantSettings key={store.id} store={store} />
+            )
           ) : (
             <MerchantDashboard key={store.id} store={store} />
           )}
@@ -994,6 +1093,35 @@ function MerchantProducts({ store }: { store: Store }) {
     queryFn: () => api<Page<MerchantProduct>>(`stores/${store.id}/products?${query}`),
   });
 
+  const profileQuery = useQuery({
+    queryKey: ['store-profile', store.id],
+    queryFn: () => api<StoreProfile>(`stores/${store.id}/profile`),
+  });
+  const pinnedIds = profileQuery.data?.pinned_products || [];
+
+  async function togglePin(product: MerchantProduct) {
+    const isPinned = pinnedIds.includes(product.id);
+    if (!isPinned && pinnedIds.length >= 3) {
+      notify('You can pin at most 3 products on your store page. Unpin a product first.', true);
+      return;
+    }
+    const nextPinned = isPinned
+      ? pinnedIds.filter((id) => id !== product.id)
+      : [...pinnedIds, product.id];
+    setBusy(product.id);
+    try {
+      await api(`stores/${store.id}/profile`, 'PATCH', { pinned_products: nextPinned });
+      await client.invalidateQueries({ queryKey: ['store-profile', store.id] });
+      await client.invalidateQueries({ queryKey: ['public-store', store.id] });
+      await client.invalidateQueries({ queryKey: ['products'] });
+      notify(isPinned ? 'Product unpinned from store page' : 'Product pinned to top of store page');
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function toggle(product: MerchantProduct) {
     if (product.is_blocked) {
       notify('This product is blocked by platform moderation. Only staff can restore it.', true);
@@ -1367,14 +1495,31 @@ function parseCsvRows(text: string): string[][] {
                       )}
                     </td>
                     <td>
-                      <Link
-                        className="icon-button"
-                        title="Edit product"
-                        aria-label={`Edit ${product.title}`}
-                        href={`/merchant/products/${product.id}`}
-                      >
-                        <ArrowUpRight size={18} />
-                      </Link>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <button
+                          type="button"
+                          className="icon-button"
+                          style={{
+                            color: pinnedIds.includes(product.id) ? 'var(--ink)' : 'var(--muted)',
+                            background: pinnedIds.includes(product.id) ? 'var(--soft)' : 'transparent',
+                            border: pinnedIds.includes(product.id) ? '1px solid var(--line)' : '1px solid transparent',
+                          }}
+                          title={pinnedIds.includes(product.id) ? 'Pinned to top of store page (click to unpin)' : 'Pin to top of store page (max 3)'}
+                          aria-label={pinnedIds.includes(product.id) ? `Unpin ${product.title}` : `Pin ${product.title}`}
+                          disabled={busy === product.id}
+                          onClick={() => togglePin(product)}
+                        >
+                          <Pin size={15} fill={pinnedIds.includes(product.id) ? 'currentColor' : 'none'} />
+                        </button>
+                        <Link
+                          className="icon-button"
+                          title="Edit product"
+                          aria-label={`Edit ${product.title}`}
+                          href={`/merchant/products/${product.id}`}
+                        >
+                          <ArrowUpRight size={18} />
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1563,6 +1708,11 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         : values.flash_sale_end
           ? new Date(values.flash_sale_end).toISOString()
           : (product.data?.flash_sale_end || null),
+      drop_at: affiliate
+        ? null
+        : values.drop_at
+          ? new Date(values.drop_at).toISOString()
+          : (product.data?.drop_at || null),
       digital_preview_watermark: digital && isImage && (digitalWatermark ?? (values.digital_preview_watermark === 'on' || true)),
       variants: affiliate
         ? []
@@ -1675,6 +1825,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
     const affiliate = form.product_type === 'affiliate_clickbank';
     const digital = !affiliate && form.is_digital === 'on';
     const flashEnd = form.flash_sale_end ? new Date(form.flash_sale_end).toISOString() : null;
+    const dropAt = form.drop_at ? new Date(form.drop_at).toISOString() : null;
     const validVariants = affiliate ? [] : effectiveVariants
       .filter(v => v.name && v.name.trim().length > 0)
       .map(v => ({
@@ -1701,6 +1852,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       available: affiliate ? 999 : (digital ? 0 : Number(form.available)),
       discount: affiliate ? 0 : Number(form.discount || 0),
       flash_sale_end: affiliate ? null : flashEnd,
+      drop_at: affiliate ? null : dropAt,
       variants: validVariants,
       weight: (affiliate || digital) ? '0.00' : (form.weight || '1.00'),
       length: (affiliate || digital) ? null : (form.length ? Number(form.length) : null),
@@ -2535,6 +2687,18 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
               data?.flash_sale_end ? toLocalDateTimeInput(data.flash_sale_end) : ''
             }
           />
+        </Field>
+        <Field label="Store Drop / Scheduled Release (Optional)">
+          <input
+            name="drop_at"
+            type="datetime-local"
+            defaultValue={
+              data?.drop_at ? toLocalDateTimeInput(data.drop_at) : ''
+            }
+          />
+          <small style={{ display: 'block', marginTop: 4, color: 'var(--muted)', fontSize: '12px' }}>
+            Schedule a future drop release. The item will be visible in the catalog with a live countdown timer and active viewer counter, but cart addition and purchasing are locked until release.
+          </small>
         </Field>
       </>
     )}
@@ -3494,6 +3658,607 @@ function formatRelativeTime(dateString: string): string {
   }
 }
 
+function RefundDetailDialog({
+  refund,
+  store,
+  onClose,
+}: {
+  refund: MerchantRefund;
+  store: Store;
+  onClose: () => void;
+}) {
+  const dialogRef = useDialogFocus(Boolean(refund), onClose);
+
+  return (
+    <div
+      className="admin-dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        ref={dialogRef}
+        className="admin-detail-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="merchant-refund-detail-title"
+      >
+        <header className="admin-detail-header">
+          <div className="admin-detail-heading">
+            <span className="admin-detail-icon" aria-hidden="true">
+              <RotateCcw size={22} />
+            </span>
+            <div>
+              <span className="eyebrow green">Refund request</span>
+              <h2 id="merchant-refund-detail-title">#{refund.id}</h2>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="icon-button no-print"
+            aria-label="Close details"
+            onClick={onClose}
+          >
+            <X size={20} />
+          </button>
+        </header>
+
+        <div className="admin-detail-body">
+          <div className="admin-detail-status">
+            <span>Status</span>
+            <Status value={refund.status} />
+          </div>
+
+          <dl className="admin-detail-grid">
+            <div className="admin-detail-field">
+              <dt>Order</dt>
+              <dd>
+                {refund.order ? (
+                  <Link
+                    href={`/merchant/orders?store=${store.id}&order=${refund.order}`}
+                    className="text-link"
+                    style={{ fontWeight: 600 }}
+                  >
+                    #{refund.order_reference || refund.order}
+                  </Link>
+                ) : (
+                  <span>#{refund.order_reference || '—'}</span>
+                )}
+              </dd>
+            </div>
+
+            <div className="admin-detail-field">
+              <dt>Customer</dt>
+              <dd>
+                <div>{refund.customer_email}</div>
+                {refund.customer_name && (
+                  <small className="muted">{refund.customer_name}</small>
+                )}
+              </dd>
+            </div>
+
+            <div className="admin-detail-field">
+              <dt>Store refund amount</dt>
+              <dd>
+                <strong style={{ color: 'var(--green)', fontSize: '1.05rem' }}>
+                  {money(refund.amount)}
+                </strong>
+                {refund.total_order_refund_amount &&
+                  refund.total_order_refund_amount !== refund.amount && (
+                    <small className="muted" style={{ display: 'block', fontSize: '0.8rem' }}>
+                      (Total order refund: {money(refund.total_order_refund_amount)})
+                    </small>
+                  )}
+              </dd>
+            </div>
+
+            <div className="admin-detail-field">
+              <dt>Refund method</dt>
+              <dd style={{ textTransform: 'capitalize' }}>
+                {refund.refund_type.replaceAll('_', ' ')}
+              </dd>
+            </div>
+
+            <div className="admin-detail-field">
+              <dt>Requested</dt>
+              <dd>{activityDate(refund.created)}</dd>
+            </div>
+
+            <div className="admin-detail-field">
+              <dt>Processed</dt>
+              <dd>
+                {refund.processed_at ? activityDate(refund.processed_at) : 'Pending review'}
+              </dd>
+            </div>
+
+            <div className="admin-detail-field" style={{ gridColumn: '1 / -1' }}>
+              <dt>Customer reason</dt>
+              <dd style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{refund.reason}</dd>
+            </div>
+
+            {refund.processing_reason && (
+              <div className="admin-detail-field" style={{ gridColumn: '1 / -1' }}>
+                <dt>Review decision note</dt>
+                <dd style={{ whiteSpace: 'pre-wrap', color: 'var(--ink)' }}>
+                  {refund.processing_reason}
+                </dd>
+              </div>
+            )}
+          </dl>
+
+          <div style={{ marginTop: '1.5rem' }}>
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 600, marginBottom: '0.75rem' }}>
+              Refunded products ({refund.items.length})
+            </h3>
+            <div className="table-scroll">
+              <table className="data-table" style={{ fontSize: '0.875rem' }}>
+                <thead>
+                  <tr>
+                    <th>Item</th>
+                    <th style={{ textAlign: 'center' }}>Qty</th>
+                    <th style={{ textAlign: 'right' }}>Unit price</th>
+                    <th style={{ textAlign: 'right' }}>Line total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {refund.items.map((item, index) => (
+                    <tr key={item.product ? `${item.product}-${index}` : index}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <div style={{ width: 40, height: 40, borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
+                            <ProductImage
+                              src={normalizeImageUrl(item.image)}
+                              alt={item.title}
+                            />
+                          </div>
+                          <div>
+                            {item.product ? (
+                              <Link
+                                href={`/merchant/products/${item.product}?store=${store.id}`}
+                                className="text-link"
+                                style={{ fontWeight: 500 }}
+                              >
+                                {item.title}
+                              </Link>
+                            ) : (
+                              <span>{item.title}</span>
+                            )}
+                            {item.variant && Object.keys(item.variant).length > 0 && (
+                              <div className="muted" style={{ fontSize: '0.8rem' }}>
+                                {Object.entries(item.variant)
+                                  .map(([k, v]) => `${k}: ${v}`)
+                                  .join(', ')}
+                              </div>
+                            )}
+                            {item.is_digital && (
+                              <span className="badge" style={{ fontSize: '0.7rem', padding: '1px 5px' }}>
+                                Digital
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>{item.quantity}</td>
+                      <td style={{ textAlign: 'right' }}>{money(item.unit_price)}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                        {money(item.line_total)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <footer className="admin-detail-footer no-print">
+          <button type="button" className="button secondary" onClick={() => window.print()}>
+            <Printer size={16} />
+            Print details
+          </button>
+          <button type="button" className="button" onClick={onClose}>
+            Done
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function MerchantRefunds({
+  store,
+  stores = [],
+  onSelectStore,
+}: {
+  store: Store;
+  stores?: Store[];
+  onSelectStore?: (storeId: number) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
+  const [status, setStatus] = useState('');
+  const [refundType, setRefundType] = useState('');
+  const [timeframe, setTimeframe] = useState('');
+  const [ordering, setOrdering] = useState('-created');
+  const [offset, setOffset] = useState(0);
+  const [selectedRefund, setSelectedRefund] = useState<MerchantRefund | null>(null);
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const focusRefundId = searchParams.get('refund') || '';
+
+  const hasActiveFilters = Boolean(
+    search.trim() || status || refundType || timeframe || ordering !== '-created'
+  );
+
+  const queryParams = new URLSearchParams({
+    limit: '20',
+    offset: String(offset),
+  });
+  if (status) queryParams.set('status', status);
+  if (refundType) queryParams.set('refund_type', refundType);
+  if (debouncedSearch.trim()) queryParams.set('search', debouncedSearch.trim());
+  if (timeframe) queryParams.set('days', timeframe);
+  if (ordering && ordering !== '-created') queryParams.set('ordering', ordering);
+  if (/^\d+$/.test(focusRefundId)) queryParams.set('refund_id', focusRefundId);
+
+  const refunds = useQuery({
+    queryKey: [
+      'merchant-refunds',
+      store.id,
+      status,
+      refundType,
+      debouncedSearch.trim(),
+      timeframe,
+      ordering,
+      offset,
+      focusRefundId,
+    ],
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === store.id && previousQuery.queryKey.at(-1) === focusRefundId
+        ? previousData
+        : undefined,
+    queryFn: () =>
+      api<Page<MerchantRefund>>(
+        `stores/${store.id}/refunds?${queryParams.toString()}`
+      ),
+  });
+
+  useEffect(() => {
+    if (!focusRefundId || !refunds.data?.results) return;
+    const target = refunds.data.results.find((r) => String(r.id) === focusRefundId);
+    if (target) {
+      setSelectedRefund(target);
+    }
+  }, [focusRefundId, refunds.data?.results]);
+
+  function resetFilters() {
+    setSearch('');
+    setStatus('');
+    setRefundType('');
+    setTimeframe('');
+    setOrdering('-created');
+    setOffset(0);
+  }
+
+  function handleCloseModal() {
+    setSelectedRefund(null);
+    if (!focusRefundId) return;
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete('refund');
+    const query = nextParams.toString();
+    router.replace(`/merchant/refunds${query ? `?${query}` : ''}`, { scroll: false });
+  }
+
+  return (
+    <>
+      <div className="merchant-heading">
+        <div>
+          <h1>Product refunds</h1>
+          <p>Review customer returns, refunded products, and settlement status for your store.</p>
+        </div>
+        {refunds.data?.count !== undefined && (
+          <span className="badge" style={{ fontSize: '0.85rem', padding: '0.35rem 0.75rem' }}>
+            {refunds.data.count} {refunds.data.count === 1 ? 'refund' : 'refunds'}
+          </span>
+        )}
+      </div>
+
+      <div
+        className="merchant-toolbar"
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          gap: '0.75rem',
+          marginBottom: '1.25rem',
+        }}
+      >
+        <div className="search-box" style={{ flex: '1 1 260px', minWidth: '220px' }}>
+          <Search size={16} />
+          <input
+            aria-label="Search refunds"
+            placeholder="Search by refund #, order, customer, product, reason…"
+            value={search}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setOffset(0);
+            }}
+          />
+          {search && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="Clear search"
+              onClick={() => {
+                setSearch('');
+                setOffset(0);
+              }}
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
+
+        {stores.length > 1 && (
+          <select
+            aria-label="Filter refunds by store"
+            value={store.id}
+            onChange={(event) => {
+              onSelectStore?.(Number(event.target.value));
+              setOffset(0);
+            }}
+          >
+            {stores.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        )}
+
+        <select
+          aria-label="Filter refunds by status"
+          value={status}
+          onChange={(event) => {
+            setStatus(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="declined">Declined</option>
+          <option value="failed">Failed</option>
+        </select>
+
+        <select
+          aria-label="Filter refunds by method"
+          value={refundType}
+          onChange={(event) => {
+            setRefundType(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="">All methods</option>
+          <option value="store_credit">Store Credit</option>
+          <option value="original_payment">Original Payment</option>
+        </select>
+
+        <select
+          aria-label="Filter refunds by timeframe"
+          value={timeframe}
+          onChange={(event) => {
+            setTimeframe(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="">All time</option>
+          <option value="7">Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+
+        <select
+          aria-label="Sort refunds"
+          value={ordering}
+          onChange={(event) => {
+            setOrdering(event.target.value);
+            setOffset(0);
+          }}
+        >
+          <option value="-created">Newest first</option>
+          <option value="created">Oldest first</option>
+          <option value="-amount">Highest amount</option>
+          <option value="amount">Lowest amount</option>
+        </select>
+
+        {hasActiveFilters && (
+          <button
+            type="button"
+            className="button secondary"
+            style={{ padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+            onClick={resetFilters}
+          >
+            <RotateCcw size={14} style={{ marginRight: '4px' }} />
+            Reset filters
+          </button>
+        )}
+      </div>
+
+      {refunds.isFetching && !refunds.isLoading && <Loading compact />}
+
+      {refunds.isLoading ? (
+        <Loading />
+      ) : refunds.error ? (
+        <ErrorState error={refunds.error} retry={() => refunds.refetch()} />
+      ) : !refunds.data?.results.length ? (
+        <Empty
+          title={hasActiveFilters ? 'No matching refunds found' : 'No refund requests'}
+          text={
+            hasActiveFilters
+              ? 'No refund requests matched your current search or filters.'
+              : 'No customer refund requests currently exist for your store.'
+          }
+          label={hasActiveFilters ? 'Reset filters' : undefined}
+          onAction={hasActiveFilters ? resetFilters : undefined}
+        />
+      ) : (
+        <>
+          <div className="table-scroll">
+            <table className="data-table" aria-label="Store product refunds">
+              <thead>
+                <tr>
+                  <th>Refund #</th>
+                  <th>Product</th>
+                  <th>Order</th>
+                  <th>Customer</th>
+                  <th>Amount</th>
+                  <th>Method</th>
+                  <th>Status</th>
+                  <th>Reason</th>
+                  <th>Date</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {refunds.data.results.map((refund) => {
+                  const primaryItem = refund.items[0];
+                  const extraCount = refund.items.length - 1;
+
+                  return (
+                    <tr key={refund.id}>
+                      <td>
+                        <button
+                          type="button"
+                          className="text-link"
+                          aria-label={`View details for refund ${refund.id}`}
+                          onClick={() => setSelectedRefund(refund)}
+                          style={{ fontWeight: 600 }}
+                        >
+                          #{refund.id}
+                        </button>
+                      </td>
+                      <td>
+                        {primaryItem ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                            <div style={{ width: 32, height: 32, borderRadius: 4, overflow: 'hidden', flexShrink: 0 }}>
+                              <ProductImage
+                                src={normalizeImageUrl(primaryItem.image)}
+                                alt={primaryItem.title}
+                              />
+                            </div>
+                            <div style={{ minWidth: 0 }}>
+                              <span
+                                title={primaryItem.title}
+                                style={{
+                                  display: 'block',
+                                  maxWidth: 160,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                  fontWeight: 500,
+                                }}
+                              >
+                                {primaryItem.title}
+                              </span>
+                              {extraCount > 0 && (
+                                <span className="muted" style={{ fontSize: '0.75rem' }}>
+                                  +{extraCount} more {extraCount === 1 ? 'item' : 'items'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                      <td>
+                        {refund.order ? (
+                          <Link
+                            href={`/merchant/orders?store=${store.id}&order=${refund.order}`}
+                            className="text-link"
+                          >
+                            #{refund.order_reference || refund.order}
+                          </Link>
+                        ) : (
+                          <span>#{refund.order_reference || '—'}</span>
+                        )}
+                      </td>
+                      <td>
+                        <div style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <span>{refund.customer_email}</span>
+                          {refund.customer_name && (
+                            <small className="muted" style={{ display: 'block', fontSize: '0.75rem' }}>
+                              {refund.customer_name}
+                            </small>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        <strong>{money(refund.amount)}</strong>
+                      </td>
+                      <td>
+                        <span style={{ textTransform: 'capitalize' }}>
+                          {refund.refund_type.replaceAll('_', ' ')}
+                        </span>
+                      </td>
+                      <td>
+                        <Status value={refund.status} />
+                      </td>
+                      <td>
+                        <span
+                          title={refund.reason}
+                          style={{
+                            maxWidth: 150,
+                            display: 'inline-block',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {refund.reason}
+                        </span>
+                      </td>
+                      <td>
+                        <DateStamp value={refund.created} dateOnly />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="button secondary compact"
+                          onClick={() => setSelectedRefund(refund)}
+                        >
+                          Details
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <Pagination
+            page={Math.floor(offset / 20) + 1}
+            totalPages={Math.ceil((refunds.data?.count || 0) / 20)}
+            onChange={(page) => setOffset((page - 1) * 20)}
+          />
+        </>
+      )}
+
+      {selectedRefund && (
+        <RefundDetailDialog
+          refund={selectedRefund}
+          store={store}
+          onClose={handleCloseModal}
+        />
+      )}
+    </>
+  );
+}
+
 function MerchantPayments({ store }: { store: Store }) {
   const { user, notify } = useShop();
   const client = useQueryClient();
@@ -4227,10 +4992,611 @@ function MerchantNotifications({ store }: { store: Store }) {
 }
 
 
+function MerchantTeam({ store }: { store: Store }) {
+  const { notify } = useShop();
+  const client = useQueryClient();
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<'store_admin' | 'catalog_manager' | 'fulfillment_specialist'>('catalog_manager');
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<StoreTeamMember | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const inviteDialogRef = useDialogFocus(inviteOpen, () => setInviteOpen(false));
+  const deleteDialogRef = useDialogFocus(Boolean(deleteTarget), () => setDeleteTarget(null));
+
+  const team = useQuery({
+    queryKey: ['store-team', store.id],
+    queryFn: () => api<StoreTeamMember[]>(`stores/${store.id}/team`),
+  });
+
+  const currentUserRole: StoreTeamRole = store.user_role || 'owner';
+  const isOwner = currentUserRole === 'owner';
+
+  async function handleInvite(e: FormEvent) {
+    e.preventDefault();
+    setInviteError(null);
+    setInviting(true);
+    try {
+      await api<StoreTeamMember>(`stores/${store.id}/team`, 'POST', {
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      });
+      await client.invalidateQueries({ queryKey: ['store-team', store.id] });
+      notify(`Invited ${inviteEmail} to store team.`);
+      setInviteEmail('');
+      setInviteRole('catalog_manager');
+      setInviteOpen(false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to add team member.';
+      setInviteError(message);
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function handleRoleChange(
+    memberId: number,
+    newRole: 'store_admin' | 'catalog_manager' | 'fulfillment_specialist'
+  ) {
+    try {
+      await api<StoreTeamMember>(`stores/${store.id}/team/${memberId}`, 'PATCH', { role: newRole });
+      await client.invalidateQueries({ queryKey: ['store-team', store.id] });
+      notify('Team member role updated.');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to update role.';
+      notify(message, true);
+    }
+  }
+
+  async function handleRemoveMember() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api(`stores/${store.id}/team/${deleteTarget.id}`, 'DELETE');
+      await client.invalidateQueries({ queryKey: ['store-team', store.id] });
+      notify(`Removed ${deleteTarget.email} from store team.`);
+      setDeleteTarget(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to remove team member.';
+      notify(message, true);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function getRoleBadge(roleValue: string) {
+    if (roleValue === 'owner') {
+      return (
+        <span
+          className="badge"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '4px 10px',
+            borderRadius: 999,
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            background: 'rgba(217, 119, 6, 0.15)',
+            color: '#b45309',
+            border: '1px solid rgba(217, 119, 6, 0.3)',
+          }}
+        >
+          <Shield size={13} />
+          Store Owner
+        </span>
+      );
+    }
+    if (roleValue === 'store_admin') {
+      return (
+        <span
+          className="badge"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '4px 10px',
+            borderRadius: 999,
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            background: 'rgba(99, 102, 241, 0.15)',
+            color: '#6366f1',
+            border: '1px solid rgba(99, 102, 241, 0.3)',
+          }}
+        >
+          <ShieldCheck size={13} />
+          Store Admin
+        </span>
+      );
+    }
+    if (roleValue === 'catalog_manager') {
+      return (
+        <span
+          className="badge"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '4px 10px',
+            borderRadius: 999,
+            fontSize: '0.8rem',
+            fontWeight: 600,
+            background: 'rgba(14, 165, 233, 0.15)',
+            color: '#0284c7',
+            border: '1px solid rgba(14, 165, 233, 0.3)',
+          }}
+        >
+          <Package size={13} />
+          Catalog Manager
+        </span>
+      );
+    }
+    return (
+      <span
+        className="badge"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          borderRadius: 999,
+          fontSize: '0.8rem',
+          fontWeight: 600,
+          background: 'rgba(16, 185, 129, 0.15)',
+          color: '#059669',
+          border: '1px solid rgba(16, 185, 129, 0.3)',
+        }}
+      >
+        <Truck size={13} />
+        Fulfillment Specialist
+      </span>
+    );
+  }
+
+  return (
+    <>
+      <div className="merchant-heading">
+        <div>
+          <h1>Store Team & Staff Roles</h1>
+          <p>Assign granular staff permissions to manage products, orders, and tracking without sharing passwords.</p>
+        </div>
+        <button className="button" onClick={() => setInviteOpen(true)}>
+          <UserPlus size={16} />
+          Invite team member
+        </button>
+      </div>
+
+      <div
+        className="card"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          gap: '1rem',
+          marginBottom: '1.5rem',
+          padding: '1.25rem',
+          background: 'var(--soft)',
+        }}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <strong style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#6366f1' }}>
+            <ShieldCheck size={16} /> Store Admin
+          </strong>
+          <span style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.4 }}>
+            Full operational access to products, orders, returns, and team invites. Cannot transfer ownership or delete store.
+          </span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <strong style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#0284c7' }}>
+            <Package size={16} /> Catalog Manager
+          </strong>
+          <span style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.4 }}>
+            Can create, edit, and organize products, manage variants, and update stock. No access to orders or financials.
+          </span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <strong style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#059669' }}>
+            <Truck size={16} /> Fulfillment Specialist
+          </strong>
+          <span style={{ fontSize: '0.82rem', color: 'var(--muted)', lineHeight: 1.4 }}>
+            Can view orders, print packing slips, update tracking, and process refunds. No access to catalog or financials.
+          </span>
+        </div>
+      </div>
+
+      {team.isLoading ? (
+        <Loading />
+      ) : team.error ? (
+        <ErrorState error={team.error} retry={() => team.refetch()} />
+      ) : (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div className="table-scroll">
+            <table className="table" style={{ margin: 0 }}>
+              <thead>
+                <tr>
+                  <th>Team Member</th>
+                  <th>Role</th>
+                  <th>Added</th>
+                  <th>Invited By</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <div
+                        style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: '50%',
+                          background: 'rgba(217, 119, 6, 0.2)',
+                          color: '#b45309',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 700,
+                          fontSize: '0.88rem',
+                        }}
+                      >
+                        <Shield size={18} />
+                      </div>
+                      <div>
+                        <strong>Primary Store Owner</strong>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                          Full ownership & financial controls
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                  <td>{getRoleBadge('owner')}</td>
+                  <td>—</td>
+                  <td>Primary Owner</td>
+                  <td style={{ textAlign: 'right', fontSize: '0.8rem', color: 'var(--muted)' }}>
+                    Non-transferable
+                  </td>
+                </tr>
+
+                {(team.data || []).map((member) => (
+                  <tr key={member.id}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        {member.avatar_url ? (
+                          <ResponsiveMediaImage
+                            src={member.avatar_url}
+                            alt={member.first_name || member.email}
+                            style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' }}
+                            sizes="36px"
+                            width={72}
+                            height={72}
+                          />
+                        ) : (
+                          <div
+                            style={{
+                              width: 36,
+                              height: 36,
+                              borderRadius: '50%',
+                              background: 'var(--soft)',
+                              color: 'var(--ink)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              fontSize: '0.85rem',
+                              border: '1px solid var(--line)',
+                            }}
+                          >
+                            {(member.first_name?.[0] || member.email[0]).toUpperCase()}
+                          </div>
+                        )}
+                        <div>
+                          <strong>
+                            {member.first_name || member.last_name
+                              ? `${member.first_name || ''} ${member.last_name || ''}`.trim()
+                              : member.email.split('@')[0]}
+                          </strong>
+                          <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                            {member.email}
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>{getRoleBadge(member.role)}</td>
+                    <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
+                      {activityDate(member.created)}
+                    </td>
+                    <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
+                      {member.invited_by_email || 'Store Owner'}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                        {(isOwner || (currentUserRole === 'store_admin' && member.role !== 'store_admin')) && (
+                          <select
+                            aria-label={`Change role for ${member.email}`}
+                            value={member.role}
+                            onChange={(e) =>
+                              handleRoleChange(
+                                member.id,
+                                e.target.value as 'store_admin' | 'catalog_manager' | 'fulfillment_specialist'
+                              )
+                            }
+                            style={{
+                              fontSize: '0.78rem',
+                              padding: '0.3rem 0.5rem',
+                              borderRadius: 6,
+                              border: '1px solid var(--line)',
+                              background: 'var(--paper)',
+                              color: 'var(--ink)',
+                            }}
+                          >
+                            {isOwner && <option value="store_admin">Store Admin</option>}
+                            <option value="catalog_manager">Catalog Manager</option>
+                            <option value="fulfillment_specialist">Fulfillment Specialist</option>
+                          </select>
+                        )}
+                        {(isOwner || (currentUserRole === 'store_admin' && member.role !== 'store_admin')) && (
+                          <button
+                            className="icon-button"
+                            title={`Remove ${member.email}`}
+                            aria-label={`Remove ${member.email}`}
+                            style={{ color: 'var(--red)' }}
+                            onClick={() => setDeleteTarget(member)}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+
+                {(team.data || []).length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--muted)' }}>
+                      No delegated team members yet. Click &quot;Invite team member&quot; to add staff.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Invite Member Dialog */}
+      {inviteOpen && (
+        <div className="dialog-backdrop">
+          <section
+            ref={inviteDialogRef}
+            className="admin-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="invite-title"
+          >
+            <div className="admin-dialog-head">
+              <div>
+                <span className="eyebrow green">STORE TEAM INVITATION</span>
+                <h2 id="invite-title">Invite Team Member</h2>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="Close"
+                onClick={() => setInviteOpen(false)}
+              >
+                <X size={19} />
+              </button>
+            </div>
+
+            <form className="form-stack" onSubmit={handleInvite}>
+              <Field label="User Account Email">
+                <input
+                  type="email"
+                  required
+                  placeholder="colleague@example.com"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                />
+                <span style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: 4, display: 'block' }}>
+                  The member must have an existing ProAce user account registered with this email.
+                </span>
+              </Field>
+
+              <Field label="Assigned Role">
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {isOwner && (
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 10,
+                        padding: '10px 14px',
+                        borderRadius: 8,
+                        border: '1px solid var(--line)',
+                        background: inviteRole === 'store_admin' ? 'rgba(99, 102, 241, 0.08)' : 'var(--paper)',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="role"
+                        value="store_admin"
+                        checked={inviteRole === 'store_admin'}
+                        onChange={() => setInviteRole('store_admin')}
+                        style={{ marginTop: 3 }}
+                      />
+                      <div>
+                        <strong style={{ display: 'block', fontSize: '0.88rem' }}>Store Admin</strong>
+                        <span style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                          Full operational access across catalog, orders, and team members. Cannot transfer ownership.
+                        </span>
+                      </div>
+                    </label>
+                  )}
+
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 10,
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: '1px solid var(--line)',
+                      background: inviteRole === 'catalog_manager' ? 'rgba(14, 165, 233, 0.08)' : 'var(--paper)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="role"
+                      value="catalog_manager"
+                      checked={inviteRole === 'catalog_manager'}
+                      onChange={() => setInviteRole('catalog_manager')}
+                      style={{ marginTop: 3 }}
+                    />
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.88rem' }}>Catalog Manager</strong>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                        Can create and edit products, manage variants, and manage inventory. No access to orders or financials.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 10,
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: '1px solid var(--line)',
+                      background: inviteRole === 'fulfillment_specialist' ? 'rgba(16, 185, 129, 0.08)' : 'var(--paper)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="role"
+                      value="fulfillment_specialist"
+                      checked={inviteRole === 'fulfillment_specialist'}
+                      onChange={() => setInviteRole('fulfillment_specialist')}
+                      style={{ marginTop: 3 }}
+                    />
+                    <div>
+                      <strong style={{ display: 'block', fontSize: '0.88rem' }}>Fulfillment Specialist</strong>
+                      <span style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                        Can view orders, print packing slips, update tracking numbers, and process refunds. No catalog editing.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              </Field>
+
+              {inviteError && (
+                <div
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: 6,
+                    background: 'rgba(239, 68, 68, 0.1)',
+                    color: 'var(--red)',
+                    fontSize: '0.82rem',
+                  }}
+                >
+                  {inviteError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: '1rem' }}>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setInviteOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="button"
+                  disabled={inviting || !inviteEmail.trim()}
+                >
+                  {inviting ? 'Inviting...' : 'Send Invitation'}
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {/* Remove Member Confirmation Dialog */}
+      {deleteTarget && (
+        <div className="dialog-backdrop">
+          <section
+            ref={deleteDialogRef}
+            className="admin-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-title"
+          >
+            <div className="admin-dialog-head">
+              <div>
+                <span className="eyebrow" style={{ color: 'var(--red)' }}>REMOVE MEMBER</span>
+                <h2 id="remove-title">Remove {deleteTarget.email}?</h2>
+              </div>
+              <button
+                className="icon-button"
+                aria-label="Close"
+                onClick={() => setDeleteTarget(null)}
+              >
+                <X size={19} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1rem 0', color: 'var(--muted)', fontSize: '0.9rem', lineHeight: 1.5 }}>
+              Are you sure you want to remove <strong>{deleteTarget.email}</strong> from the <strong>{store.name}</strong> team?
+              They will immediately lose access to this store&apos;s workspace and dashboard.
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: '1rem' }}>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setDeleteTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button"
+                style={{ background: 'var(--red)', color: '#fff' }}
+                disabled={deleting}
+                onClick={handleRemoveMember}
+              >
+                {deleting ? 'Removing...' : 'Remove Member'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
+
 function MerchantSettings({ store }: { store: Store }) {
   const { notify } = useShop(); const client = useQueryClient(); const [busy, setBusy] = useState(false);
   const profile = useQuery({ queryKey: ['store-profile', store.id], queryFn: () => api<StoreProfile>(`stores/${store.id}/profile`) });
   const address = useQuery({ queryKey: ['store-address', store.id], queryFn: () => api<Record<string, string>>(`stores/${store.id}/pickup-address`) });
+  const allProductsStore = useQuery({
+    queryKey: ['merchant-products-select', store.id],
+    queryFn: () => api<Page<MerchantProduct>>(`stores/${store.id}/products?limit=100`),
+  });
+  const [pinnedProducts, setPinnedProducts] = useState<number[]>([]);
+  useEffect(() => {
+    if (profile.data?.pinned_products) {
+      setPinnedProducts(profile.data.pinned_products);
+    }
+  }, [profile.data?.pinned_products]);
   const stripeStatus = useQuery({
     queryKey: ['stripe-connect-status', store.id],
     queryFn: () => api<StripeConnectStatus>(`stores/${store.id}/stripe-status`),
@@ -4291,6 +5657,7 @@ function MerchantSettings({ store }: { store: Store }) {
         email: data.email,
         bio: data.bio,
         announcement: data.announcement,
+        pinned_products: pinnedProducts,
         website: data.website,
         phone1: data.phone1,
         whatsapp: data.whatsapp,
@@ -4354,6 +5721,94 @@ function MerchantSettings({ store }: { store: Store }) {
               maxLength={255}
             />
           </Field>
+
+          <h2>Pinned products on store page</h2>
+          <p className="muted" style={{ fontSize: '13px', marginTop: '-8px', marginBottom: '16px' }}>
+            Pin up to 3 featured products to appear at the very top of your main storefront listing ({pinnedProducts.length} / 3 pinned).
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+            {[0, 1, 2].map((index) => {
+              const productId = pinnedProducts[index];
+              const product = allProductsStore.data?.results?.find((p) => p.id === productId);
+              return (
+                <div
+                  key={index}
+                  style={{
+                    border: '1px solid var(--line)',
+                    borderRadius: '8px',
+                    padding: '14px',
+                    background: productId ? 'var(--soft)' : 'var(--paper)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    minHeight: '120px',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      Pinned Slot #{index + 1}
+                    </span>
+                    {productId && (
+                      <button
+                        type="button"
+                        className="text-button"
+                        style={{ fontSize: '12px', color: 'var(--alert, #ef4444)' }}
+                        onClick={() => {
+                          const next = pinnedProducts.filter((_, i) => i !== index);
+                          setPinnedProducts(next);
+                        }}
+                      >
+                        Unpin
+                      </button>
+                    )}
+                  </div>
+                  {productId ? (
+                    product ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        <div style={{ width: '48px', height: '48px', borderRadius: '6px', overflow: 'hidden', flexShrink: 0, border: '1px solid var(--line)' }}>
+                          <ProductImage src={product.images[0]?.image || product.image_url} alt={product.title} />
+                        </div>
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div style={{ fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {product.title}
+                          </div>
+                          <div style={{ fontSize: '12px', color: 'var(--muted)' }}>
+                            {money(product.price)}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: '13px', color: 'var(--muted)' }}>Product #{productId}</div>
+                    )
+                  ) : (
+                    <div>
+                      <select
+                        aria-label={`Select product for pin slot ${index + 1}`}
+                        style={{ width: '100%', fontSize: '12px', padding: '8px' }}
+                        value=""
+                        onChange={(e) => {
+                          const chosenId = Number(e.target.value);
+                          if (chosenId && !pinnedProducts.includes(chosenId)) {
+                            setPinnedProducts([...pinnedProducts, chosenId]);
+                          }
+                        }}
+                      >
+                        <option value="">+ Pin a product...</option>
+                        {allProductsStore.data?.results
+                          ?.filter((p) => !pinnedProducts.includes(p.id))
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.title} ({money(p.price)})
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
 
           <h2>Store profile</h2>
           <div className="form-row">
@@ -4617,7 +6072,10 @@ export function ProductPreviewPage(): React.JSX.Element {
                   <span>You save {money(originalPrice - displayedPrice)}</span>
                 </>
               )}
-              {preview.product_type !== 'affiliate_clickbank' && preview.flash_sale_end && (
+              {preview.product_type !== 'affiliate_clickbank' && preview.drop_at && new Date(preview.drop_at).getTime() > Date.now() && (
+                <DropCountdown dropAt={preview.drop_at} />
+              )}
+              {preview.product_type !== 'affiliate_clickbank' && (!preview.drop_at || new Date(preview.drop_at).getTime() <= Date.now()) && preview.flash_sale_end && (
                 <FlashCountdown end={preview.flash_sale_end} />
               )}
             </div>

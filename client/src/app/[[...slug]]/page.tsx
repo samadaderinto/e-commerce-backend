@@ -93,7 +93,7 @@ export default async function Page({
   } else if (
     slug[0] === 'merchant' &&
     slug.length <= 3 &&
-    (!slug[1] || ['products', 'orders', 'payments', 'notifications', 'settings', 'new-store'].includes(slug[1])) &&
+    (!slug[1] || ['products', 'orders', 'refunds', 'payments', 'notifications', 'settings', 'new-store'].includes(slug[1])) &&
     (!slug[2] || (slug[1] === 'products' && (slug[2] === 'new' || /^\d+$/.test(slug[2]))))
   ) {
     content = <MerchantPage segments={slug.slice(1)} />;

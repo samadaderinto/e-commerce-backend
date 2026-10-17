@@ -40,3 +40,19 @@ test('display dates keep the local calendar day and omit seconds', () => {
     else process.env.TZ = previous;
   }
 });
+
+test('scheduled store drop timestamps format and round-trip correctly', () => {
+  const previous = process.env.TZ;
+  try {
+    process.env.TZ = 'UTC';
+    const dropTime = '2026-11-15T18:00:00.000Z';
+    const localInput = toLocalDateTimeInput(dropTime);
+    assert.equal(localInput, '2026-11-15T18:00');
+    assert.equal(new Date(localInput).toISOString(), dropTime);
+    assert.equal(displayDateTime(dropTime), '15 Nov 2026 · 18:00');
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+

@@ -147,21 +147,21 @@ export function AffiliatePage({
                     <strong>{money(data.credit_earned)}</strong>
                   </div>
                   <div>
-                    <span>Rewarded signups</span>
+                    <span>Rewarded customers</span>
                     <strong>
                       {data.rewarded_count} / {data.max_rewards}
                     </strong>
                   </div>
                   <div>
-                    <span>Credit per rewarded signup</span>
+                    <span>Credit per qualifying order</span>
                     <strong>{money(data.reward_amount)}</strong>
                   </div>
                 </div>
                 <p>
                   Earn {money(data.reward_amount)} for each of your first{" "}
-                  {data.max_rewards} referred signups. Rewards are
-                  non-withdrawable ProAce Wallet store credit. Additional
-                  referrals are recorded without a reward.
+                  {data.max_rewards} referred customers who complete a successful
+                  order. Rewards are non-withdrawable ProAce Wallet store credit.
+                  Additional referrals are recorded without a reward.
                 </p>
                 <Link className="text-link" href="/account/wallet">
                   View spendable ProAce Wallet balance →
@@ -346,6 +346,7 @@ export function AffiliatePage({
                         <th>Invited by (Affiliate)</th>
                         <th>Reward status</th>
                         <th>Store credit</th>
+                        <th>Qualifying order</th>
                         <th>Registration date</th>
                       </tr>
                     </thead>
@@ -376,6 +377,15 @@ export function AffiliatePage({
                             {item.status === "rewarded"
                               ? money(item.reward_amount)
                               : "No credit awarded"}
+                          </td>
+                          <td>
+                            {item.order_reference ? (
+                              <Link href={`/admin/orders/${item.order_id || ""}`}>
+                                #{item.order_reference}
+                              </Link>
+                            ) : (
+                              <span className="muted">—</span>
+                            )}
                           </td>
                           <td>
                             <DateStamp value={item.created} />
@@ -442,7 +452,7 @@ export function AffiliatePage({
                           <td>
                             {referral.status === "rewarded"
                               ? money(referral.reward_amount)
-                              : "No credit awarded"}
+                              : "Pending order"}
                           </td>
                           <td>
                             <DateStamp value={referral.created} />

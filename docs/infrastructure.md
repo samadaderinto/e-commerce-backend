@@ -54,6 +54,7 @@ docker compose -f server/compose.yaml exec api python manage.py rebuild_product_
 ```
 
 Contains:
+- `nginx`: Hardened reverse proxy & edge protection gateway (`nginx:stable-alpine`) listening on `${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_PORT:-8080}:8080`, proxying to `api:8000`. Enforces rate limits, blocks malicious probing (e.g. `/wp-admin`), shields private diagnostic routes (`/admin/`, `/silk/`, `/swagger/`, `/metrics`, `/health/status`), injects correlation IDs (`X-Request-ID`), and writes structured JSON security logs.
 - `api`: Django/Gunicorn API service built from `server/Dockerfile`.
 - `notification-worker`: Celery worker for email and event processing; local
   concurrency is `${CELERY_WORKER_CONCURRENCY:-2}`.
@@ -142,6 +143,7 @@ Monitoring and operations files:
 
 `server/compose.yaml` starts four default services:
 
+- `nginx`: official `nginx:stable-alpine`; mounts pre-hardened configurations from `server/nginx/`; listens on `${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_PORT:-8080}:8080`; forwards upstream traffic to `http://api:8000`; health checks via `/health/live/`.
 - `api`: built from `server/Dockerfile`; exposes `${API_PORT:-8000}` on
   `${API_BIND_ADDRESS:-127.0.0.1}`; waits for healthy Postgres, Redis and
   Elasticsearch; writes logs to stdout; mounts `media-data` and
@@ -159,6 +161,8 @@ Important API environment variables:
 
 | Variable | Purpose | Local default |
 | --- | --- | --- |
+| `NGINX_BIND_ADDRESS` | Host interface for protective Nginx reverse proxy | `127.0.0.1` |
+| `NGINX_PORT` | Host port for protective Nginx reverse proxy | `8080` |
 | `DJANGO_SETTINGS_MODULE` | Django settings module | `codematics.storefront_settings` |
 | `DJANGO_DEBUG` | Enables debug behavior | `true` |
 | `SECRET_KEY` | Django signing secret | local placeholder |

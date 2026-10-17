@@ -13,7 +13,7 @@ export function notificationAction(item: ActionSource): NotificationAction | nul
   if (href === '/notifications') return null;
   const labels: Record<string, string> = {
     order: 'View order',
-    refund: href.startsWith('/admin/refunds') ? 'View refund' : 'View order',
+    refund: href.startsWith('/admin/refunds') || href.startsWith('/merchant/refunds') ? 'View refund' : 'View order',
     payout: 'View payout',
     wallet: 'View wallet',
     store: 'View store',

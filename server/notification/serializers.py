@@ -71,3 +71,10 @@ class NotificationCountSerializer(serializers.Serializer):
 
 class PushDeviceTokenSerializer(serializers.Serializer):
     token = serializers.CharField(max_length=4096, trim_whitespace=True)
+
+
+class PushDeviceStatusSerializer(serializers.Serializer):
+    registered = serializers.BooleanField()
+    has_devices = serializers.BooleanField()
+    device_count = serializers.IntegerField()
+    fcm_enabled = serializers.BooleanField(default=False)

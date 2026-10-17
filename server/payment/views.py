@@ -94,7 +94,9 @@ class PaymentViewSet(viewsets.GenericViewSet):
             CouponRedemption.objects.create(coupon=coupon, user=user)
             cart.save()
             invalidate_cart_cache(cart)
-            serializer.save()
+            order = serializer.save()
+            from affiliates.services import process_referral_reward_for_order
+            process_referral_reward_for_order(order)
 
         created_order_nofication(user, 'order sucessfully created')
         return Response({'id': checkout_session.id})

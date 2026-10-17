@@ -65,6 +65,7 @@ import {
   ErrorState,
   Field,
   FlashCountdown,
+  DropCountdown,
   Loading,
   ProductGrid,
   Pagination,
@@ -734,7 +735,10 @@ export function ShopPage() {
               text="Try a different search or give your filters a little more room."
             />
           ) : (
-            <ProductGrid products={products.data.results} />
+            <ProductGrid
+              products={products.data.results}
+              pinnedIds={storeId ? storeProfile?.pinned_products : undefined}
+            />
           )}
           {products.data && products.data.pages! > 1 && (
             <Pagination page={Number(params.get("page") || 1)} totalPages={products.data.pages!} onChange={page => update("page", String(page))} />
@@ -771,6 +775,55 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
   const [selectedVariantIdx, setSelectedVariantIdx] = useState<number | null>(null);
   const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
+  const [liveViewers, setLiveViewers] = useState<number | null>(null);
+  const [isDropLive, setIsDropLive] = useState<boolean>(() => {
+    if (!productQuery.data?.drop_at) return true;
+    return new Date(productQuery.data.drop_at).getTime() <= Date.now();
+  });
+
+  useEffect(() => {
+    if (!productQuery.data?.drop_at) {
+      setIsDropLive(true);
+      return;
+    }
+    const dropTime = new Date(productQuery.data.drop_at).getTime();
+    if (dropTime <= Date.now()) {
+      setIsDropLive(true);
+      return;
+    }
+    setIsDropLive(false);
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(`/api/products/${id}/drop-live`);
+      eventSource.addEventListener('drop_status', (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (typeof data.viewers === 'number') {
+            setLiveViewers(data.viewers);
+          }
+          if (data.is_dropped) {
+            setIsDropLive(true);
+          }
+        } catch {
+          // ignore parsing error
+        }
+      });
+      eventSource.addEventListener('dropped', () => {
+        setIsDropLive(true);
+        notify('🎉 The drop is now LIVE! Add to bag is unlocked.', false);
+      });
+    } catch {
+      // EventSource fallback
+    }
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+    };
+  }, [id, productQuery.data?.drop_at, notify]);
+
   const productTabsRef = useRef<HTMLElement | null>(null);
   const selectedVariantName = selectedVariantIdx !== null
     ? productQuery.data?.variants?.[selectedVariantIdx]?.name || ""
@@ -810,6 +863,9 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
   const product = productQuery.data!;
   const isAffiliate = product.product_type === "affiliate_clickbank";
   const isSoldOut = !product.is_digital && !isAffiliate && (product.available <= 0 || product.label === "sold out");
+  const isUpcomingDrop = Boolean(
+    !isDropLive && (product.is_upcoming_drop || (product.drop_at && new Date(product.drop_at).getTime() > Date.now()))
+  );
   const activeVariant = selectedVariantIdx !== null && product.variants && product.variants.length > 0
     ? product.variants[selectedVariantIdx]
     : null;
@@ -1060,7 +1116,37 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
                 </span>
               </>
             )}
-            {!isAffiliate && product.flash_sale_end && (
+            {!isAffiliate && product.drop_at && isUpcomingDrop && (
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <DropCountdown
+                  dropAt={product.drop_at}
+                  onDropped={() => {
+                    setIsDropLive(true);
+                    notify("🎉 The drop is now LIVE! Add to bag is unlocked.", false);
+                  }}
+                />
+                {liveViewers !== null && liveViewers > 0 && (
+                  <span
+                    className="drop-viewers-badge"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      backgroundColor: "var(--soft, rgba(99, 102, 241, 0.1))",
+                      color: "var(--brand, #4f46e5)",
+                      padding: "3px 8px",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      fontWeight: 600,
+                    }}
+                  >
+                    <span>🔥</span>
+                    <span>{liveViewers} {liveViewers === 1 ? "shopper" : "shoppers"} viewing live</span>
+                  </span>
+                )}
+              </div>
+            )}
+            {!isAffiliate && !isUpcomingDrop && product.flash_sale_end && (
               <FlashCountdown end={product.flash_sale_end} />
             )}
           </div>
@@ -1137,9 +1223,11 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             </div>
           )}
 
-          <div className={`stock ${effectiveStock ? "" : "sold-out"}`}>
+          <div className={`stock ${isUpcomingDrop ? "drop-locked" : effectiveStock ? "" : "sold-out"}`}>
             <span />
-            {product.product_type === 'affiliate_clickbank'
+            {isUpcomingDrop
+              ? `Scheduled Drop · Releases ${new Date(product.drop_at!).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`
+              : product.product_type === 'affiliate_clickbank'
               ? "Official Partner Listing · In Stock"
               : product.is_digital
               ? "Unlimited digital inventory"
@@ -1149,6 +1237,30 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
                 ? `Only ${effectiveStock} left in stock`
                 : "Currently out of stock"}
           </div>
+          {isUpcomingDrop && (
+            <div
+              style={{
+                margin: "12px 0",
+                padding: "10px 14px",
+                borderRadius: "8px",
+                backgroundColor: "var(--soft, rgba(99, 102, 241, 0.08))",
+                border: "1px solid var(--line)",
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                color: "var(--ink)",
+                fontSize: "13px",
+              }}
+            >
+              <span style={{ fontSize: "18px" }}>⏳</span>
+              <div>
+                <strong>Scheduled Drop &amp; Release</strong>
+                <p style={{ margin: "2px 0 0 0", color: "var(--muted)", fontSize: "12px" }}>
+                  This product is currently locked for preview. The &ldquo;Add to bag&rdquo; button will automatically unlock at drop time.
+                </p>
+              </div>
+            </div>
+          )}
           {!product.is_digital && product.product_type !== 'affiliate_clickbank' && (
             <label className="field">
               <span>Quantity</span>
@@ -1156,7 +1268,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
                 value={selectedQuantity}
                 max={effectiveStock}
                 onChange={setQuantity}
-                disabled={effectiveStock <= 0}
+                disabled={effectiveStock <= 0 || isUpcomingDrop}
               />
             </label>
           )}
@@ -1164,7 +1276,15 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             <AddToBagButton
               quantity={selectedQuantity}
               mode="target"
-              product={{ ...product, selected_variant: activeVariant?.name || '', available: effectiveStock, title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title, sale_price: effectiveSalePrice, price: effectiveOriginalPrice }}
+              product={{
+                ...product,
+                drop_at: isDropLive ? null : product.drop_at,
+                selected_variant: activeVariant?.name || '',
+                available: effectiveStock,
+                title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title,
+                sale_price: effectiveSalePrice,
+                price: effectiveOriginalPrice,
+              }}
             />
             <button
               type="button"

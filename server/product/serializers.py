@@ -50,6 +50,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
     images = ProductImgSerializer(many=True, read_only=True)
     likes_count = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
+    is_upcoming_drop = serializers.BooleanField(read_only=True)
     
     # uploaded_images = serializers.ListField(
     #     child=serializers.ImageField(max_length=1000000000,allow_empty_file=False, use_url=False),
@@ -78,8 +79,10 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             "is_liked",
             "is_digital",
             "label",
+            "drop_at",
+            "is_upcoming_drop",
         ]
-        read_only_fields = ["is_blocked", "blocked_reason", "blocked_at", "sale_price", "average_rating", "likes_count", "is_liked"]
+        read_only_fields = ["is_blocked", "blocked_reason", "blocked_at", "sale_price", "average_rating", "likes_count", "is_liked", "is_upcoming_drop"]
 
     def to_representation(self, instance: Product) -> dict[str, Any]:
         data = super().to_representation(instance)
@@ -113,6 +116,7 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
 class ProductCardSerializer(serializers.ModelSerializer):
     likes_count = serializers.SerializerMethodField()
     is_liked = serializers.SerializerMethodField()
+    is_upcoming_drop = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Product
@@ -129,6 +133,8 @@ class ProductCardSerializer(serializers.ModelSerializer):
             "likes_count",
             "is_liked",
             "is_digital",
+            "drop_at",
+            "is_upcoming_drop",
         ]
 
     def get_likes_count(self, product: Product) -> int:

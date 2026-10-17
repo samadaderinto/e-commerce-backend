@@ -178,6 +178,7 @@ class CatalogSerializer(serializers.ModelSerializer):
     store_name = serializers.CharField(source='store.name', read_only=True)
     store_username = serializers.CharField(source='store.username', read_only=True)
     rating_count = serializers.IntegerField(read_only=True, default=0)
+    is_upcoming_drop = serializers.BooleanField(read_only=True)
     tags = serializers.SerializerMethodField()
 
     specifications = serializers.SerializerMethodField()
@@ -199,6 +200,8 @@ class CatalogSerializer(serializers.ModelSerializer):
             'sales',
             'label',
             'flash_sale_end',
+            'drop_at',
+            'is_upcoming_drop',
             'variants',
             'average_rating',
             'rating_count',
@@ -639,3 +642,45 @@ class WalletTopupRequestSerializer(serializers.Serializer):
 
 class PaymentSessionRequestSerializer(serializers.Serializer):
     session_id = serializers.CharField(max_length=255, allow_blank=False)
+
+
+class VisualSearchPaletteColorSerializer(serializers.Serializer):
+    hex = serializers.CharField()
+    name = serializers.CharField()
+    percentage = serializers.FloatField()
+    rgb = serializers.ListField(child=serializers.IntegerField(), required=False)
+
+
+class VisualSearchDetectedItemSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    label = serializers.CharField()
+    category = serializers.CharField()
+    confidence = serializers.FloatField()
+    box = serializers.ListField(child=serializers.FloatField())
+    dominant_colors = serializers.ListField(child=serializers.CharField())
+    keywords = serializers.ListField(child=serializers.CharField(), required=False)
+
+
+class VisualSearchResultItemSerializer(serializers.Serializer):
+    product = CatalogSerializer()
+    similarity_score = serializers.IntegerField()
+    match_reasons = serializers.ListField(child=serializers.CharField())
+
+
+class VisualSearchResponseSerializer(serializers.Serializer):
+    palette = VisualSearchPaletteColorSerializer(many=True)
+    detected_items = VisualSearchDetectedItemSerializer(many=True)
+    selected_item_id = serializers.CharField(allow_null=True)
+    selected_item = VisualSearchDetectedItemSerializer(allow_null=True, required=False)
+    results = VisualSearchResultItemSerializer(many=True)
+    query_applied = serializers.CharField()
+
+
+class VisualSearchPresetLookSerializer(serializers.Serializer):
+    id = serializers.CharField()
+    title = serializers.CharField()
+    subtitle = serializers.CharField()
+    image_url = serializers.CharField()
+    style = serializers.CharField()
+    items = VisualSearchDetectedItemSerializer(many=True)
+

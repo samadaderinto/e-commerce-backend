@@ -801,3 +801,47 @@ def calculate_merchant_financials(user: Any) -> dict:
         'stores': stores_breakdown,
     }
 
+
+def get_store_user_role(store: Store, user: Any) -> str | None:
+    """Returns the effective role of the user within this store.
+
+    Roles:
+      - 'owner': Primary store owner or platform admin/superuser
+      - 'store_admin': Delegated store administrator (full access except ownership transfer)
+      - 'catalog_manager': Can manage products, specifications, and images
+      - 'fulfillment_specialist': Can view orders, print packing slips, and update tracking
+      - None: User has no access to this store
+    """
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None
+    if getattr(user, 'is_superuser', False) or (getattr(user, 'is_staff', False) and store.is_official):
+        return 'owner'
+    if store.user_id == user.id:
+        return 'owner'
+    from store.models import StoreTeamMember
+    membership = StoreTeamMember.objects.filter(store=store, user=user).first()
+    if membership:
+        return membership.role
+    return None
+
+
+def can_manage_products(store: Store, user: Any) -> bool:
+    role = get_store_user_role(store, user)
+    return role in ('owner', 'store_admin', 'catalog_manager')
+
+
+def can_manage_orders(store: Store, user: Any) -> bool:
+    role = get_store_user_role(store, user)
+    return role in ('owner', 'store_admin', 'fulfillment_specialist')
+
+
+def can_manage_team(store: Store, user: Any) -> bool:
+    role = get_store_user_role(store, user)
+    return role in ('owner', 'store_admin')
+
+
+def can_manage_financials(store: Store, user: Any) -> bool:
+    role = get_store_user_role(store, user)
+    return role == 'owner'
+
+

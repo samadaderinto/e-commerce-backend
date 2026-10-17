@@ -13,6 +13,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useShop } from './providers';
 import { api } from '@/lib/api';
 import {
+  fetchPushDeviceStatus,
   getFirebaseMessaging,
   pushDeviceChangeEvent,
   registerPushDevice,
@@ -335,10 +336,33 @@ export function BrowserAlertSettings() {
           setStatus('unsupported');
           return;
         }
-        const enabled = Notification.permission === 'granted'
-          && localStorage.getItem('proace-fcm-token') !== null
-          && localStorage.getItem('proace-fcm-owner') === String(user.id);
-        setStatus(enabled ? 'enabled' : 'ready');
+        const storedToken = localStorage.getItem('proace-fcm-token');
+        const storedOwner = localStorage.getItem('proace-fcm-owner');
+        if (
+          Notification.permission === 'granted'
+          && storedToken
+          && storedOwner === String(user.id)
+        ) {
+          try {
+            const dbStatus = await fetchPushDeviceStatus(storedToken);
+            if (!active) return;
+            if (dbStatus.registered) {
+              setStatus('enabled');
+              return;
+            } else {
+              // Token was removed/expired in the database; clean up stale local storage
+              localStorage.removeItem('proace-fcm-token');
+              localStorage.removeItem('proace-fcm-owner');
+              setStatus('ready');
+              return;
+            }
+          } catch {
+            // Transient network error: fall back to local token state
+            if (active) setStatus('enabled');
+            return;
+          }
+        }
+        setStatus('ready');
       } catch {
         if (active) setStatus('unavailable');
       }

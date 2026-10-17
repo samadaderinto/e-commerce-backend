@@ -25,7 +25,7 @@ from store.models import Store
 from notification.models import Notification
 from notification.models import PushDevice
 from notification.serializers import NotificationCountSerializer, NotificationSerializer
-from notification.serializers import PushDeviceTokenSerializer
+from notification.serializers import PushDeviceTokenSerializer, PushDeviceStatusSerializer
 
 
 class NotificationPagination(LimitOffsetPagination):
@@ -371,10 +371,25 @@ class NotificationViewSet(
 
     @extend_schema(
         request=PushDeviceTokenSerializer,
-        responses={status.HTTP_200_OK: OpenApiTypes.OBJECT},
+        responses={status.HTTP_200_OK: PushDeviceStatusSerializer},
     )
-    @action(detail=False, methods=["post", "delete"], url_path="devices")
+    @action(detail=False, methods=["get", "post", "delete"], url_path="devices")
     def devices(self, request):
+        if request.method == "GET":
+            token = (request.query_params.get("token") or "").strip()
+            user_devices = PushDevice.objects.filter(user=request.user)
+            if token:
+                is_registered = user_devices.filter(token=token).exists()
+            else:
+                is_registered = user_devices.exists()
+            status_data = {
+                "registered": is_registered,
+                "has_devices": user_devices.exists(),
+                "device_count": user_devices.count(),
+                "fcm_enabled": getattr(settings, "FCM_ENABLED", False),
+            }
+            return Response(PushDeviceStatusSerializer(status_data).data, status=status.HTTP_200_OK)
+
         if request.method == "POST" and not getattr(settings, "FCM_ENABLED", False):
             return Response(
                 {"detail": "Browser push notifications are not enabled."},
@@ -395,10 +410,29 @@ class NotificationViewSet(
                 token=token,
                 defaults={"user": request.user, "last_active_at": timezone.now()},
             )
-            return Response({"registered": True}, status=status.HTTP_200_OK)
+            user_devices = PushDevice.objects.filter(user=request.user)
+            return Response(
+                {
+                    "registered": True,
+                    "has_devices": True,
+                    "device_count": user_devices.count(),
+                    "fcm_enabled": getattr(settings, "FCM_ENABLED", False),
+                },
+                status=status.HTTP_200_OK,
+            )
 
         removed, _ = PushDevice.objects.filter(user=request.user, token=token).delete()
-        return Response({"unregistered": removed > 0})
+        user_devices = PushDevice.objects.filter(user=request.user)
+        return Response(
+            {
+                "unregistered": removed > 0,
+                "registered": False,
+                "has_devices": user_devices.exists(),
+                "device_count": user_devices.count(),
+                "fcm_enabled": getattr(settings, "FCM_ENABLED", False),
+            },
+            status=status.HTTP_200_OK,
+        )
 
     @action(detail=False, methods=["get"])
     def unread(self, request):

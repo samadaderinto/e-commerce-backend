@@ -93,3 +93,15 @@ export async function unregisterPushDevice(): Promise<void> {
   localStorage.removeItem(tokenOwnerStorageKey);
   announcePushDeviceChange();
 }
+
+export type PushDeviceStatusResponse = {
+  registered: boolean;
+  has_devices: boolean;
+  device_count: number;
+  fcm_enabled: boolean;
+};
+
+export async function fetchPushDeviceStatus(token?: string): Promise<PushDeviceStatusResponse> {
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return api<PushDeviceStatusResponse>(`notifications/devices${query}`);
+}

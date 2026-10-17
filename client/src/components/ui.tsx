@@ -17,6 +17,7 @@ import {
   Plus,
   ShoppingBag,
   Star,
+  Pin,
 } from "lucide-react";
 import { Product, SellerTier } from "@/lib/types";
 import { money } from "@/lib/api";
@@ -484,12 +485,89 @@ export function FlashCountdown({ end }: { end?: string | null }) {
   );
 }
 
-export function ProductCard({ product }: { product: Product }) {
+export function DropCountdown({
+  dropAt,
+  onDropped,
+}: {
+  dropAt?: string | null;
+  onDropped?: () => void;
+}) {
+  const [timeLeft, setTimeLeft] = useState<{
+    days: number;
+    hours: number;
+    minutes: number;
+    seconds: number;
+    dropped: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!dropAt) return;
+    function calculate() {
+      const diff = new Date(dropAt!).getTime() - Date.now();
+      if (!Number.isFinite(diff) || diff <= 0) {
+        setTimeLeft({ days: 0, hours: 0, minutes: 0, seconds: 0, dropped: true });
+        if (onDropped) onDropped();
+        return;
+      }
+      const totalHours = Math.floor(diff / (1000 * 60 * 60));
+      const days = Math.floor(totalHours / 24);
+      const hours = totalHours % 24;
+      const minutes = Math.floor(diff / 60000) % 60;
+      const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+      setTimeLeft({ days, hours, minutes, seconds, dropped: false });
+    }
+    calculate();
+    const interval = setInterval(calculate, 1000);
+    return () => clearInterval(interval);
+  }, [dropAt, onDropped]);
+
+  if (!dropAt || !timeLeft || timeLeft.dropped) return null;
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  return (
+    <span
+      className="drop-countdown-badge"
+      title="Store drop countdown timer"
+      aria-label={`Product drops in ${timeLeft.days} days, ${timeLeft.hours} hours, ${timeLeft.minutes} minutes and ${timeLeft.seconds} seconds`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        backgroundColor: 'var(--brand, #4f46e5)',
+        color: '#ffffff',
+        padding: '3px 8px',
+        borderRadius: '6px',
+        fontSize: '11px',
+        fontWeight: 700,
+        letterSpacing: '0.02em',
+        fontVariantNumeric: 'tabular-nums',
+      }}
+    >
+      <span aria-hidden="true">🔒</span>
+      <span>
+        {timeLeft.days > 0 ? `${timeLeft.days}d ` : ''}
+        {pad(timeLeft.hours)}:{pad(timeLeft.minutes)}:{pad(timeLeft.seconds)}
+      </span>
+    </span>
+  );
+}
+
+export function ProductCard({
+  product,
+  isPinned = false,
+}: {
+  product: Product;
+  isPinned?: boolean;
+}) {
   const { saved, toggleSave, notify, user } = useShop();
   const params = useSearchParams();
   const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const isAffiliate = product.product_type === 'affiliate_clickbank';
   const isSoldOut = !product.is_digital && !isAffiliate && (product.available <= 0 || product.label === 'sold out');
+  const isUpcomingDrop = Boolean(
+    product.is_upcoming_drop || (product.drop_at && new Date(product.drop_at).getTime() > Date.now())
+  );
   const productHref = `/products/${product.id}${preview ? '?preview=1' : ''}`;
   const liked = saved.some((item) => item.id === product.id);
   return (
@@ -505,8 +583,13 @@ export function ProductCard({ product }: { product: Product }) {
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
           />
         </Link>
-        {(isAffiliate || isSoldOut || (!isAffiliate && (product.flash_sale_end || product.discount > 0))) && (
+        {(isPinned || isAffiliate || isSoldOut || (!isAffiliate && (isUpcomingDrop || product.flash_sale_end || product.discount > 0))) && (
           <div className="product-badges">
+            {isPinned && (
+              <span className="discount pinned-badge">
+                <Pin size={11} /> Pinned
+              </span>
+            )}
             {isAffiliate && (
               <span className="discount partner-badge">
                 Partner Offer
@@ -517,7 +600,10 @@ export function ProductCard({ product }: { product: Product }) {
                 Sold Out
               </span>
             )}
-            {!isAffiliate && !isSoldOut && product.flash_sale_end && (
+            {!isAffiliate && !isSoldOut && isUpcomingDrop && (
+              <DropCountdown dropAt={product.drop_at} />
+            )}
+            {!isAffiliate && !isSoldOut && !isUpcomingDrop && product.flash_sale_end && (
               <FlashCountdown end={product.flash_sale_end} />
             )}
             {!isAffiliate && !isSoldOut && product.discount > 0 && (
@@ -574,11 +660,21 @@ export function ProductCard({ product }: { product: Product }) {
   );
 }
 
-export function ProductGrid({ products }: { products: Product[] }) {
+export function ProductGrid({
+  products,
+  pinnedIds,
+}: {
+  products: Product[];
+  pinnedIds?: number[];
+}) {
   return (
     <div className="product-grid">
       {products.map((product) => (
-        <ProductCard key={product.id} product={product} />
+        <ProductCard
+          key={product.id}
+          product={product}
+          isPinned={Boolean(pinnedIds?.includes(product.id))}
+        />
       ))}
     </div>
   );
@@ -856,6 +952,33 @@ export function AddToBagButton({
     current >= product.available &&
     (!targetMode || quantity >= current);
 
+  const [isDropped, setIsDropped] = useState<boolean>(() => {
+    if (!product.drop_at) return true;
+    return new Date(product.drop_at).getTime() <= Date.now();
+  });
+
+  useEffect(() => {
+    if (!product.drop_at) {
+      setIsDropped(true);
+      return;
+    }
+    const target = new Date(product.drop_at).getTime();
+    if (target <= Date.now()) {
+      setIsDropped(true);
+      return;
+    }
+    setIsDropped(false);
+    const interval = setInterval(() => {
+      if (Date.now() >= target) {
+        setIsDropped(true);
+        clearInterval(interval);
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [product.drop_at]);
+
+  const isUpcomingDrop = !isDropped;
+
   useEffect(() => {
     if (!added) return;
     const timer = window.setTimeout(() => setAdded(false), 1800);
@@ -864,6 +987,7 @@ export function AddToBagButton({
 
   async function submit() {
     if (
+      isUpcomingDrop ||
       locked.current ||
       (targetMode && current === quantity) ||
       digitalAlreadyAdded ||
@@ -903,22 +1027,24 @@ export function AddToBagButton({
       ? "Your listing"
       : product.store_verified === false
         ? "Preview only"
-        : isSoldOut
-          ? "Out of stock"
-          : busy
-            ? "Adding…"
-          : digitalAlreadyAdded
-            ? "Already in bag"
-            : current > quantity
-              && targetMode
-              ? "Update bag"
-              : capped
-                ? "Max quantity in bag"
-                : unchanged && current > 0
-                  ? `${current} in bag`
-                  : added
-                    ? "Added!"
-                    : "Add to bag";
+        : isUpcomingDrop
+          ? "🔒 Scheduled Drop"
+          : isSoldOut
+            ? "Out of stock"
+            : busy
+              ? "Adding…"
+            : digitalAlreadyAdded
+              ? "Already in bag"
+              : current > quantity
+                && targetMode
+                ? "Update bag"
+                : capped
+                  ? "Max quantity in bag"
+                  : unchanged && current > 0
+                    ? `${current} in bag`
+                    : added
+                      ? "Added!"
+                      : "Add to bag";
 
   const isDisabled =
     preview ||
@@ -926,6 +1052,7 @@ export function AddToBagButton({
     cartLoading ||
     !!cartError ||
     backoffice ||
+    isUpcomingDrop ||
     unchanged ||
     digitalAlreadyAdded ||
     quantity < 1 ||

@@ -27,22 +27,27 @@ from rest_framework.response import Response
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 
 from cart.models import CartItem
+from core.models import Refund
 from payment.models import Order
 from product.models import Product, ProductImg, Specification
 from store.models import (
     MerchantWallet, Schedule, Store, StoreAddress, StoreEarningsLedger,
-    StoreInfo, StorePayout,
+    StoreInfo, StorePayout, StoreTeamMember,
 )
 from store.serializers import (
+    MerchantRefundQuerySerializer, MerchantRefundSerializer,
     MerchantTrackingSerializer, DashboardQuerySerializer, InventorySerializer, MerchantImageSerializer,
     MerchantPayoutCreateSerializer, MerchantProductSerializer, MerchantSpecificationSerializer,
     MerchantWalletSerializer, PayoutCreateSerializer, ScheduleSerializer,
     StoreAddressSerializer, StoreEarningsLedgerSerializer, StoreInfoSerializer,
     StoreBrandingImageSerializer, StoreOnboardingSerializer, StorePayoutSerializer, StoreSerializer,
+    StoreTeamMemberSerializer, StoreTeamMemberInviteSerializer, StoreTeamMemberUpdateSerializer,
 )
 from store.services import (
     calculate_merchant_financials, calculate_store_financials,
     get_or_create_merchant_wallet, request_merchant_payout,
+    can_manage_products, can_manage_orders, can_manage_team, can_manage_financials,
+    get_store_user_role,
 )
 from utils.functions import normalize_media_url
 from utils.digital_previews import is_image_digital_asset
@@ -195,14 +200,22 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             # Strict separation: Admins and Staff never have access to a third-party seller's internal dashboard.
             # Proace Official Stores exception: all staff members and admins automatically have access to official stores.
             return Store.objects.filter(is_official=True).order_by('-created', '-pk')
-        return Store.objects.filter(user=user, is_official=False).order_by('-created', '-pk')
+        return Store.objects.filter(
+            Q(user=user) | Q(team_members__user=user),
+            is_official=False,
+        ).distinct().order_by('-created', '-pk')
 
     @extend_schema(responses={204: None})
     @action(detail=True, methods=['delete'], url_path='delete')
     def delete_store(self, request, pk=None):
-        if not is_admin(request.user):
-            raise PermissionDenied('Only administrators can delete official stores.')
-        self.get_object().delete()
+        store = self.get_object()
+        if store.is_official:
+            if not is_admin(request.user):
+                raise PermissionDenied('Only administrators can delete official stores.')
+        else:
+            if store.user_id != request.user.id and not request.user.is_superuser:
+                raise PermissionDenied('Only the primary store owner can delete this store.')
+        store.delete()
         return Response(status=204)
 
     @action(detail=True, methods=['put'], url_path='staff')
@@ -252,10 +265,14 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             store = self.get_queryset().select_for_update().get(pk=self.get_object().pk)
             profile = StoreInfo.objects.filter(store=store).order_by('pk').first()
             if request.method == 'GET':
-                return Response(StoreInfoSerializer(profile).data if profile else {})
-            serializer = StoreInfoSerializer(profile, data=request.data, partial=True)
+                return Response(StoreInfoSerializer(profile, context={'store': store}).data if profile else {})
+            serializer = StoreInfoSerializer(profile, data=request.data, partial=True, context={'store': store})
             serializer.is_valid(raise_exception=True)
             serializer.save(store=store)
+            Store.objects.filter(pk=store.pk).update(updated=timezone.now())
+            from storefront.catalog_cache import invalidate_catalog_snapshot
+            transaction.on_commit(lambda: invalidate_catalog_snapshot())
+            transaction.on_commit(lambda: invalidate_store_products(store))
         return Response(serializer.data)
 
     @extend_schema(methods=['POST'], request=StoreBrandingImageSerializer, responses=StoreInfoSerializer)
@@ -431,6 +448,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     def pickup_address(self, request, pk=None):
         with transaction.atomic():
             store = self.get_queryset().select_for_update().get(pk=self.get_object().pk)
+            if request.method == 'PUT' and not can_manage_team(store, request.user):
+                raise PermissionDenied("Only store owners and store administrators can update pickup addresses.")
             address = StoreAddress.objects.filter(store=store, is_default=True).order_by('pk').first()
             if request.method == 'GET':
                 return Response(StoreAddressSerializer(address).data if address else {})
@@ -439,6 +458,100 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             StoreAddress.objects.filter(store=store, is_default=True).update(is_default=False)
             serializer.save(store=store, is_default=True)
         return Response(serializer.data)
+
+    @extend_schema(
+        methods=['GET'],
+        responses=StoreTeamMemberSerializer(many=True),
+        description="List active store team members and their roles.",
+    )
+    @extend_schema(
+        methods=['POST'],
+        request=StoreTeamMemberInviteSerializer,
+        responses={201: StoreTeamMemberSerializer},
+        description="Invite/add a user as a store team member with a designated role.",
+    )
+    @action(detail=True, methods=['get', 'post'], url_path='team')
+    def team(self, request: Request, pk: str | None = None) -> Response:
+        store = self.get_object()
+        user_role = get_store_user_role(store, request.user)
+        if not can_manage_team(store, request.user):
+            raise PermissionDenied("Only store owners and store administrators can view or manage team members.")
+
+        if request.method == 'GET':
+            members = StoreTeamMember.objects.filter(store=store).select_related('user', 'invited_by').order_by('-created', 'pk')
+            return Response(StoreTeamMemberSerializer(members, many=True, context={'request': request}).data)
+
+        # POST: Invite team member
+        serializer = StoreTeamMemberInviteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email'].strip().lower()
+        role = serializer.validated_data['role']
+
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        target_user = User.objects.filter(email__iexact=email).first()
+        if not target_user:
+            raise ValidationError({'email': 'No account was found with this email address. The user must register first.'})
+
+        if target_user.pk == store.user_id:
+            raise ValidationError({'email': 'The store owner is already the primary administrator of this store.'})
+
+        if StoreTeamMember.objects.filter(store=store, user=target_user).exists():
+            raise ValidationError({'email': 'This user is already a team member of this store.'})
+
+        if user_role == StoreTeamMember.ROLE_STORE_ADMIN and role == StoreTeamMember.ROLE_STORE_ADMIN:
+            raise PermissionDenied("Only the store owner can invite or appoint another Store Admin.")
+
+        member = StoreTeamMember.objects.create(
+            store=store,
+            user=target_user,
+            role=role,
+            invited_by=request.user,
+        )
+        return Response(StoreTeamMemberSerializer(member, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        methods=['PATCH'],
+        request=StoreTeamMemberUpdateSerializer,
+        responses={200: StoreTeamMemberSerializer},
+        description="Update a team member's role.",
+    )
+    @extend_schema(
+        methods=['DELETE'],
+        responses={204: None},
+        description="Remove a team member from this store.",
+    )
+    @action(detail=True, methods=['patch', 'delete'], url_path=r'team/(?P<member_pk>\d+)')
+    def team_member_detail(self, request: Request, pk: str | None = None, member_pk: str | None = None) -> Response:
+        store = self.get_object()
+        user_role = get_store_user_role(store, request.user)
+        if not can_manage_team(store, request.user):
+            raise PermissionDenied("Only store owners and store administrators can manage team members.")
+
+        member = get_object_or_404(StoreTeamMember.objects.select_related('user'), pk=member_pk, store=store)
+
+        if member.user_id == request.user.pk:
+            raise PermissionDenied("You cannot modify or remove your own team membership.")
+
+        if user_role == StoreTeamMember.ROLE_STORE_ADMIN and member.role == StoreTeamMember.ROLE_STORE_ADMIN:
+            raise PermissionDenied("Only the store owner can modify or remove another Store Admin.")
+
+        if request.method == 'DELETE':
+            member.delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # PATCH: Update role
+        serializer = StoreTeamMemberUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        new_role = serializer.validated_data['role']
+
+        if user_role == StoreTeamMember.ROLE_STORE_ADMIN and new_role == StoreTeamMember.ROLE_STORE_ADMIN:
+            raise PermissionDenied("Only the store owner can promote a member to Store Admin.")
+
+        member.role = new_role
+        member.save(update_fields=['role', 'updated'])
+        return Response(StoreTeamMemberSerializer(member, context={'request': request}).data)
+
 
     @action(detail=True, methods=['get'])
     def onboarding(self, request, pk=None):
@@ -482,6 +595,31 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         from payment.order_filters import orders_for_store
 
         return orders_for_store(Order.objects.all(), store.pk).order_by('-created', '-pk')
+
+    def store_refunds(self, store: Store) -> QuerySet[Refund]:
+        from django.db import connections
+        from django.db.models.expressions import RawSQL
+
+        database = connections[Refund.objects.db]
+        if database.vendor == "sqlite":
+            table = database.ops.quote_name(Refund._meta.db_table)
+            snapshot_q = Q(
+                pk__in=RawSQL(
+                    f"SELECT r.id FROM {table} AS r "
+                    "WHERE EXISTS (SELECT 1 FROM json_each(r.selected_items) AS item "
+                    "WHERE CAST(json_extract(item.value, '$.store') AS TEXT) = %s)",
+                    [str(store.pk)],
+                )
+            )
+        else:
+            snapshot_q = Q(selected_items__contains=[{"store": store.pk}]) | Q(
+                selected_items__contains=[{"store": str(store.pk)}]
+            )
+
+        legacy_orders = self.store_orders(store)
+        legacy_q = (Q(selected_items=[]) | Q(selected_items__isnull=True)) & Q(order__in=legacy_orders)
+        return Refund.objects.filter(snapshot_q | legacy_q).distinct()
+
 
     @staticmethod
     def legacy_order_items(order: Order) -> list[CartItem]:
@@ -538,6 +676,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     @action(detail=True, methods=['get'])
     def orders(self, request: Request, pk: str | None = None) -> Response:
         store = self.get_object()
+        if not can_manage_orders(store, request.user):
+            raise PermissionDenied("You do not have permission to view orders for this store.")
         orders = self.store_orders(store)
         order_id: str = str(request.query_params.get("order_id") or "").strip()
         if order_id:
@@ -695,6 +835,165 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         ]
         return self.get_paginated_response(data)
 
+    @extend_schema(
+        parameters=[MerchantRefundQuerySerializer],
+        responses=MerchantRefundSerializer(many=True),
+        description="List and filter product refunds for this store.",
+    )
+    @action(detail=True, methods=['get'])
+    def refunds(self, request: Request, pk: str | None = None) -> Response:
+        store = self.get_object()
+        if not can_manage_orders(store, request.user):
+            raise PermissionDenied("You do not have permission to manage refunds for this store.")
+        refunds = self.store_refunds(store)
+
+        order_id = str(request.query_params.get("order_id") or "").strip()
+        if order_id:
+            clean_ord = order_id.lstrip("#")
+            if clean_ord.isdigit():
+                refunds = refunds.filter(Q(order_id=int(clean_ord)) | Q(order__orderId=order_id))
+            else:
+                refunds = refunds.filter(order__orderId=order_id)
+
+        refund_id = str(request.query_params.get("refund_id") or "").strip()
+        if refund_id:
+            clean_ref = refund_id.lstrip("#")
+            if clean_ref.isdigit():
+                refunds = refunds.filter(pk=int(clean_ref))
+
+        status_param = request.query_params.get("status")
+        if status_param:
+            if status_param not in dict(Refund.STATUS_CHOICES):
+                raise ValidationError({"status": "Invalid refund status."})
+            refunds = refunds.filter(status=status_param)
+
+        refund_type = request.query_params.get("refund_type")
+        if refund_type:
+            if refund_type not in dict(Refund.REFUND_TYPE_CHOICES):
+                raise ValidationError({"refund_type": "Invalid refund type."})
+            refunds = refunds.filter(refund_type=refund_type)
+
+        search = str(request.query_params.get("search") or "").strip()
+        if search:
+            clean_search = search.lstrip("#")
+            id_q = Q(pk=int(clean_search)) if clean_search.isdigit() else Q()
+            refunds = refunds.filter(
+                id_q
+                | Q(email__icontains=search)
+                | Q(reason__icontains=search)
+                | Q(processing_reason__icontains=search)
+                | Q(order__orderId__icontains=search)
+                | Q(order__user__email__icontains=search)
+                | Q(order__user__first_name__icontains=search)
+                | Q(order__user__last_name__icontains=search)
+                | Q(order__cart__cart_items__product__title__icontains=search)
+            )
+
+        days = request.query_params.get("days")
+        if days:
+            try:
+                num_days = int(days)
+                if num_days > 0:
+                    refunds = refunds.filter(created__gte=timezone.now() - timedelta(days=num_days))
+            except (ValueError, TypeError):
+                pass
+
+        date_from = str(request.query_params.get("date_from") or request.query_params.get("start_date") or "").strip()
+        if date_from:
+            dt_from = parse_datetime(date_from)
+            if not dt_from:
+                d_from = parse_date(date_from)
+                if d_from:
+                    dt_from = timezone.make_aware(datetime.combine(d_from, datetime.min.time()))
+            if dt_from:
+                refunds = refunds.filter(created__gte=dt_from)
+
+        date_to = str(request.query_params.get("date_to") or request.query_params.get("end_date") or "").strip()
+        if date_to:
+            dt_to = parse_datetime(date_to)
+            if not dt_to:
+                d_to = parse_date(date_to)
+                if d_to:
+                    dt_to = timezone.make_aware(datetime.combine(d_to, datetime.max.time()))
+            if dt_to:
+                refunds = refunds.filter(created__lte=dt_to)
+
+        ordering = str(request.query_params.get("ordering") or "-created").strip()
+        allowed_orderings = {
+            "-created": ("-created", "-pk"),
+            "created": ("created", "pk"),
+            "-updated": ("-updated", "-pk"),
+            "updated": ("updated", "pk"),
+            "-amount": ("-refund_amount", "-pk"),
+            "amount": ("refund_amount", "pk"),
+        }
+        order_by_fields = allowed_orderings.get(ordering, ("-created", "-pk"))
+        refunds = refunds.distinct().order_by(*order_by_fields)
+
+        refunds = refunds.select_related("order", "order__user", "order__delivery", "processed_by")
+        page = self.paginate_queryset(refunds)
+
+        store_prod_ids = set(Product.objects.filter(store=store).values_list("pk", flat=True))
+        data = []
+        for refund in page:
+            store_items = []
+            if refund.selected_items:
+                for item in refund.selected_items:
+                    item_store = item.get("store")
+                    if item_store is not None and str(item_store) == str(store.pk):
+                        store_items.append(item)
+                    elif not item_store and item.get("product") in store_prod_ids:
+                        store_items.append(item)
+            if not store_items and refund.order:
+                store_items = self.store_order_items(refund.order, store)
+
+            amount = sum(
+                (
+                    Decimal(str(item.get("line_total") or (Decimal(str(item.get("unit_price", "0"))) * int(item.get("quantity", 1)))))
+                    for item in store_items
+                ),
+                Decimal("0.00"),
+            ).quantize(Decimal(".01"))
+
+            order = refund.order
+            customer_name = ""
+            if order and order.user:
+                customer_name = order.user.get_full_name() or ""
+            elif order and order.address_snapshot:
+                customer_name = f"{order.address_snapshot.get('first_name', '')} {order.address_snapshot.get('last_name', '')}".strip()
+
+            data.append({
+                "id": refund.id,
+                "order": order.id if order else None,
+                "order_reference": order.orderId if order else "",
+                "customer_email": refund.email,
+                "customer_name": customer_name,
+                "status": refund.status,
+                "refund_type": refund.refund_type,
+                "reason": refund.reason,
+                "processing_reason": refund.processing_reason or "",
+                "amount": str(amount),
+                "total_order_refund_amount": str(refund.refund_amount),
+                "items": [
+                    {
+                        "product": item.get("product"),
+                        "title": item.get("title", ""),
+                        "image": item.get("image", ""),
+                        "quantity": item.get("quantity", 1),
+                        "unit_price": str(item.get("unit_price", "0.00")),
+                        "line_total": str(item.get("line_total") or (Decimal(str(item.get("unit_price", "0.00"))) * int(item.get("quantity", 1)))),
+                        "is_digital": bool(item.get("is_digital", False)),
+                        "variant": item.get("variant"),
+                    }
+                    for item in store_items
+                ],
+                "processed_at": refund.processed_at.isoformat() if refund.processed_at else None,
+                "processed_by_email": refund.processed_by.email if refund.processed_by else None,
+                "created": refund.created.isoformat() if refund.created else None,
+                "updated": refund.updated.isoformat() if refund.updated else None,
+            })
+        return self.get_paginated_response(data)
+
     @action(
         detail=True,
         methods=["patch", "post"],
@@ -706,6 +1005,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         self, request: Request, pk: str | None = None, order_pk: str | None = None
     ) -> Response:
         store = self.get_object()
+        if not can_manage_orders(store, request.user):
+            raise PermissionDenied("You do not have permission to fulfill orders or update tracking for this store.")
         order_filter = (
             Q(pk=int(order_pk)) if str(order_pk).isdigit() else Q(orderId=order_pk)
         )
@@ -1047,6 +1348,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     def payouts(self, request: Request, pk: str | None = None) -> Response:
         store = self.get_object()
         if request.method == 'GET':
+            if not can_manage_team(store, request.user):
+                raise PermissionDenied("You do not have permission to view payouts for this store.")
             payouts = filter_records(
                 store.payouts.order_by("-created", "-pk"), request.query_params,
                 search_fields=("reference", "notes", "payout_method"),
@@ -1128,6 +1431,8 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
             StoreViewSet.get_queryset(self),
             pk=self.kwargs['store_pk'],
         )
+        if not can_manage_products(store, self.request.user):
+            raise PermissionDenied('You do not have permission to manage products for this store.')
         from core.activity import record_store_activity
         record_store_activity(store)
         return store
@@ -1163,6 +1468,11 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
                     raise ValidationError({'stock': 'Use in, low or out.'})
                 products = products.filter(filters[stock])
         return products
+
+    @transaction.atomic
+    def create(self, request, *args, **kwargs):
+        self.get_store()
+        return super().create(request, *args, **kwargs)
 
     @transaction.atomic
     def update(self, request, *args, **kwargs):
@@ -1508,6 +1818,14 @@ class VisibilityScheduleViewSet(viewsets.ModelViewSet):
         product = serializer.validated_data['product']
         if not StoreViewSet.get_queryset(self).filter(pk=product.store_id).exists():
             raise ValidationError({'product': 'Choose a product from your store.'})
+        if not can_manage_products(product.store, self.request.user):
+            raise PermissionDenied('You do not have permission to schedule visibility for this store.')
         if serializer.validated_data['make_visible_at'] <= timezone.now():
             raise ValidationError({'make_visible_at': 'Choose a future time.'})
         serializer.save(store=product.store)
+
+    def perform_destroy(self, instance):
+        if not can_manage_products(instance.store, self.request.user):
+            raise PermissionDenied('You do not have permission to delete visibility schedules for this store.')
+        instance.delete()
+

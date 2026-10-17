@@ -283,6 +283,66 @@ class MerchantTests(TestCase):
         self.assertEqual(StoreAddress.objects.filter(store=self.store, is_default=True).count(), 1)
         self.assertTrue(self.client.get(self.url + 'onboarding/').data['complete'])
 
+    def test_store_pinned_products_management_and_ordering(self):
+        # Create multiple products for the store
+        p1 = self.make_product(self.store, title='Alpha Item', price='10.00', visibility=True)
+        p2 = self.make_product(self.store, title='Beta Item', price='20.00', visibility=True)
+        p3 = self.make_product(self.store, title='Gamma Item', price='30.00', visibility=True)
+        p4 = self.make_product(self.store, title='Delta Item', price='40.00', visibility=True)
+        foreign = self.foreign_product
+
+        # 1. Reject pinning > 3 products
+        res_overflow = self.client.patch(
+            self.url + 'profile/',
+            {'pinned_products': [p1.pk, p2.pk, p3.pk, p4.pk]},
+            format='json',
+        )
+        self.assertEqual(res_overflow.status_code, 400)
+        self.assertIn('You can pin at most 3 products', str(res_overflow.data))
+
+        # 2. Reject pinning a product belonging to another store
+        res_foreign = self.client.patch(
+            self.url + 'profile/',
+            {'pinned_products': [p1.pk, foreign.pk]},
+            format='json',
+        )
+        self.assertEqual(res_foreign.status_code, 400)
+        self.assertIn('All pinned products must belong to this store', str(res_foreign.data))
+
+        # 3. Reject invalid non-integer product IDs
+        res_invalid = self.client.patch(
+            self.url + 'profile/',
+            {'pinned_products': ['not-a-number']},
+            format='json',
+        )
+        self.assertEqual(res_invalid.status_code, 400)
+
+        # 4. Successfully pin up to 3 products in a custom order (e.g., p3, then p1)
+        res_valid = self.client.patch(
+            self.url + 'profile/',
+            {'pinned_products': [p3.pk, p1.pk]},
+            format='json',
+        )
+        self.assertEqual(res_valid.status_code, 200)
+        self.assertEqual(res_valid.data['pinned_products'], [p3.pk, p1.pk])
+
+        # 5. Verify public storefront catalog prioritizes pinned products at the top
+        anon_client = APIClient()
+        cat_res = anon_client.get(f'/api/v1/products/?store={self.store.pk}')
+        self.assertEqual(cat_res.status_code, 200)
+        product_ids = [item['id'] for item in cat_res.data['results']]
+        # First two items must be p3 and p1 in that exact order
+        self.assertEqual(product_ids[0], p3.pk)
+        self.assertEqual(product_ids[1], p1.pk)
+        # Other items follow
+        self.assertIn(p2.pk, product_ids[2:])
+        self.assertIn(p4.pk, product_ids[2:])
+
+        # 6. Verify public store details endpoint includes pinned_products
+        store_pub = anon_client.get(f'/api/v1/stores/{self.store.pk}/public/')
+        self.assertEqual(store_pub.status_code, 200)
+        self.assertEqual(store_pub.data['profile']['pinned_products'], [p3.pk, p1.pk])
+
     def test_create_product_defaults_to_draft_and_protects_fields(self):
         response = self.client.post(self.products_url, self.product_payload(
             store=self.other_store.pk, sales=999, sponsored=True, average_rating='5.00'), format='json')
@@ -1461,3 +1521,140 @@ class MerchantTests(TestCase):
         self.assertEqual(StorePayout.objects.filter(wallet=wallet).count(), 1)
         self.assertEqual(wallet.total_withdrawn, Decimal('6000.00'))
         self.assertEqual(wallet.available_balance, Decimal('4000.00'))
+
+    def test_merchant_refunds_listing_scopes_products_and_amount_to_store(self) -> None:
+        from core.models import Refund
+        prod1 = self.make_product(self.store, title="Store 1 Product", price=Decimal("50.00"), discount=0, available=10)
+        prod2 = self.make_product(self.other_store, title="Store 2 Product", price=Decimal("30.00"), discount=0, available=10)
+        order = Order.objects.create(
+            user=self.owner,
+            orderId="ORD-REF-TEST-001",
+            total=Decimal("80.00"),
+            paid_total=Decimal("80.00"),
+            items_snapshot=[
+                {"product": prod1.pk, "store": self.store.pk, "title": prod1.title, "quantity": 1, "unit_price": "50.00", "line_total": "50.00"},
+                {"product": prod2.pk, "store": self.other_store.pk, "title": prod2.title, "quantity": 1, "unit_price": "30.00", "line_total": "30.00"},
+            ],
+        )
+        refund = Refund.objects.create(
+            email="customer@example.com",
+            order=order,
+            reason="Defective zipper",
+            refund_type=Refund.REFUND_TYPE_ORIGINAL_PAYMENT,
+            refund_amount=Decimal("80.00"),
+            selected_items=[
+                {"product": prod1.pk, "store": self.store.pk, "title": prod1.title, "quantity": 1, "unit_price": "50.00", "line_total": "50.00"},
+                {"product": prod2.pk, "store": self.other_store.pk, "title": prod2.title, "quantity": 1, "unit_price": "30.00", "line_total": "30.00"},
+            ],
+            status=Refund.STATUS_PENDING,
+        )
+
+        response = self.client.get(f'/stores/{self.store.pk}/refunds/')
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['count'], 1)
+        record = response.data['results'][0]
+        self.assertEqual(record['id'], refund.pk)
+        self.assertEqual(record['order'], order.pk)
+        self.assertEqual(record['order_reference'], "ORD-REF-TEST-001")
+        self.assertEqual(record['customer_email'], "customer@example.com")
+        self.assertEqual(record['reason'], "Defective zipper")
+        self.assertEqual(record['status'], "pending")
+        self.assertEqual(record['refund_type'], "original_payment")
+        # Store 1 should only see their product (amount: 50.00)
+        self.assertEqual(record['amount'], "50.00")
+        self.assertEqual(record['total_order_refund_amount'], "80.00")
+        self.assertEqual(len(record['items']), 1)
+        self.assertEqual(record['items'][0]['product'], prod1.pk)
+        self.assertEqual(record['items'][0]['title'], "Store 1 Product")
+        self.assertEqual(record['items'][0]['line_total'], "50.00")
+
+        # Now test that other_store only sees their product (amount: 30.00)
+        other_client = APIClient()
+        other_client.force_authenticate(self.other)
+        other_resp = other_client.get(f'/stores/{self.other_store.pk}/refunds/')
+        self.assertEqual(other_resp.status_code, 200)
+        self.assertEqual(other_resp.data['count'], 1)
+        other_record = other_resp.data['results'][0]
+        self.assertEqual(other_record['amount'], "30.00")
+        self.assertEqual(len(other_record['items']), 1)
+        self.assertEqual(other_record['items'][0]['product'], prod2.pk)
+
+    def test_merchant_refunds_filtering_and_search(self) -> None:
+        from core.models import Refund
+        prod = self.make_product(self.store, title="Unique Keyboard", price=Decimal("120.00"), discount=0, available=5)
+        order1 = Order.objects.create(
+            user=self.owner,
+            orderId="ORD-KEYBOARD-01",
+            total=Decimal("120.00"),
+            paid_total=Decimal("120.00"),
+            items_snapshot=[{"product": prod.pk, "store": self.store.pk, "title": prod.title, "quantity": 1, "unit_price": "120.00", "line_total": "120.00"}],
+        )
+        r1 = Refund.objects.create(
+            email="alice@example.com",
+            order=order1,
+            reason="Wrong layout",
+            status=Refund.STATUS_PENDING,
+            refund_type=Refund.REFUND_TYPE_STORE_CREDIT,
+            refund_amount=Decimal("120.00"),
+            selected_items=[{"product": prod.pk, "store": self.store.pk, "title": prod.title, "quantity": 1, "unit_price": "120.00", "line_total": "120.00"}],
+        )
+
+        prod2 = self.make_product(self.store, title="Wireless Mouse", price=Decimal("40.00"), discount=0, available=10)
+        order2 = Order.objects.create(
+            user=self.owner,
+            orderId="ORD-MOUSE-02",
+            total=Decimal("40.00"),
+            paid_total=Decimal("40.00"),
+            items_snapshot=[{"product": prod2.pk, "store": self.store.pk, "title": prod2.title, "quantity": 1, "unit_price": "40.00", "line_total": "40.00"}],
+        )
+        r2 = Refund.objects.create(
+            email="bob@example.com",
+            order=order2,
+            reason="Broken sensor",
+            status=Refund.STATUS_APPROVED,
+            refund_type=Refund.REFUND_TYPE_ORIGINAL_PAYMENT,
+            refund_amount=Decimal("40.00"),
+            selected_items=[{"product": prod2.pk, "store": self.store.pk, "title": prod2.title, "quantity": 1, "unit_price": "40.00", "line_total": "40.00"}],
+        )
+
+        # Status filter
+        res_pending = self.client.get(f'/stores/{self.store.pk}/refunds/', {'status': 'pending'})
+        self.assertEqual(res_pending.data['count'], 1)
+        self.assertEqual(res_pending.data['results'][0]['id'], r1.pk)
+
+        res_approved = self.client.get(f'/stores/{self.store.pk}/refunds/', {'status': 'approved'})
+        self.assertEqual(res_approved.data['count'], 1)
+        self.assertEqual(res_approved.data['results'][0]['id'], r2.pk)
+
+        # Refund type filter
+        res_store_credit = self.client.get(f'/stores/{self.store.pk}/refunds/', {'refund_type': 'store_credit'})
+        self.assertEqual(res_store_credit.data['count'], 1)
+        self.assertEqual(res_store_credit.data['results'][0]['id'], r1.pk)
+
+        # Search filter by product title
+        res_search = self.client.get(f'/stores/{self.store.pk}/refunds/', {'search': 'Keyboard'})
+        self.assertEqual(res_search.data['count'], 1)
+        self.assertEqual(res_search.data['results'][0]['id'], r1.pk)
+
+        # Search filter by customer email
+        res_search_email = self.client.get(f'/stores/{self.store.pk}/refunds/', {'search': 'bob@example.com'})
+        self.assertEqual(res_search_email.data['count'], 1)
+        self.assertEqual(res_search_email.data['results'][0]['id'], r2.pk)
+
+        # Search filter by order reference
+        res_search_ord = self.client.get(f'/stores/{self.store.pk}/refunds/', {'search': 'ORD-MOUSE-02'})
+        self.assertEqual(res_search_ord.data['count'], 1)
+        self.assertEqual(res_search_ord.data['results'][0]['id'], r2.pk)
+
+    def test_merchant_refunds_unauthorized_access_rejected(self) -> None:
+        unauthorized_client = APIClient()
+        # Anonymous
+        res = unauthorized_client.get(f'/stores/{self.store.pk}/refunds/')
+        self.assertEqual(res.status_code, 401)
+
+        # Other non-staff user
+        rando = User.objects.create_user(email='stranger@example.com', password='password')
+        unauthorized_client.force_authenticate(rando)
+        res2 = unauthorized_client.get(f'/stores/{self.store.pk}/refunds/')
+        self.assertIn(res2.status_code, [403, 404])
+

@@ -56,10 +56,12 @@ class AdminReferralSerializer(serializers.ModelSerializer):
     marketer = AdminReferralMarketerSerializer(read_only=True)
     reward_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
     wallet_transaction_id = serializers.IntegerField(source='wallet_transaction.id', allow_null=True, read_only=True)
+    order_id = serializers.IntegerField(source='order.id', allow_null=True, read_only=True)
+    order_reference = serializers.CharField(source='order.orderId', allow_null=True, read_only=True)
 
     class Meta:
         model = Referral
-        fields = ['id', 'marketer', 'referred_user', 'status', 'reward_amount', 'wallet_transaction_id', 'created']
+        fields = ['id', 'marketer', 'referred_user', 'status', 'reward_amount', 'wallet_transaction_id', 'order_id', 'order_reference', 'created']
         read_only_fields = fields
 
 
@@ -133,7 +135,7 @@ class AffiliateOperatorView(APIView):
         query.is_valid(raise_exception=True)
         tab = query.validated_data.get('tab', 'affiliates')
         if tab == 'referrals':
-            referrals = Referral.objects.select_related('referred_user', 'marketer__user', 'wallet_transaction')
+            referrals = Referral.objects.select_related('referred_user', 'marketer__user', 'wallet_transaction', 'order')
             records = filter_records(
                 referrals,
                 request.query_params,
@@ -144,6 +146,7 @@ class AffiliateOperatorView(APIView):
                     'marketer__name',
                     'marketer__marketer_id',
                     'marketer__user__email',
+                    'order__orderId',
                 ),
                 fields={'status': 'status'},
                 amount_field='reward_amount',

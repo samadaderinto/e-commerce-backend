@@ -57,6 +57,7 @@ async function handler(
   const publicRead = request.method === 'GET' && (
     route === 'products' ||
     /^products\/\d+$/.test(route) ||
+    /^products\/\d+\/drop-live$/.test(route) ||
     /^stores\/\d+\/public$/.test(route) ||
     /^stores\/\d+\/public\/images\/(avatar|banner)$/.test(route) ||
     /^users\/\d+\/public\/images\/avatar$/.test(route)
@@ -98,6 +99,7 @@ async function handler(
       const payload = typeof body === 'string' ? body : body ? body.slice(0) : undefined;
       const isLongRunningStream =
         route === 'notifications/stream' ||
+        route.endsWith('/drop-live') ||
         route.includes('downloads') ||
         route.includes('digital-asset');
 
@@ -228,7 +230,7 @@ async function handler(
       return response;
     }
 
-    if (route === 'notifications/stream' && upstream.ok && upstream.body) {
+    if ((route === 'notifications/stream' || route.endsWith('/drop-live')) && upstream.ok && upstream.body) {
       const response = new NextResponse(upstream.body, {
         headers: {
           'Content-Type': 'text/event-stream',

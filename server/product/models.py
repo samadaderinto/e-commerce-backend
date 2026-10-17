@@ -115,6 +115,12 @@ class Product(DatesMixin):
         blank=True,
         help_text='Optional expiration timestamp for limited-time flash deals.',
     )
+    drop_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Release timestamp for scheduled product drops. Visible in catalog, but cart addition and purchasing are locked until this time.',
+    )
     PRODUCT_TYPE_STANDARD = 'standard'
     PRODUCT_TYPE_AFFILIATE_CLICKBANK = 'affiliate_clickbank'
     PRODUCT_TYPE_CHOICE = (
@@ -165,6 +171,13 @@ class Product(DatesMixin):
         from decimal import Decimal, ROUND_HALF_UP
         discounted = self.price * (100 - self.discount) / Decimal('100')
         return str(discounted.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP))
+
+    @property
+    def is_upcoming_drop(self) -> bool:
+        if not self.drop_at:
+            return False
+        from django.utils import timezone
+        return self.drop_at > timezone.now()
 
     def set_availability(self, quantity_bought: int) -> None:
         if not self.is_digital:

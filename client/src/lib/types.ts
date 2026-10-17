@@ -63,6 +63,8 @@ export type Product = LifecycleTimestamps & {
   sales?: number;
   label?: string;
   flash_sale_end?: string | null;
+  drop_at?: string | null;
+  is_upcoming_drop?: boolean;
   variants?: ProductVariant[];
   average_rating: string;
   rating_count: number;
@@ -290,6 +292,22 @@ export type StoreProfile = {
   phone2?: string;
 };
 
+export type StoreTeamRole = 'owner' | 'store_admin' | 'catalog_manager' | 'fulfillment_specialist';
+
+export type StoreTeamMember = {
+  id: number;
+  user_id: number;
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  avatar_url?: string;
+  role: 'store_admin' | 'catalog_manager' | 'fulfillment_specialist';
+  role_display: string;
+  invited_by_email?: string | null;
+  created: string;
+  updated: string;
+};
+
 export type Store = ActivityTimestamps & {
   assigned_staff?: number[];
   id: number;
@@ -298,6 +316,7 @@ export type Store = ActivityTimestamps & {
   status: 'pending' | 'active' | 'blocked';
   is_official?: boolean;
   seller_tier?: SellerTier;
+  user_role?: StoreTeamRole;
   verified_at?: string | null;
   blocked_reason?: string | null;
 };
@@ -355,6 +374,8 @@ export type MerchantProduct = LifecycleTimestamps & {
   tags: string[];
   sales: number;
   flash_sale_end?: string | null;
+  drop_at?: string | null;
+  is_upcoming_drop?: boolean;
   variants?: ProductVariant[];
   is_digital: boolean;
   digital_file_url: string;
@@ -623,6 +644,37 @@ export type AdminRefund = {
   created: string;
 };
 
+export type MerchantRefundItem = {
+  product: number | null;
+  title: string;
+  image?: string;
+  quantity: number;
+  unit_price: string;
+  line_total: string;
+  is_digital: boolean;
+  variant?: Record<string, string> | null;
+};
+
+export type MerchantRefund = {
+  id: number;
+  order: number | null;
+  order_reference: string;
+  customer_email: string;
+  customer_name: string;
+  status: 'pending' | 'approved' | 'declined' | 'failed';
+  refund_type: 'store_credit' | 'original_payment';
+  reason: string;
+  processing_reason?: string;
+  amount: string;
+  total_order_refund_amount: string;
+  items: MerchantRefundItem[];
+  processed_at?: string | null;
+  processed_by_email?: string | null;
+  created: string;
+  updated: string;
+};
+
+
 export type ProductModerationEvent = {
   id: number;
   action: 'block' | 'unblock' | 'restore';
@@ -718,6 +770,8 @@ export type AdminReferral = {
   status: 'pending' | 'rewarded';
   reward_amount: string;
   wallet_transaction_id?: number | null;
+  order_id?: number | null;
+  order_reference?: string | null;
   created: string;
   referred_user: {
     id: number;
@@ -755,4 +809,46 @@ export type AdminReferralPage = {
   count: number;
   results: AdminReferral[];
 };
+
+export type VisualSearchPaletteColor = {
+  hex: string;
+  name: string;
+  percentage: number;
+  rgb?: number[];
+};
+
+export type VisualSearchDetectedItem = {
+  id: string;
+  label: string;
+  category: string;
+  confidence: number;
+  box: number[];
+  dominant_colors: string[];
+  keywords?: string[];
+};
+
+export type VisualSearchResultItem = {
+  product: Product;
+  similarity_score: number;
+  match_reasons: string[];
+};
+
+export type VisualSearchResponse = {
+  palette: VisualSearchPaletteColor[];
+  detected_items: VisualSearchDetectedItem[];
+  selected_item_id: string | null;
+  selected_item?: VisualSearchDetectedItem | null;
+  results: VisualSearchResultItem[];
+  query_applied: string;
+};
+
+export type VisualSearchPresetLook = {
+  id: string;
+  title: string;
+  subtitle: string;
+  image_url: string;
+  style: string;
+  items: VisualSearchDetectedItem[];
+};
+
 

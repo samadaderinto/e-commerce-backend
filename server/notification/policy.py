@@ -97,7 +97,11 @@ def destination_for(recipient: Any, category: str, data: dict[str, Any]) -> str:
             if store is None:
                 store = Store.objects.filter(pk__in=store_ids, assigned_staff=recipient).order_by("pk").first()
             if store is not None:
+                if category == "refund" and data.get("refund_id"):
+                    return f"/merchant/refunds?store={store.pk}&refund={data['refund_id']}"
                 return f"/merchant/orders?store={store.pk}&order={data['order_id']}"
+        if category == "refund" and data.get("refund_id"):
+            return f"/merchant/refunds?refund={data['refund_id']}"
         return "/merchant/orders"
     if category == "payout":
         payout_id = data.get("payout_id")

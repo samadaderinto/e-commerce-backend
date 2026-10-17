@@ -8,14 +8,15 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, FormEvent, ReactNode } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Activity, Archive, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, CheckCheck, ChevronDown, DollarSign, Heart, Inbox, Landmark, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
+import { Activity, Archive, ArrowRight, ArrowUpRight, Bell, Camera, ChartNoAxesCombined, CheckCheck, ChevronDown, DollarSign, Heart, Inbox, Landmark, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
 import { api, categories } from '@/lib/api';
 import type { NotificationCounts, NotificationItem, Page, Store, User } from '@/lib/types';
-import { getFirebaseMessaging, pushDeviceChangeEvent, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
+import { fetchPushDeviceStatus, getFirebaseMessaging, pushDeviceChangeEvent, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
 import { useShop } from './providers';
 import { ThemeToggle } from './theme';
 import { business, contactLinks } from '@/lib/business';
 import { ResponsiveMediaImage } from './ui';
+import { VisualSearchModal } from './visual-search-modal';
 
 export function Shell({ children }: { children: ReactNode }) {
   const { user, cart, sessionLoading } = useShop();
@@ -23,6 +24,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const params = useSearchParams();
   const merchant = path.startsWith('/merchant');
   const [search, setSearch] = useState('');
+  const [visualSearchOpen, setVisualSearchOpen] = useState(false);
   const [menu, setMenu] = useState(false);
   const router = useRouter();
   function submit(event: FormEvent<HTMLFormElement>): void {
@@ -150,6 +152,15 @@ export function Shell({ children }: { children: ReactNode }) {
               onChange={(event) => setSearch(event.target.value)}
               placeholder="What are you looking for?"
             />
+            <button
+              type="button"
+              className="search-camera-btn"
+              onClick={() => setVisualSearchOpen(true)}
+              title="AI Visual Lens • Shop The Look"
+              aria-label="Search by image or shop the look"
+            >
+              <Camera size={18} />
+            </button>
             <button type="submit" aria-label="Search">
               <ArrowUpRight size={19} />
             </button>
@@ -342,6 +353,10 @@ export function Shell({ children }: { children: ReactNode }) {
           </footer>
         </>
       )}
+      <VisualSearchModal
+        isOpen={visualSearchOpen}
+        onClose={() => setVisualSearchOpen(false)}
+      />
     </>
   );
 }
@@ -425,21 +440,28 @@ function NotificationCenter() {
           setPushStatus('unsupported');
           return;
         }
+        const storedToken = localStorage.getItem('proace-fcm-token');
+        const storedOwner = localStorage.getItem('proace-fcm-owner');
         if (
           user?.id && Notification.permission === 'granted'
-          && localStorage.getItem('proace-fcm-token')
-          && localStorage.getItem('proace-fcm-owner') === String(user.id)
+          && storedToken
+          && storedOwner === String(user.id)
         ) {
-          await registerPushDevice(user.id);
-          if (!active) return;
+          try {
+            const dbStatus = await fetchPushDeviceStatus(storedToken);
+            if (dbStatus.registered) {
+              setPushStatus('enabled');
+            } else {
+              await registerPushDevice(user.id);
+              if (!active) return;
+              setPushStatus('enabled');
+            }
+          } catch {
+            setPushStatus('enabled');
+          }
+        } else {
+          setPushStatus(Notification.permission === 'denied' ? 'blocked' : 'ready');
         }
-        setPushStatus(Notification.permission === 'denied'
-          ? 'blocked'
-          : localStorage.getItem('proace-fcm-token')
-            && localStorage.getItem('proace-fcm-owner') === String(user?.id)
-            && Notification.permission === 'granted'
-            ? 'enabled'
-            : 'ready');
         const { onMessage } = await import('firebase/messaging');
         if (!active) return;
         unsubscribe = onMessage(messaging, payload => {
