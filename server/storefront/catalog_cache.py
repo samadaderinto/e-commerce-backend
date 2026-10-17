@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -23,13 +24,34 @@ WARM_URL_KEY = "storefront:catalog:warm:url"
 logger = logging.getLogger(__name__)
 
 
+def coalesced_snapshot(key: str | None) -> dict[str, Any] | None:
+    """Give one builder a short lease; followers wait at most 200 ms.
+
+    Leases expire instead of being deleted: a slow builder cannot accidentally
+    release a newer builder's lease. Every reused payload is still revalidated.
+    """
+    if key is None or cache.add(f'{key}:building', True, timeout=2):
+        return None
+    deadline = time.monotonic() + 0.2
+    previous: Any = None
+    while time.monotonic() < deadline:
+        payload = cache.get(key)
+        if isinstance(payload, dict) and payload != previous:
+            previous = payload
+            valid = read_snapshot(key)
+            if valid is not None:
+                return valid
+        time.sleep(0.01)
+    return None
+
+
 def invalidate_catalog_snapshot() -> None:
     def committed() -> None:
         cache.set(REVISION_KEY, uuid4().hex, timeout=None)
         if (
             getattr(settings, "PUBLIC_CATALOG_CACHE_SECONDS", 15) > 0
             and getattr(settings, "CATALOG_CACHE_WARM_ENABLED", True)
-            and cache.add(WARM_LOCK_KEY, True, timeout=10)
+            and cache.add(WARM_LOCK_KEY, True, timeout=120)
         ):
             from .tasks import warm_catalog_snapshot
 
@@ -75,7 +97,7 @@ def read_snapshot(key: str | None) -> dict[str, Any] | None:
     if key is None:
         return None
     data = cache.get(key)
-    if not isinstance(data, dict) or not data.get("results"):
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
         return None
     items = {item["id"]: item for item in data["results"]}
     # Permissions, price, stock, and variants are checked even on a cache hit.
@@ -107,10 +129,10 @@ def read_snapshot(key: str | None) -> dict[str, Any] | None:
 def write_snapshot(
     key: str | None, data: dict[str, Any], warm_url: str | None = None
 ) -> None:
-    if key is None or not data.get("results"):
+    if key is None or not isinstance(data.get("results"), list):
         return
     cache.set(
         key, data, timeout=getattr(settings, "PUBLIC_CATALOG_CACHE_SECONDS", 15)
     )
-    if warm_url:
+    if warm_url and data["results"]:
         cache.set(WARM_URL_KEY, warm_url, timeout=3600)

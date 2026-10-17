@@ -54,6 +54,14 @@ def main() -> None:
         "SECURE_SSL_REDIRECT": "true",
         "SECURE_HSTS_SECONDS": "31536000",
         "API_URL": os.environ.get("API_URL", "http://api:8000/api/v1").strip(),
+        "CONTAINER_NOTIFICATION_STREAM_URL": os.environ.get(
+            "CONTAINER_NOTIFICATION_STREAM_URL", "http://notification-stream:8000/api/v1"
+        ).strip(),
+        "STREAM_WORKERS": os.environ.get("STREAM_WORKERS", "1").strip(),
+        "STREAM_THREADS": os.environ.get("STREAM_THREADS", "32").strip(),
+        "ELASTICSEARCH_CONNECTIONS_PER_NODE": os.environ.get(
+            "ELASTICSEARCH_CONNECTIONS_PER_NODE", "32"
+        ).strip(),
         "DEFAULT_ADMIN_EMAIL": admin_email,
         "DEFAULT_ADMIN_PASSWORD": admin_password,
         "TECHNICAL_ADMIN_EMAIL": tech_admin_email,

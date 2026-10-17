@@ -7,7 +7,7 @@ from rest_framework.exceptions import ValidationError
 
 from core.models import Address, Refund, User, UserWallet
 from core.services import credit_user_wallet, get_or_create_user_wallet
-from payment.models import DeliveryInfo, Order
+from payment.models import DeliveryInfo, Order, OrderFulfillment
 from payment.services import (
     decline_order_refund,
     execute_order_status_transition,
@@ -283,6 +283,71 @@ class PaymentRefundAndTransitionServiceTests(TestCase):
         # Customer wallet is refunded!
         customer_wallet.refresh_from_db()
         self.assertEqual(customer_wallet.balance, initial_balance + Decimal("110.00"))
+
+    def test_order_status_override_cannot_cancel_after_physical_fulfillment(self):
+        order = self._create_order(payment_type="user_wallet", status="shipped")
+        order.shipped_at = timezone.now()
+        order.save(update_fields=["shipped_at"])
+        fulfillment = OrderFulfillment.objects.create(
+            order=order,
+            store=self.store,
+            status="shipped",
+            shipped_at=order.shipped_at,
+        )
+        initial_available = self.product.available
+        initial_balance = get_or_create_user_wallet(self.customer).balance
+
+        with self.assertRaises(ValidationError):
+            execute_order_status_transition(
+                order=order,
+                next_status="cancelled",
+                actor=self.staff,
+                reason="Attempted cancellation after dispatch.",
+            )
+
+        order.refresh_from_db()
+        fulfillment.refresh_from_db()
+        self.product.refresh_from_db()
+        self.assertEqual(order.status, "shipped")
+        self.assertEqual(fulfillment.status, "shipped")
+        self.assertEqual(self.product.available, initial_available)
+        self.assertEqual(get_or_create_user_wallet(self.customer).balance, initial_balance)
+
+    def test_order_status_override_cannot_cancel_instant_digital_order(self):
+        digital_product = Product.objects.create(
+            store=self.store,
+            title="Digital order",
+            price=Decimal("100.00"),
+            discount=0,
+            available=0,
+            is_digital=True,
+        )
+        order = self._create_order(payment_type="user_wallet")
+        order.items_snapshot = [
+            {
+                "product": digital_product.pk,
+                "store": self.store.pk,
+                "title": digital_product.title,
+                "quantity": 1,
+                "unit_price": "100.00",
+                "is_digital": True,
+            }
+        ]
+        order.status = "delivered"
+        order.save(update_fields=["items_snapshot", "status"])
+        initial_balance = get_or_create_user_wallet(self.customer).balance
+
+        with self.assertRaises(ValidationError):
+            execute_order_status_transition(
+                order=order,
+                next_status="cancelled",
+                actor=self.staff,
+                reason="Attempted cancellation after digital delivery.",
+            )
+
+        order.refresh_from_db()
+        self.assertEqual(order.status, "delivered")
+        self.assertEqual(get_or_create_user_wallet(self.customer).balance, initial_balance)
 
     def test_order_status_override_backward_clears_timestamps(self):
         order = self._create_order(status="shipped")

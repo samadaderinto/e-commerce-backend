@@ -8,10 +8,17 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { Bell, BellOff, CheckCircle2, CircleAlert, Moon, Sun } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useShop } from './providers';
 import { api } from '@/lib/api';
+import {
+  getFirebaseMessaging,
+  pushDeviceChangeEvent,
+  registerPushDevice,
+  unregisterPushDevice,
+} from '@/lib/firebase-messaging';
+import Link from 'next/link';
 import type { User } from '@/lib/types';
 
 type Theme = 'light' | 'dark' | 'system';
@@ -279,8 +286,137 @@ export function AppSettings() {
 
   return (
     <div className="app-settings-stack">
-      <AppearanceSettings />
-      {user && <EmailPreferencesSettings />}
+      <details className="settings-section" open>
+        <summary>Appearance <span>Theme and display preferences</span></summary>
+        <AppearanceSettings />
+      </details>
+      <details className="settings-section">
+        <summary>Browser alerts <span>Push notifications on this device</span></summary>
+        <BrowserAlertSettings />
+      </details>
+      {user && (
+        <details className="settings-section">
+          <summary>Email preferences <span>Recommendations and promotions</span></summary>
+          <EmailPreferencesSettings />
+        </details>
+      )}
     </div>
+  );
+}
+
+type BrowserAlertStatus = 'checking' | 'ready' | 'enabled' | 'blocked' | 'unsupported' | 'unavailable';
+
+export function BrowserAlertSettings() {
+  const { user, notify } = useShop();
+  const [status, setStatus] = useState<BrowserAlertStatus>('checking');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function checkSupport(): Promise<void> {
+      if (!user) {
+        setStatus('ready');
+        return;
+      }
+      if (!('Notification' in window)) {
+        setStatus('unsupported');
+        return;
+      }
+      if (Notification.permission === 'denied') {
+        setStatus('blocked');
+        return;
+      }
+
+      try {
+        const messaging = await getFirebaseMessaging();
+        if (!active) return;
+        if (!messaging) {
+          setStatus('unsupported');
+          return;
+        }
+        const enabled = Notification.permission === 'granted'
+          && localStorage.getItem('proace-fcm-token') !== null
+          && localStorage.getItem('proace-fcm-owner') === String(user.id);
+        setStatus(enabled ? 'enabled' : 'ready');
+      } catch {
+        if (active) setStatus('unavailable');
+      }
+    }
+
+    void checkSupport();
+    window.addEventListener('storage', checkSupport);
+    window.addEventListener(pushDeviceChangeEvent, checkSupport);
+    return () => {
+      active = false;
+      window.removeEventListener('storage', checkSupport);
+      window.removeEventListener(pushDeviceChangeEvent, checkSupport);
+    };
+  }, [user?.id]);
+
+  async function toggleAlerts(): Promise<void> {
+    if (!user) return;
+    setBusy(true);
+    try {
+      if (status === 'enabled') {
+        await unregisterPushDevice();
+        setStatus('ready');
+        notify('Browser alerts turned off for this device.');
+      } else {
+        await registerPushDevice(user.id);
+        setStatus('enabled');
+        notify('Browser alerts enabled for this device.');
+      }
+    } catch (error) {
+      notify((error as Error).message, true);
+      if ('Notification' in window && Notification.permission === 'denied') {
+        setStatus('blocked');
+      } else {
+        setStatus('unavailable');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const statusCopy: Record<BrowserAlertStatus, string> = {
+    checking: 'Checking whether this browser supports alerts…',
+    ready: 'Enable alerts to receive account notifications when ProAce is not open.',
+    enabled: 'Browser alerts are enabled for your account on this device.',
+    blocked: 'Browser permission is blocked. Allow notifications for this site in your browser settings, then reload.',
+    unsupported: 'This browser or device does not support push alerts for ProAce.',
+    unavailable: 'Could not check browser alert support. You can retry setup here.',
+  };
+  let StatusIcon = Bell;
+  if (status === 'enabled') StatusIcon = CheckCircle2;
+  if (status === 'blocked' || status === 'unsupported') StatusIcon = BellOff;
+  if (status === 'unavailable') StatusIcon = CircleAlert;
+
+  return (
+    <section className="appearance-settings browser-alert-settings" aria-label="Browser alert settings">
+      <h2>Browser notifications</h2>
+      {!user ? (
+        <>
+          <p>Sign in to connect this browser to your account’s notifications.</p>
+          <Link className="text-link" href="/login?next=/settings">Sign in to enable alerts</Link>
+        </>
+      ) : (
+        <>
+          <div className={`browser-alert-status ${status}`} role="status">
+            <StatusIcon size={18} aria-hidden="true" />
+            <p>{statusCopy[status]}</p>
+          </div>
+          <button
+            type="button"
+            className="button browser-alert-toggle"
+            disabled={busy || status === 'checking' || status === 'blocked' || status === 'unsupported'}
+            aria-pressed={status === 'enabled'}
+            onClick={() => void toggleAlerts()}
+          >
+            {busy ? 'Updating alerts…' : status === 'enabled' ? 'Turn off browser alerts' : 'Enable browser alerts'}
+          </button>
+        </>
+      )}
+    </section>
   );
 }

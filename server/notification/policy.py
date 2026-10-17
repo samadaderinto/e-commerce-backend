@@ -72,19 +72,81 @@ def store_ids_for(data: dict[str, Any], target: Model | None = None) -> set[int]
 def destination_for(recipient: Any, category: str, data: dict[str, Any]) -> str:
     if category in {"order", "refund"} and data.get("order_id"):
         if recipient.is_superuser or recipient.is_business_admin or recipient.is_staff:
-            return "/admin/refunds" if category == "refund" else "/admin/orders"
+            if category == "refund" and data.get("refund_id"):
+                return f"/admin/refunds?refund={data['refund_id']}"
+            return f"/admin/orders?order={data['order_id']}"
         from payment.models import Order
         if Order.objects.filter(pk=data["order_id"], user=recipient).exists():
             return f"/orders/{data['order_id']}"
+        from store.models import Store
+
+        raw_store_ids = list(data.get("store_ids") or [])
+        raw_store_ids.append(data.get("store_id"))
+        store_ids: set[int] = set()
+        for value in raw_store_ids:
+            try:
+                store_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if store_id > 0:
+                store_ids.add(store_id)
+        if store_ids:
+            store = Store.objects.filter(pk__in=store_ids, user=recipient).order_by("pk").first()
+            if store is None:
+                store = Store.objects.filter(pk__in=store_ids, assigned_staff=recipient).order_by("pk").first()
+            if store is not None:
+                return f"/merchant/orders?store={store.pk}&order={data['order_id']}"
         return "/merchant/orders"
     if category == "payout":
-        return "/admin/payouts" if recipient.is_staff or recipient.is_business_admin else "/merchant/payments"
+        payout_id = data.get("payout_id")
+        if recipient.is_staff or recipient.is_business_admin or recipient.is_superuser:
+            return f"/admin/payouts?payout={payout_id}" if payout_id else "/admin/payouts"
+        from store.models import Store, StorePayout
+        from django.db.models import Q
+
+        payout = StorePayout.objects.filter(
+            Q(store__user=recipient) | Q(wallet__user=recipient), pk=payout_id,
+        ).first() if payout_id else None
+        if payout:
+            store_id = payout.store_id or Store.objects.filter(user=recipient).order_by("pk").values_list("pk", flat=True).first()
+            store_query = f"&store={store_id}" if store_id else ""
+            return f"/merchant/payments?payout={payout.pk}{store_query}"
+        return "/merchant/payments"
     if category == "wallet":
         if (recipient.is_superuser or recipient.is_business_admin) and data.get("user_id"):
             return f"/admin/users/{data['user_id']}"
         return "/account/wallet"
     if category == "store":
-        return "/admin/stores" if recipient.is_staff or recipient.is_business_admin else "/merchant"
+        store_id = data.get("store_id")
+        if recipient.is_staff or recipient.is_business_admin or recipient.is_superuser:
+            return f"/admin/stores/{store_id}" if store_id else "/admin/stores"
+        return f"/merchant?store={store_id}" if store_id else "/merchant"
+    if category == "affiliates":
+        return "/admin/affiliates" if recipient.is_staff or recipient.is_business_admin or recipient.is_superuser else "/account/affiliates"
     if category == "account":
         return "/account/profile"
     return "/notifications"
+
+
+def notification_payload(notification: Any) -> dict[str, Any]:
+    """Resolve old saved inbox links through the current recipient routing policy."""
+    data = dict(notification.data or {})
+    target = notification.target
+    if target is not None:
+        model = target._meta.model_name
+        if model in {"order", "refund", "store", "storepayout"}:
+            key = "payout_id" if model == "storepayout" else f"{model}_id"
+            data.setdefault(key, target.pk)
+        if model == "refund":
+            data.setdefault("order_id", target.order_id)
+    if notification.category in {"order", "refund"} and not data.get("store_ids"):
+        data["store_ids"] = sorted(store_ids_for(data, target))
+    identified = (
+        notification.category in {"order", "refund"} and bool(data.get("order_id"))
+        or notification.category == "payout" and bool(data.get("payout_id"))
+        or notification.category == "store" and bool(data.get("store_id"))
+        or notification.category in {"wallet", "account", "affiliates"}
+    )
+    if identified or not data.get("url"):
+        data["url"] = destination_for(notification.recipient, notification.category, data)
+    return data

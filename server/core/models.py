@@ -16,14 +16,67 @@ from product.models import Product
 
 
 
+class BankAccount(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='bank_accounts',
+    )
+    bank_name = models.CharField(max_length=120)
+    account_holder_name = models.CharField(max_length=160)
+    account_number_encrypted = models.TextField()
+    routing_number_encrypted = models.TextField()
+    account_last4 = models.CharField(max_length=4)
+    routing_last4 = models.CharField(max_length=4)
+    is_default = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(is_default=True),
+                name='one_default_bank_account_per_user',
+            ),
+        ]
+
+
+class StripePayoutDestination(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='stripe_payout_destinations',
+    )
+    label = models.CharField(max_length=120)
+    account_id_encrypted = models.TextField()
+    account_id_last4 = models.CharField(max_length=4)
+    is_default = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(is_default=True),
+                name='one_default_stripe_destination_per_user',
+            ),
+        ]
+
+
 class UserManager(BaseUserManager):
-    def create_user(self, email=None, password=None, **extra_fields):
+    def create_user(
+        self,
+        email: str | None = None,
+        password: str | None = None,
+        **extra_fields: Any,
+    ) -> "User":
         if not email:
             raise ValueError('Email Address Is Needed')
         if not password:
             raise ValueError('Password Must Be Provided')
 
-        emailnew = self.normalize_email(email)
+        # The application treats email addresses case-insensitively for sign-in.
+        # Store a canonical value so invitations and direct account creation use
+        # the same identity as registration and social sign-in.
+        emailnew = self.normalize_email(email).strip().lower()
         user = self.model(email=emailnew, **extra_fields)
 
         user.set_password(password)
@@ -100,6 +153,24 @@ class User(AbstractUser):
     REQUIRED_FIELDS = ['first_name', 'last_name', 'gender', 'phone1']
 
     objects = UserManager()
+
+
+class SocialAccount(models.Model):
+    """Provider identity ownership survives disconnect to prevent silent relinking."""
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='social_accounts')
+    provider = models.CharField(max_length=10, choices=[('google', 'Google'), ('apple', 'Apple')])
+    subject = models.CharField(max_length=255)
+    email = models.EmailField()
+    connected = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['provider', 'subject'], name='social_provider_subject_unique'),
+            models.UniqueConstraint(fields=['user', 'provider'], condition=models.Q(connected=True), name='social_user_provider_unique'),
+        ]
 
 
 class Address(DatesMixin):

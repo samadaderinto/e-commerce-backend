@@ -2,12 +2,14 @@ from datetime import timedelta
 from decimal import Decimal
 from io import BytesIO
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from PIL import Image
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 from rest_framework.test import APIClient
 
 from cart.cache import get_cached_active_cart_data, get_cached_cart_data
@@ -16,8 +18,16 @@ from core.models import Address, User
 from payment.models import DeliveryInfo, Order
 from product.cache import get_cached_landing_products, get_cached_product_data, get_cached_store_product_data
 from product.models import Product, ProductImg, Specification
-from store.models import Schedule, Store, StoreAddress, StoreInfo
-from store.services import publish_due_products
+from store.models import (
+    MerchantWallet,
+    Schedule,
+    Store,
+    StoreAddress,
+    StoreEarningsLedger,
+    StoreInfo,
+    StorePayout,
+)
+from store.services import publish_due_products, request_merchant_payout
 from utils.cache import invalidate_revision
 
 
@@ -246,6 +256,7 @@ class MerchantTests(TestCase):
         self.assertTrue(store.username)
         self.assertTrue(StoreInfo.objects.filter(store=store, email='merchant@example.com').exists())
         self.assertTrue(StoreAddress.objects.filter(store=store, is_default=True).exists())
+        self.assertTrue(MerchantWallet.objects.filter(user=self.owner).exists())
 
     def test_invalid_onboarding_is_atomic(self):
         count = Store.objects.count()
@@ -502,6 +513,18 @@ class MerchantTests(TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.data['count'], 1)
         self.assertEqual(res.data['results'][0]['reference'], 'ORD-PICKUP-99')
+
+        # Notification deep links can request one store-scoped order directly.
+        res = self.client.get(self.url + 'orders/', {'order_id': order1.pk})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 1)
+        self.assertEqual(res.data['results'][0]['id'], order1.pk)
+
+        foreign_order = self.make_order(product=self.foreign_product)
+        res = self.client.get(self.url + 'orders/', {'order_id': foreign_order.pk})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.data['count'], 0)
+        self.assertEqual(self.client.get(self.url + 'orders/', {'order_id': 'invalid'}).status_code, 400)
 
         # Search by buyer_email
         res = self.client.get(self.url + 'orders/', {'search': 'pickup_buyer'})
@@ -898,6 +921,96 @@ class MerchantTests(TestCase):
         self.assertIn('/variants/', response.data['digital_file_url'])
         self.assertNotIn('image_url', response.data)
 
+    def test_variant_download_must_belong_to_the_current_product(self) -> None:
+        product = Product.objects.create(
+            store=self.store,
+            title='Scoped variant files',
+            description='A private digital download',
+            category='books',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/book.pdf',
+        )
+        other_product = Product.objects.create(
+            store=self.store,
+            title='Another private download',
+            description='Must stay private',
+            category='books',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/other.pdf',
+        )
+        url = f'{self.products_url}{product.pk}/'
+
+        response = self.client.patch(url, {
+            'variants': [{
+                'name': 'Premium',
+                'digital_file_type': 'document',
+                'digital_file_url': f'digital_products/{other_product.store_id}/{other_product.pk}/variants/private.pdf',
+            }],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400, response.data)
+        self.assertIn('variants', response.data['error']['details'])
+
+    def test_variant_download_accepts_current_product_upload_path(self) -> None:
+        product = Product.objects.create(
+            store=self.store,
+            title='Own variant file',
+            description='A private digital download',
+            category='books',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/book.pdf',
+        )
+        response = self.client.patch(f'{self.products_url}{product.pk}/', {
+            'variants': [{
+                'name': 'Premium',
+                'digital_file_type': 'document',
+                'digital_file_url': f'digital_products/{product.store_id}/{product.pk}/variants/premium.pdf',
+            }],
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn('/variants/premium.pdf', response.data['variants'][0]['digital_file_url'])
+
+    def test_failed_variant_original_storage_removes_generated_preview(self) -> None:
+        product = Product.objects.create(
+            store=self.store,
+            title='Preview rollback',
+            description='A digital image with protected preview',
+            category='design_assets',
+            price='12.00',
+            discount=0,
+            available=0,
+            is_digital=True,
+            digital_file_url='digital_products/1/1/original.png',
+            digital_preview_watermark=True,
+        )
+        image_bytes = BytesIO()
+        Image.new('RGB', (100, 100), color='purple').save(image_bytes, format='PNG')
+        image = SimpleUploadedFile('variant.png', image_bytes.getvalue(), content_type='image/png')
+
+        with (
+            patch('utils.digital_previews.create_digital_preview', return_value='images/digital-previews/1/1/preview.jpg'),
+            patch('django.core.files.storage.default_storage.save', side_effect=OSError('storage unavailable')),
+            patch('django.core.files.storage.default_storage.delete') as delete,
+        ):
+            response = self.client.post(
+                f'{self.products_url}{product.pk}/variant-file/',
+                {'file': image, 'asset_type': 'image'},
+                format='multipart',
+            )
+
+        self.assertEqual(response.status_code, 400, response.data)
+        delete.assert_called_once_with('images/digital-previews/1/1/preview.jpg')
+
     def test_variant_file_must_match_its_declared_media_type(self):
         product = Product.objects.create(
             store=self.store,
@@ -1146,6 +1259,21 @@ class MerchantTests(TestCase):
         final_wallet = self.client.get('/stores/wallet/').data
         self.assertEqual(final_wallet['total_withdrawn'], '300.00')
         self.assertEqual(final_wallet['available_balance'], '64.80')
+        payout_ledger = StoreEarningsLedger.objects.filter(
+            reference=payout_resp.data['reference'],
+            entry_type=StoreEarningsLedger.TYPE_PAYOUT,
+        )
+        self.assertEqual(payout_ledger.count(), 2)
+        self.assertEqual(
+            sum((-entry.net_amount for entry in payout_ledger), Decimal('0.00')),
+            Decimal('300.00'),
+        )
+        store_balances = {
+            summary['store_id']: summary['available_balance']
+            for summary in final_wallet['stores']
+        }
+        self.assertEqual(store_balances[self.store.pk], '0.00')
+        self.assertEqual(store_balances[second_store.pk], '64.80')
 
     def test_strict_separation_backoffice_vs_internal_store_access(self):
         admin = User.objects.create_superuser(email='admin.access@proace.test', password='Admin-password-123')
@@ -1201,6 +1329,17 @@ class MerchantTests(TestCase):
             status=Store.STATUS_ACTIVE,
             verified_at=timezone.now(),
         )
+        official_wallet = MerchantWallet.objects.create(user=admin)
+        StoreEarningsLedger.objects.create(
+            wallet=official_wallet,
+            store=official_store,
+            entry_type=StoreEarningsLedger.TYPE_SALE,
+            gross_amount=Decimal('100.00'),
+            fee_amount=Decimal('0.00'),
+            net_amount=Decimal('100.00'),
+            status=StoreEarningsLedger.STATUS_AVAILABLE,
+            available_at=timezone.now() - timedelta(days=1),
+        )
         admin_client = APIClient()
         admin_client.force_authenticate(admin)
 
@@ -1223,4 +1362,102 @@ class MerchantTests(TestCase):
         self.assertEqual(wallet_resp.status_code, 400)
         self.assertIn('Platform Treasury', wallet_resp.data['error']['message'])
 
+        # An unscoped combined request also cannot withdraw official-store proceeds.
+        unscoped = admin_client.post('/stores/wallet/payouts/', {
+            'amount': '50.00',
+            'payout_method': 'bank_transfer',
+            'account_details': {'bank_name': 'Chase', 'account_number': '123456789'},
+        }, format='json')
+        self.assertEqual(unscoped.status_code, 400)
+        self.assertIn('merchant-store funds', unscoped.data['error']['message'])
 
+    def test_store_scoped_payout_cannot_spend_another_stores_balance(self):
+        second_store = Store.objects.create(
+            user=self.owner,
+            name='Second merchant store',
+            status=Store.STATUS_ACTIVE,
+            verified_at=timezone.now(),
+        )
+        wallet = MerchantWallet.objects.create(
+            user=self.owner,
+            available_balance=Decimal('200.00'),
+        )
+        available_at = timezone.now() - timedelta(days=1)
+        for store in (self.store, second_store):
+            StoreEarningsLedger.objects.create(
+                wallet=wallet,
+                store=store,
+                entry_type=StoreEarningsLedger.TYPE_SALE,
+                gross_amount=Decimal('100.00'),
+                fee_amount=Decimal('0.00'),
+                net_amount=Decimal('100.00'),
+                status=StoreEarningsLedger.STATUS_AVAILABLE,
+                available_at=available_at,
+            )
+
+        with self.assertRaises(ValidationError):
+            request_merchant_payout(
+                user=self.owner,
+                amount=Decimal('150.00'),
+                payout_method=StorePayout.METHOD_BANK_TRANSFER,
+                account_details={},
+                store=self.store,
+            )
+
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.available_balance, Decimal('200.00'))
+        self.assertFalse(StorePayout.objects.filter(wallet=wallet).exists())
+
+
+
+    def test_unified_payout_filters_run_before_pagination(self) -> None:
+        from store.models import StorePayout
+        matching = StorePayout.objects.create(
+            store=self.store, amount=Decimal('50.00'), payout_method='bank_transfer',
+            reference='PO-AUDIT-MATCH', status=StorePayout.STATUS_PENDING,
+        )
+        StorePayout.objects.create(
+            store=self.store, amount=Decimal('5.00'), payout_method='bank_transfer',
+            reference='PO-AUDIT-SMALL', status=StorePayout.STATUS_COMPLETED,
+        )
+        response = self.client.get('/stores/wallet/payouts/', {
+            'search': 'AUDIT', 'status': 'pending', 'min_amount': '25.00',
+            'payout_method': 'bank_transfer',
+        })
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], matching.pk)
+        invalid = self.client.get('/stores/wallet/payouts/', {'min_amount': 'invalid'})
+        self.assertEqual(invalid.status_code, 400)
+
+    def test_bank_payout_requests_require_a_destination_before_reserving_funds(self) -> None:
+        from store.models import StorePayout
+        before = StorePayout.objects.count()
+        for path in ('/stores/wallet/payouts/', f'/stores/{self.store.pk}/payouts/'):
+            response = self.client.post(path, {'amount': '5.00', 'payout_method': 'bank_transfer'}, format='json')
+            self.assertEqual(response.status_code, 400, response.data)
+        self.assertEqual(StorePayout.objects.count(), before)
+
+    def test_dashboard_caps_withdrawals_by_unified_wallet_after_legacy_payouts(self) -> None:
+        from store.models import StorePayout
+        wallet = MerchantWallet.objects.create(user=self.owner)
+        StoreEarningsLedger.objects.create(wallet=wallet, store=self.store, net_amount=Decimal('100.00'), status=StoreEarningsLedger.STATUS_AVAILABLE)
+        StorePayout.objects.create(wallet=wallet, amount=Decimal('120.00'), status=StorePayout.STATUS_COMPLETED, reference='LEGACY-UNSCOPED')
+        response = self.client.get(f'/stores/{self.store.pk}/dashboard/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['wallet']['available_balance'], '100.00')
+        self.assertEqual(response.data['wallet']['withdrawable_balance'], '0.00')
+
+    def test_repeat_financial_seeding_preserves_existing_payout_debits(self) -> None:
+        from io import StringIO
+        from core.management.commands.populate_fake_data import Command
+        from store.models import StorePayout
+        wallet = MerchantWallet.objects.create(user=self.owner)
+        StoreEarningsLedger.objects.create(wallet=wallet, store=self.store, net_amount=Decimal('10000.00'), status=StoreEarningsLedger.STATUS_AVAILABLE)
+        command = Command(stdout=StringIO())
+        command.seed_financial_ledgers([], [])
+        command.seed_financial_ledgers([], [])
+        wallet.refresh_from_db()
+        self.assertEqual(StorePayout.objects.filter(wallet=wallet).count(), 1)
+        self.assertEqual(wallet.total_withdrawn, Decimal('6000.00'))
+        self.assertEqual(wallet.available_balance, Decimal('4000.00'))

@@ -28,6 +28,7 @@ import { Empty, ErrorState, Loading, ProductImage, Quantity } from "./ui";
 
 export function CartPage() {
   const { cart, cartLoading, cartError, setQuantity, notify } = useShop();
+  const hasPhysicalItems = cart.items.some((item) => !item.product.is_digital);
   const [busy, setBusy] = useState<number | null>(null);
   async function update(product: Product, quantity: number) {
     setBusy(product.id);
@@ -150,11 +151,15 @@ export function CartPage() {
             <div className="summary-line">
               <span>Delivery</span>
               <strong>
-                {Number(cart.shipping) ? money(cart.shipping) : "On us"}
+                {cart.shipping === null
+                  ? "Calculated at checkout"
+                  : Number(cart.shipping)
+                  ? money(cart.shipping)
+                  : "Free"}
               </strong>
             </div>
             <div className="summary-total">
-              <span>Total</span>
+              <span>{hasPhysicalItems ? "Items total" : "Total"}</span>
               <strong>{money(cart.total)}</strong>
             </div>
             <Link className="button" href="/checkout">
@@ -572,12 +577,36 @@ export function CheckoutPage() {
 
   useEffect(() => {
     if (search.get("wallet_cancelled") === "1" && user) {
-      void api("checkout/wallet-cancel", "POST", {})
-        .then(() => {
-          notify("Checkout cancelled. Reserved store credit returned to your wallet.");
+      const checkoutKey = search.get("checkout_key");
+      if (!checkoutKey) {
+        setError("The checkout reference is missing. Your wallet reservation will remain held until payment status is verified.");
+        return;
+      }
+      void api<{
+        detail: string;
+        released: boolean;
+        completed?: boolean;
+        session_id?: string;
+      }>("checkout/wallet-cancel", "POST", { checkout_key: checkoutKey })
+        .then(async (result) => {
+          if (result.completed && result.session_id) {
+            const order = await api<Order>("checkout/wallet-confirm", "POST", {
+              session_id: result.session_id,
+            });
+            router.replace(`/orders/${order.id}?placed=true`);
+            return;
+          }
+          if (result.released) {
+            notify("Checkout cancelled. Reserved store credit returned to your wallet.");
+          } else {
+            notify(result.detail, true);
+          }
           router.replace("/checkout");
         })
-        .catch(() => {});
+        .catch((reason: unknown) => {
+          notify(reason instanceof Error ? reason.message : "Unable to verify checkout cancellation.", true);
+          router.replace("/checkout");
+        });
     }
   }, [router, search, user, notify]);
 
@@ -1080,6 +1109,7 @@ export function CheckoutPage() {
               {modalAdding ? (
                 <div style={{ marginTop: "14px" }}>
                   <AddressForm
+                    embedded
                     onSaved={(address) => {
                       client.invalidateQueries({ queryKey: ["addresses"] });
                       setSelected(address.id);
@@ -1093,6 +1123,7 @@ export function CheckoutPage() {
               ) : modalEditing ? (
                 <div style={{ marginTop: "14px" }}>
                   <AddressForm
+                    embedded
                     initialData={modalEditing}
                     onSaved={(address) => {
                       client.invalidateQueries({ queryKey: ["addresses"] });

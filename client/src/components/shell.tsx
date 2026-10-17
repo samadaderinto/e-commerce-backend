@@ -1,5 +1,7 @@
 'use client';
 
+import { notificationAction } from '@/lib/notification-action';
+
 import { presentNotificationOnce } from '@/lib/notification-presentation';
 
 import Link from 'next/link';
@@ -9,11 +11,11 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { Activity, Archive, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, CheckCheck, ChevronDown, DollarSign, Heart, Inbox, Landmark, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
 import { api, categories } from '@/lib/api';
 import type { NotificationCounts, NotificationItem, Page, Store, User } from '@/lib/types';
-import { getFirebaseMessaging, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
+import { getFirebaseMessaging, pushDeviceChangeEvent, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
 import { useShop } from './providers';
 import { ThemeToggle } from './theme';
-import { onMessage } from 'firebase/messaging';
 import { business, contactLinks } from '@/lib/business';
+import { ResponsiveMediaImage } from './ui';
 
 export function Shell({ children }: { children: ReactNode }) {
   const { user, cart, sessionLoading } = useShop();
@@ -347,7 +349,9 @@ export function Shell({ children }: { children: ReactNode }) {
 function NotificationCenter() {
   const { user, notify } = useShop();
   const [open, setOpen] = useState(false);
-  const [pushStatus, setPushStatus] = useState<'checking' | 'ready' | 'enabled' | 'blocked' | 'unsupported'>('checking');
+  const [pushStatus, setPushStatus] = useState<
+    'checking' | 'ready' | 'enabled' | 'blocked' | 'unsupported' | 'unavailable'
+  >('checking');
   const [pushBusy, setPushBusy] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
   const notifyRef = useRef(notify);
@@ -383,6 +387,33 @@ function NotificationCenter() {
     notifyRef.current = notify;
   }, [notify]);
   useEffect(() => {
+    function syncPushStatus(): void {
+      if (!('Notification' in window)) {
+        setPushStatus('unsupported');
+        return;
+      }
+      if (Notification.permission === 'denied') {
+        setPushStatus('blocked');
+        return;
+      }
+      try {
+        const enabled = Notification.permission === 'granted'
+          && localStorage.getItem('proace-fcm-token') !== null
+          && localStorage.getItem('proace-fcm-owner') === String(user?.id);
+        setPushStatus(enabled ? 'enabled' : 'ready');
+      } catch {
+        setPushStatus('ready');
+      }
+    }
+
+    window.addEventListener(pushDeviceChangeEvent, syncPushStatus);
+    window.addEventListener('storage', syncPushStatus);
+    return () => {
+      window.removeEventListener(pushDeviceChangeEvent, syncPushStatus);
+      window.removeEventListener('storage', syncPushStatus);
+    };
+  }, [user?.id]);
+  useEffect(() => {
     let active = true;
     let unsubscribe: (() => void) | undefined;
 
@@ -409,6 +440,8 @@ function NotificationCenter() {
             && Notification.permission === 'granted'
             ? 'enabled'
             : 'ready');
+        const { onMessage } = await import('firebase/messaging');
+        if (!active) return;
         unsubscribe = onMessage(messaging, payload => {
           if (payload.data?.recipient_id !== String(client.getQueryData<User>(['me'])?.id)) return;
           void refresh();
@@ -427,7 +460,7 @@ function NotificationCenter() {
           setPushStatus(
             'Notification' in window && Notification.permission === 'denied'
               ? 'blocked'
-              : 'ready',
+              : 'unavailable',
           );
           notifyRef.current((error as Error).message, true);
         }
@@ -511,17 +544,38 @@ function NotificationCenter() {
               aria-pressed={pushStatus === 'enabled'}
               onClick={() => void togglePush()}
             >
-              {pushBusy
-                ? 'Updating browser alerts…'
-                : pushStatus === 'enabled'
-                  ? 'Turn off browser alerts'
-                  : 'Enable browser alerts'}
+              <Bell size={16} aria-hidden="true" />
+              <span className="notification-push-copy">
+                <strong>Browser alerts</strong>
+                <small>
+                  {pushBusy
+                    ? 'Updating this device…'
+                    : pushStatus === 'enabled'
+                      ? 'Enabled on this device'
+                      : 'Get alerts when you are away'}
+                </small>
+              </span>
+              <span className="notification-push-action">
+                {pushBusy ? 'Saving…' : pushStatus === 'enabled' ? 'Turn off' : 'Enable'}
+              </span>
             </button>
           )}
 
           {pushStatus === 'blocked' && (
-            <p className="notification-push-status">
+            <p className="notification-push-status" role="status">
               Browser alerts are blocked in your browser settings.
+            </p>
+          )}
+
+          {pushStatus === 'unsupported' && (
+            <p className="notification-push-status" role="status">
+              Browser alerts are unavailable on this device.
+            </p>
+          )}
+
+          {pushStatus === 'unavailable' && (
+            <p className="notification-push-status" role="status">
+              Browser alerts could not be checked. Open App Settings to retry setup.
             </p>
           )}
 
@@ -558,6 +612,15 @@ function NotificationCenter() {
                       )}
                       <small>{timeAgo(item.timestamp)}</small>
                     </div>
+                    {notificationAction(item) && (
+                      <Link
+                        className="text-link notification-order-link"
+                        href={notificationAction(item)!.href}
+                        onClick={() => setOpen(false)}
+                      >
+                        {notificationAction(item)!.label} <ArrowRight size={13} />
+                      </Link>
+                    )}
                   </div>
                   <div className="notification-actions">
                     <button
@@ -722,10 +785,13 @@ function AccountMenu() {
         onClick={() => setOpen(value => !value)}
       >
         {user.avatar_url ? (
-          <img
+          <ResponsiveMediaImage
             src={user.avatar_url}
             alt={user.first_name}
             style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }}
+            sizes="22px"
+            width={44}
+            height={44}
           />
         ) : (
           <UserRound size={21} />
@@ -739,10 +805,13 @@ function AccountMenu() {
           <div className="account-dropdown-header">
             <div className="account-dropdown-avatar">
               {user.avatar_url ? (
-                <img
+                <ResponsiveMediaImage
                   src={user.avatar_url}
                   alt={user.first_name}
                   style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }}
+                  sizes="48px"
+                  width={96}
+                  height={96}
                 />
               ) : (
                 user.first_name?.[0]?.toUpperCase() || <UserRound size={18} />

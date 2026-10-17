@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import random
 import sys
+from argparse import ArgumentParser
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
@@ -223,6 +224,8 @@ STORE_BLUEPRINTS = [
         "website": "https://silkpure.local",
     },
 ]
+
+MINIMUM_SEEDED_USERS = 11
 
 PRODUCT_TEMPLATES = [
     # electronics
@@ -458,7 +461,7 @@ BLOG_POST_BLUEPRINTS = [
 class Command(BaseCommand):
     help = "Populate the database with a high-volume, realistic commerce dataset for local/dev environments."
 
-    def add_arguments(self, parser):
+    def add_arguments(self, parser: ArgumentParser) -> None:
         parser.add_argument(
             "--scale",
             choices=["small", "medium", "large", "huge"],
@@ -473,7 +476,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--password",
             default=None,
-            help="Default password for all seeded user accounts (defaults to DEFAULT_ADMIN_PASSWORD from env, or Password123!).",
+            help="Default password for seeded user accounts (defaults to configured development password or ProaceDemo2026!).",
         )
         parser.add_argument(
             "--clear",
@@ -486,13 +489,9 @@ class Command(BaseCommand):
             default=42,
             help="Random seed for reproducible generation (default: 42).",
         )
-        parser.add_argument(
-            "--force",
-            action="store_true",
-            help="Allow running even if DEBUG is false.",
-        )
 
-    def handle(self, *args, **options):
+    @transaction.atomic
+    def handle(self, *args: Any, **options: Any) -> None:
         from django.db import connection
 
         if not settings.DEBUG:
@@ -501,11 +500,10 @@ class Command(BaseCommand):
                     "SAFETY BLOCK: Flushing data with --clear is permanently forbidden when DEBUG=False "
                     "to prevent accidental data loss in production."
                 )
-            if not options.get("force"):
-                raise CommandError(
-                    "SAFETY BLOCK: Fake data population is disabled when DEBUG=False (production environment). "
-                    "This command is strictly for local and dev testing. Ensure DJANGO_DEBUG=true in your environment."
-                )
+            raise CommandError(
+                "SAFETY BLOCK: Fake data population is disabled when DEBUG=False. "
+                "This command is strictly for local and development environments."
+            )
 
         random.seed(options.get("seed", 42))
         env_admin_password = os.environ.get("DEFAULT_ADMIN_PASSWORD") or os.environ.get("TECHNICAL_ADMIN_PASSWORD")
@@ -521,13 +519,17 @@ class Command(BaseCommand):
             "huge": {"users": 500, "stores": 50, "products": 1200, "orders": 4000, "reviews": 3200},
         }[scale]
 
-        num_users = options["users"] or scale_config["users"]
-        num_stores = options["stores"] or scale_config["stores"]
-        num_products = options["products"] or scale_config["products"]
-        num_orders = options["orders"] or scale_config["orders"]
-        num_reviews = options["reviews"] or scale_config["reviews"]
+        num_users = options["users"] if options["users"] is not None else scale_config["users"]
+        num_stores = options["stores"] if options["stores"] is not None else scale_config["stores"]
+        num_products = options["products"] if options["products"] is not None else scale_config["products"]
+        num_orders = options["orders"] if options["orders"] is not None else scale_config["orders"]
+        num_reviews = options["reviews"] if options["reviews"] is not None else scale_config["reviews"]
         if min(num_users, num_stores, num_products, num_orders, num_reviews) < 1:
             raise CommandError("All volume overrides must be positive.")
+        if num_users < MINIMUM_SEEDED_USERS:
+            raise CommandError(
+                f"At least {MINIMUM_SEEDED_USERS} users are required for the guaranteed seed accounts."
+            )
 
         db_name = connection.settings_dict.get("NAME", "unknown")
         db_engine = connection.settings_dict.get("ENGINE", "unknown").split(".")[-1]
@@ -540,7 +542,7 @@ class Command(BaseCommand):
         self.stdout.write(
             f"Targets:     {num_users} users | {num_stores} stores | {num_products} products | {num_orders} orders | {num_reviews} reviews"
         )
-        self.stdout.write(f"Common Dev Password: {password}\n")
+        self.stdout.write("Seeded account passwords use the configured development password.\n")
 
         if options.get("clear"):
             self.clear_existing_data()
@@ -597,23 +599,25 @@ class Command(BaseCommand):
         # after tags, reviews and all scenario products have been written.
         from product.search import enabled
         if enabled():
-            try:
-                call_command("rebuild_product_index", stdout=self.stdout, stderr=self.stderr)
-            except Exception as error:
-                self.stderr.write(self.style.WARNING(
-                    f"Search indexing unavailable ({error}). Run rebuild_product_index after search recovers."))
-        self.print_summary(users, stores, products, orders, num_reviews, password)
+            transaction.on_commit(self.rebuild_product_index)
+        self.print_summary(users, stores, products, orders, num_reviews)
 
-    def clear_existing_data(self):
+    def rebuild_product_index(self) -> None:
+        try:
+            call_command("rebuild_product_index", stdout=self.stdout, stderr=self.stderr)
+        except Exception as error:
+            self.stderr.write(self.style.WARNING(
+                f"Search indexing unavailable ({error}). Run rebuild_product_index after search recovers."))
+
+    def clear_existing_data(self) -> None:
         self.stdout.write(self.style.WARNING("Clearing previously seeded test records..."))
         from django.db.models.signals import post_delete, post_save
+        disconnected = False
         try:
             from product.signals import sync_product_to_search, remove_product_from_search
             post_save.disconnect(sync_product_to_search, sender=Product)
             post_delete.disconnect(remove_product_from_search, sender=Product)
-        except Exception:
-            pass
-        with transaction.atomic():
+            disconnected = True
             Notification.objects.all().delete()
             BlogComment.objects.all().delete()
             BlogContent.objects.all().delete()
@@ -648,6 +652,10 @@ class Command(BaseCommand):
             Address.objects.all().delete()
             # Retain non-local users and existing technical super admin
             User.objects.filter(email__endswith="@proace.local").exclude(is_superuser=True).delete()
+        finally:
+            if disconnected:
+                post_save.connect(sync_product_to_search, sender=Product)
+                post_delete.connect(remove_product_from_search, sender=Product)
         self.stdout.write(self.style.SUCCESS("Clean slate achieved.\n"))
 
     def seed_users(self, count: int, hashed_password: str) -> List[User]:
@@ -673,6 +681,11 @@ class Command(BaseCommand):
         for idx, (email, first, last, gender, is_staff, is_superuser, is_business_admin) in enumerate(key_accounts):
             if email in existing_users:
                 user = existing_users[email]
+                if is_superuser and not user.is_superuser:
+                    raise CommandError(
+                        "admin@proace.local already belongs to a non-superuser account. "
+                        "Verify that account manually before seeding; it was not promoted."
+                    )
                 user.is_staff = is_staff
                 user.is_superuser = is_superuser
                 user.is_business_admin = is_business_admin
@@ -882,17 +895,27 @@ class Command(BaseCommand):
                 )
 
             # Ensure MerchantWallet exists
-            MerchantWallet.objects.get_or_create(
+            wallet, _ = MerchantWallet.objects.get_or_create(
                 user=store.user,
                 defaults={
-                    "stripe_account_id": f"acct_mock_{store.user.pk:05d}",
-                    "stripe_details_submitted": True,
-                    "stripe_payouts_enabled": True,
+                    "stripe_account_id": "",
+                    "stripe_details_submitted": False,
+                    "stripe_payouts_enabled": False,
                     "available_balance": Decimal("0.00"),
                     "pending_balance": Decimal("0.00"),
                     "total_withdrawn": Decimal("0.00"),
                 },
             )
+            if wallet.stripe_account_id.startswith("acct_mock_"):
+                wallet.stripe_account_id = ""
+                wallet.stripe_details_submitted = False
+                wallet.stripe_payouts_enabled = False
+                wallet.save(update_fields=[
+                    "stripe_account_id",
+                    "stripe_details_submitted",
+                    "stripe_payouts_enabled",
+                    "updated",
+                ])
 
         if store_infos_to_create:
             StoreInfo.objects.bulk_create(store_infos_to_create)
@@ -972,6 +995,7 @@ class Command(BaseCommand):
                 # Affiliate products represent platform-curated recommendations mapped under the official catalog store
                 official_store = next((s for s in stores if s.is_official), stores[0])
                 aff_nick = getattr(settings, "CLICKBANK_AFFILIATE_NICKNAME", "proace") or "proace"
+                vendor_nick = "proace-demo-vendor"
                 affiliate_hoplink = f"https://hop.clickbank.net/?affiliate={aff_nick}&vendor={vendor_nick}"
                 affiliate_vendor_nickname = vendor_nick
                 affiliate_button_text = random.choice([
@@ -1344,20 +1368,18 @@ class Command(BaseCommand):
 
         # Update MerchantWallet balances and generate realistic payouts
         for wallet in MerchantWallet.objects.all():
-            available = StoreEarningsLedger.objects.filter(
+            from store.services import calculate_merchant_financials
+            financials = calculate_merchant_financials(wallet.user)
+            available = Decimal(financials['available_balance'])
+            pending = Decimal(financials['pending_balance'])
+            withdrawn = Decimal(financials['total_withdrawn'])
+            has_demo_payout = StorePayout.objects.filter(
                 wallet=wallet,
-                status=StoreEarningsLedger.STATUS_AVAILABLE,
-            ).aggregate(total=models.Sum("net_amount"))["total"] or Decimal("0.00")
-
-            pending = StoreEarningsLedger.objects.filter(
-                wallet=wallet,
-                status=StoreEarningsLedger.STATUS_PENDING,
-            ).aggregate(total=models.Sum("net_amount"))["total"] or Decimal("0.00")
-
-            withdrawn = Decimal("0.00")
-            if available > Decimal("500.00"):
+                notes="Automated weekly earnings clearing payout via Stripe Connect.",
+            ).exists()
+            if available > Decimal("500.00") and not has_demo_payout:
                 payout_amt = (available * Decimal("0.60")).quantize(Decimal(".01"))
-                withdrawn = payout_amt
+                withdrawn += payout_amt
                 available -= payout_amt
 
                 payouts_to_create.append(
@@ -1668,8 +1690,7 @@ class Command(BaseCommand):
         products: List[Product],
         orders: List[Order],
         reviews_count: int,
-        password: str,
-    ):
+    ) -> None:
         self.stdout.write(self.style.SUCCESS("\n" + "=" * 65))
         self.stdout.write(self.style.SUCCESS("  DATABASE POPULATION COMPLETED SUCCESSFULLY"))
         self.stdout.write(self.style.SUCCESS("=" * 65))
@@ -1682,7 +1703,7 @@ class Command(BaseCommand):
         self.stdout.write(f"Total Ledgers:             {StoreEarningsLedger.objects.count()}")
         self.stdout.write(f"Total Payouts:             {StorePayout.objects.count()}")
         self.stdout.write("-" * 65)
-        self.stdout.write(self.style.MIGRATE_LABEL("Ready-to-Use Development Accounts (Password: ") + self.style.SUCCESS(password) + self.style.MIGRATE_LABEL("):"))
+        self.stdout.write(self.style.MIGRATE_LABEL("Ready-to-Use Development Accounts:"))
         self.stdout.write("  - Super Admin:     admin@proace.local           (Full Staff & Superuser rights)")
         self.stdout.write("  - Business Admin:  business-admin@proace.local  (Staff & Business Administrator rights)")
         self.stdout.write("  - Staff Member:    staff@proace.local           (Staff moderation & store audit rights)")
@@ -1690,5 +1711,6 @@ class Command(BaseCommand):
         self.stdout.write("  - Active Seller:   seller@proace.local          (Owns Apex Athletics (single store))")
         self.stdout.write("  - Active Shopper:  shopper@proace.local         (Has cart items, orders, addresses)")
         self.stdout.write("  - Regular Buyer:   buyer@proace.local           (Customer account)")
+        self.stdout.write("  Use the password supplied to --password or configured in the environment.")
         self.stdout.write("-" * 65)
         self.stdout.write(self.style.SUCCESS("You can now start local/dev servers and log into the client or API!\n"))

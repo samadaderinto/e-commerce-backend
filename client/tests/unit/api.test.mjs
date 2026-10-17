@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ApiError, api, categories, money } from '../../src/lib/api.ts';
+import { ApiError, api, cancelPendingApiRequests, categories, money } from '../../src/lib/api.ts';
 
 test('formats USD amounts with cents when needed', () => {
   assert.match(money(1500), /1,500/);
@@ -55,6 +55,27 @@ test('sends JSON through the same-origin API proxy', async t => {
   assert.equal(captured.options.credentials, 'same-origin');
   assert.equal(captured.options.headers['Content-Type'], 'application/json');
   assert.equal(captured.options.body, JSON.stringify({ product: 7, quantity: 2 }));
+});
+
+test('logout can abort pending API requests that might refresh authentication cookies', async t => {
+  let requestSignal;
+  let markStarted;
+  const started = new Promise(resolve => { markStarted = resolve; });
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    requestSignal = options.signal;
+    markStarted();
+    return new Promise((_resolve, reject) => {
+      requestSignal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+  });
+
+  const pending = api('me').catch(error => error);
+  await started;
+  cancelPendingApiRequests();
+  const error = await pending;
+  assert.equal(requestSignal.aborted, true);
+  assert.ok(error instanceof ApiError);
+  assert.equal(error.status, 503);
 });
 
 test('does not set multipart content type for file uploads', async t => {

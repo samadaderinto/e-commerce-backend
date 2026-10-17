@@ -239,3 +239,67 @@ def test_social_auth_api_endpoint() -> None:
     )
     assert resp_staff.status_code == 403
     assert 'Administrative and staff accounts cannot sign in via social providers' in str(resp_staff.data)
+
+
+@override_settings(GOOGLE_CLIENT_ID='profile-client')
+def test_verified_google_token_preserves_picture_when_tokeninfo_omits_it() -> None:
+    from unittest.mock import Mock
+    picture = 'https://lh3.googleusercontent.com/profile-photo'
+    credential = jwt.encode({'picture': picture}, 'test-only-secret-at-least-32-characters', algorithm='HS256')
+    response = Mock(status_code=200)
+    response.json.return_value = {
+        'email': 'photo@example.com', 'email_verified': 'true',
+        'aud': 'profile-client', 'sub': 'verified-subject',
+    }
+    with patch('core.social_auth.requests.get', return_value=response):
+        verified = verify_google_credential(credential)
+    assert verified['picture'] == picture
+
+
+@pytest.mark.django_db
+def test_google_signup_imports_avatar_and_existing_login_does_not_repeat_referral(tmp_path) -> None:
+    from io import BytesIO
+    from unittest.mock import Mock
+    from PIL import Image
+    from core.social_avatar import import_google_avatar
+
+    image = BytesIO()
+    Image.new('RGB', (40, 40), color='red').save(image, format='PNG')
+    response = Mock(status_code=200)
+    response.iter_content.return_value = [image.getvalue()]
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    verified = {
+        'email': 'photo-signup@example.com', 'first_name': 'Photo',
+        'last_name': 'Customer', 'sub': 'photo-subject',
+        'picture': 'https://lh3.googleusercontent.com/photo',
+    }
+    with override_settings(
+        MEDIA_ROOT=str(tmp_path),
+        STORAGES={'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'}},
+    ), patch('core.social_auth.verify_google_credential', return_value=verified), patch(
+        'core.social_avatar.requests.get', return_value=response
+    ), patch('core.social_auth.reward_referral') as reward:
+        first = authenticate_social_user('google', {'credential': 'verified', 'referral_code': 'INVITE'})
+        account = User.objects.get(email=verified['email'])
+        assert account.avatar_image.name.startswith('user-profiles/avatars/google-')
+        assert account.avatar_image.storage.exists(account.avatar_image.name)
+        assert first['user']['avatar_url'].startswith('/api/users/')
+        authenticate_social_user('google', {'credential': 'verified', 'referral_code': 'OTHER'})
+        reward.assert_called_once_with('INVITE', account)
+        with patch('core.social_avatar.requests.get') as download:
+            import_google_avatar(account, verified['picture'])
+            download.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_social_customer_can_complete_phone_with_validation() -> None:
+    account = User.objects.create(email='phone-completion@example.com', is_active=True)
+    client = APIClient()
+    client.force_authenticate(account)
+    invalid = client.patch('/api/v1/me/', {'phone1': 'not-a-phone'}, format='json')
+    assert invalid.status_code == 400
+    response = client.patch('/api/v1/me/', {'phone1': '+12025550101'}, format='json')
+    assert response.status_code == 200
+    account.refresh_from_db()
+    assert str(account.phone1) == '+12025550101'

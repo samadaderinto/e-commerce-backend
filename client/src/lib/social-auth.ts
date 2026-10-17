@@ -132,7 +132,7 @@ export async function renderGoogleSignInButton(
     text,
     shape: 'rectangular',
     logo_alignment: 'left',
-    width: Math.max(200, Math.round(target.getBoundingClientRect().width)),
+    width: Math.min(400, Math.max(120, Math.round(target.getBoundingClientRect().width))),
   });
 }
 

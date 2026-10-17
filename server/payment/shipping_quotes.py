@@ -98,6 +98,8 @@ def cart_rates(carrier, cart, address):
     from django.conf import settings
     if subtotal >= getattr(settings, 'FREE_SHIPPING_THRESHOLD', Decimal('100000')):
         rates[0]['amount'] = '0.00'
+        for shipment in rates[0].get('shipments', []):
+            shipment['amount'] = '0.00'
     for i, rate in enumerate(rates):
         rate['is_default'] = i == 0
     return rates

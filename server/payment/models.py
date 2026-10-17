@@ -1,5 +1,6 @@
 from decimal import Decimal
 from django.db import models
+from django.contrib.postgres.indexes import GinIndex
 from typing import Any
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -230,6 +231,7 @@ class Order(DatesMixin):
     tracking_events = models.JSONField(default=list, blank=True)
 
     class Meta:
+        indexes = [GinIndex(fields=["items_snapshot"], name="order_items_store_gin")]
         constraints = [
             models.CheckConstraint(
                 condition=models.Q(

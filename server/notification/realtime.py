@@ -2,8 +2,9 @@
 import json
 import logging
 import time
+from collections.abc import Iterator
 from django.conf import settings
-from django.db import transaction
+from django.db import DatabaseError, close_old_connections, connection, transaction
 from django.http import StreamingHttpResponse
 from redis import Redis, RedisError
 from rest_framework.decorators import api_view, permission_classes
@@ -11,6 +12,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 logger = logging.getLogger(__name__)
+
+
+def _release_stream_connection() -> None:
+    if getattr(settings, 'NOTIFICATION_STREAM_PROCESS', False) and not connection.in_atomic_block:
+        close_old_connections()
 
 
 def broker():
@@ -53,15 +59,20 @@ def stream(request):
         return Response({'detail': 'Live events temporarily unavailable.'}, status=503)
     user_id = request.user.pk
     credential_version = request.user.credential_version
-    def events():
+    def events() -> Iterator[str]:
         try:
+            _release_stream_connection()
             yield 'retry: 3000\n\n' + encode_event('ready', {'resync': True})
             deadline = time.monotonic() + 25
             while time.monotonic() < deadline:
                 # Recheck account access during a live connection, not just at reconnect.
                 from core.models import User
-                if not User.objects.filter(pk=user_id, is_active=True, must_change_password=False,
-                                           credential_version=credential_version).exists():
+                allowed = User.objects.filter(
+                    pk=user_id, is_active=True, must_change_password=False,
+                    credential_version=credential_version,
+                ).exists()
+                _release_stream_connection()
+                if not allowed:
                     return
                 message = subscription.get_message(timeout=1)
                 if message and message['type'] == 'message':
@@ -70,9 +81,13 @@ def stream(request):
                     yield ': heartbeat\n\n'
         except RedisError:
             yield encode_event('resync', {'reason': 'broker_unavailable'})
+        except DatabaseError:
+            logger.warning('Stream access check unavailable.', exc_info=True)
+            yield encode_event('resync', {'reason': 'access_check_unavailable'})
         finally:
             subscription.close()
             client.close()
+            _release_stream_connection()
     response = StreamingHttpResponse(events(), content_type='text/event-stream')
     response['Cache-Control'] = 'no-cache, no-transform'
     response['X-Accel-Buffering'] = 'no'

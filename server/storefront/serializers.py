@@ -1,9 +1,11 @@
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from urllib.parse import urlsplit
 
 from django.db.models import Sum
 from django.contrib.auth.password_validation import validate_password
 from django.core.files.uploadedfile import UploadedFile
+from utils.image_uploads import ImageUploadError, normalize_public_image
 from rest_framework import serializers
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema_field
@@ -129,17 +131,10 @@ class UserAvatarImageSerializer(serializers.Serializer):
     image = serializers.ImageField(allow_empty_file=False)
 
     def validate_image(self, value: UploadedFile) -> UploadedFile:
-        if value.size > 5 * 1024 * 1024:
-            raise serializers.ValidationError('Images must be at most 5 MB.')
-        image = getattr(value, 'image')
-        if image.format not in {'JPEG', 'PNG', 'WEBP'}:
-            raise serializers.ValidationError('Use a JPEG, PNG or WebP image.')
-        dimensions = (512, 512)
-        if image.size != dimensions:
-            raise serializers.ValidationError(
-                f'Crop this image to {dimensions[0]} × {dimensions[1]} pixels.'
-            )
-        return value
+        try:
+            return normalize_public_image(value, expected_size=(512, 512))
+        except ImageUploadError as error:
+            raise serializers.ValidationError(str(error)) from error
 
 
 class RegisterSerializer(UserSerializer):
@@ -282,8 +277,11 @@ class CatalogSerializer(serializers.ModelSerializer):
         return str(unit_price(obj))
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
-    def get_images(self, obj):
-        images = []
+    def get_images(self, obj: Product) -> list[str]:
+        resolved: dict[int, list[str]] = self.context.setdefault('catalog_images', {})
+        if obj.pk in resolved:
+            return resolved[obj.pk]
+        images: list[str] = []
         request = self.context.get('request')
         for image in obj.images.all():
             if image.image:
@@ -292,6 +290,7 @@ class CatalogSerializer(serializers.ModelSerializer):
                 images.append(normalize_media_url(raw))
         if obj.image_url:
             images.append(normalize_media_url(obj.image_url))
+        resolved[obj.pk] = images
         return images
 
     @extend_schema_field(OpenApiTypes.STR)
@@ -309,7 +308,11 @@ class ReviewSerializer(serializers.ModelSerializer):
     is_verified_buyer = serializers.SerializerMethodField()
     is_own_review = serializers.SerializerMethodField()
     can_moderate = serializers.SerializerMethodField()
-    images = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    images = serializers.ListField(
+        child=serializers.CharField(max_length=2048),
+        required=False,
+        default=list,
+    )
 
     class Meta:
         model = Review
@@ -324,9 +327,35 @@ class ReviewSerializer(serializers.ModelSerializer):
     def validate_images(self, value):
         if len(value) > 3:
             raise serializers.ValidationError('You can attach up to 3 photos with your review.')
+        for image_url in value:
+            parsed_url = urlsplit(image_url)
+            if (
+                parsed_url.scheme.lower() != 'https'
+                or not parsed_url.hostname
+                or parsed_url.username
+                or parsed_url.password
+            ):
+                raise serializers.ValidationError(
+                    'Review photos must use a secure HTTPS image URL.'
+                )
         return value
 
+    def validate_label(self, value):
+        label = value.strip()
+        if not label:
+            raise serializers.ValidationError('Add a short title for your review.')
+        return label
+
+    def validate_comment(self, value):
+        comment = value.strip()
+        if not comment:
+            raise serializers.ValidationError('Add details about your experience.')
+        return comment
+
     def get_is_verified_buyer(self, obj):
+        verified_buyer_ids = self.context.get('verified_buyer_ids')
+        if verified_buyer_ids is not None:
+            return obj.user_id in verified_buyer_ids
         from storefront.views import check_is_verified_buyer
         return check_is_verified_buyer(obj.user, obj.product) or getattr(obj.user, 'is_staff', False) or getattr(obj.user, 'is_superuser', False)
 
@@ -396,8 +425,14 @@ class CartSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     items = CartLineSerializer(many=True)
     subtotal = serializers.DecimalField(max_digits=15, decimal_places=2)
-    shipping = serializers.DecimalField(max_digits=15, decimal_places=2)
+    shipping = serializers.DecimalField(max_digits=15, decimal_places=2, allow_null=True)
     total = serializers.DecimalField(max_digits=15, decimal_places=2)
+
+
+class ShipmentBreakdownSerializer(serializers.Serializer):
+    origin_zip = serializers.CharField()
+    weight_lbs = serializers.CharField()
+    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
 
 
 class ShippingRateSerializer(serializers.Serializer):
@@ -413,6 +448,7 @@ class ShippingRateSerializer(serializers.Serializer):
     description = serializers.CharField()
     amount = serializers.DecimalField(max_digits=10, decimal_places=2)
     is_default = serializers.BooleanField()
+    shipments = ShipmentBreakdownSerializer(many=True, required=False, default=list)
 
 
 class CheckoutRequestSerializer(serializers.Serializer):
@@ -489,6 +525,16 @@ class OrderAddressSnapshotSerializer(serializers.Serializer):
     zip = serializers.CharField()
 
 
+class OrderFulfillmentSerializer(serializers.Serializer):
+    store = serializers.IntegerField()
+    store_name = serializers.CharField()
+    status = serializers.CharField()
+    carrier = serializers.CharField(allow_blank=True)
+    tracking_number = serializers.CharField(allow_blank=True)
+    shipped_at = serializers.DateTimeField(allow_null=True)
+    delivered_at = serializers.DateTimeField(allow_null=True)
+
+
 class OrderItemSnapshotSerializer(serializers.Serializer):
     net_total = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)
     discount_amount = serializers.DecimalField(max_digits=15, decimal_places=2, required=False)
@@ -527,6 +573,7 @@ class OrderSerializer(serializers.Serializer):
     shipped_at = serializers.DateTimeField(required=False, allow_null=True)
     delivered_at = serializers.DateTimeField(required=False, allow_null=True)
     tracking_events = serializers.ListField(required=False, child=serializers.DictField(), default=list)
+    fulfillments = OrderFulfillmentSerializer(many=True, required=False, default=list)
     items = OrderItemSnapshotSerializer(many=True)
     address = OrderAddressSnapshotSerializer()
     tax_snapshot = serializers.JSONField(required=False, default=dict)
@@ -534,6 +581,20 @@ class OrderSerializer(serializers.Serializer):
     claimed_product_ids = serializers.ListField(
         child=serializers.IntegerField(), required=False, default=list
     )
+
+
+class OrderTrackingSerializer(serializers.Serializer):
+    order_id = serializers.IntegerField()
+    reference = serializers.CharField()
+    status = serializers.CharField()
+    carrier = serializers.CharField()
+    tracking_number = serializers.CharField()
+    tracking_url = serializers.CharField()
+    shipped_at = serializers.DateTimeField(allow_null=True)
+    delivered_at = serializers.DateTimeField(allow_null=True)
+    tracking_events = serializers.ListField(child=serializers.DictField())
+    fulfillments = OrderFulfillmentSerializer(many=True)
+    live_tracking = serializers.DictField()
 
 
 class ProductIdRequestSerializer(serializers.Serializer):

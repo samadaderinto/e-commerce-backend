@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from django.test import TestCase, override_settings
-from rest_framework.test import APIRequestFactory
+from rest_framework.test import APIClient, APIRequestFactory
 
 from affiliates.models import AffiliateWallet, Marketer, Referral
 from affiliates.services import reward_referral
@@ -101,6 +101,14 @@ class AffiliateReferralTests(TestCase):
         self.assertEqual(wallet.balance, Decimal("25.00"))
         self.assertEqual(wallet.transactions.count(), 1)
 
+        from core.models import UserWalletTransaction
+        self.assertEqual(
+            UserWalletTransaction.objects.filter(
+                idempotency_key=f"referral-reward-{first.pk}"
+            ).count(),
+            1,
+        )
+
     def test_user_cannot_reward_their_own_referral_code(self):
         referral = reward_referral(self.marketer.marketer_id, self.referrer)
 
@@ -160,6 +168,111 @@ class AffiliateRegistrationTests(TestCase):
 
         self.assertEqual(AffiliateWallet.objects.get(user=referrer).balance, Decimal("25.00"))
         self.assertEqual(Referral.objects.count(), 1)
+
+
+@override_settings(ROOT_URLCONF="storefront.urls")
+class AffiliateLegacyApiTests(TestCase):
+    def setUp(self):
+        from store.models import Store
+        from product.models import Product
+
+        self.owner = User.objects.create_user(
+            email="legacy-affiliate@test.com",
+            password="Strong-test-password-123",
+            first_name="Affiliate",
+            last_name="Owner",
+            gender="female",
+            phone1="+2348012345691",
+        )
+        self.marketer = Marketer.objects.create(user=self.owner, name="Owner")
+        self.customer = User.objects.create_user(
+            email="private-customer@test.com",
+            password="Strong-test-password-123",
+            first_name="Private",
+            last_name="Customer",
+            gender="male",
+            phone1="+2348012345692",
+        )
+        self.referral = Referral.objects.create(
+            marketer=self.marketer,
+            referred_user=self.customer,
+            reward_amount=Decimal("25.00"),
+            status=Referral.PENDING,
+        )
+        self.store = Store.objects.create(name="Pending Store", user=self.owner)
+        self.product = Product.objects.create(
+            store=self.store,
+            title="Unpublished product",
+            description="Not publicly listed",
+            price=Decimal("5.00"),
+            discount=0,
+            available=2,
+            category="books",
+            visibility=True,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(self.owner)
+
+    def test_legacy_referral_history_is_paginated_and_private(self):
+        response = self.client.get("/api/v1/affiliates/referrals/?limit=1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(len(response.data["results"]), 1)
+        self.assertNotIn("referred_email", response.data["results"][0])
+        self.assertNotIn("referred_user", response.data["results"][0])
+        self.assertNotIn("marketer", response.data["results"][0])
+
+    def test_cannot_create_or_follow_links_to_unpublished_store_products(self):
+        create_response = self.client.post(
+            "/api/v1/affiliates/links/",
+            {"product": self.product.pk},
+            format="json",
+        )
+        self.assertIn(create_response.status_code, (400, 404))
+
+        from affiliates.models import Url
+        url = Url.objects.create(
+            marketer=self.marketer,
+            product=self.product,
+            identifier="stale-link",
+            abs_url="https://shop.example.test/stale",
+            active=True,
+        )
+        redirect_response = self.client.get(
+            f"/api/v1/affiliates/r/{self.marketer.marketer_id}/{self.product.pk}/{url.identifier}/"
+        )
+        self.assertEqual(redirect_response.status_code, 404)
+
+    def test_backoffice_accounts_cannot_use_customer_affiliate_routes(self):
+        staff = User.objects.create_user(
+            email="affiliate-staff@test.com",
+            password="Strong-test-password-123",
+            is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get("/api/v1/affiliates/me/").status_code, 403)
+        self.assertEqual(self.client.get("/api/v1/affiliates/wallet/").status_code, 403)
+        self.assertEqual(self.client.get("/api/v1/affiliates/referrals/").status_code, 403)
+
+    def test_enrollment_retry_reuses_the_existing_affiliate_account(self):
+        customer = User.objects.create_user(
+            email="new-affiliate@test.com",
+            password="Strong-test-password-123",
+            first_name="New",
+            last_name="Affiliate",
+            gender="female",
+            phone1="+2348012345693",
+        )
+        self.client.force_authenticate(customer)
+        first = self.client.post(
+            "/api/v1/affiliates/register/", {"name": "Updated Name"}, format="json",
+        )
+        second = self.client.post(
+            "/api/v1/affiliates/register/", {"name": "Updated Name"}, format="json",
+        )
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(Marketer.objects.filter(user=customer).count(), 1)
 
 
 class ClickBankOutboundTests(TestCase):

@@ -297,7 +297,7 @@ def settle_pending_merchant_earnings() -> int:
     available_balance in each merchant's wallet, and updates the entry status to AVAILABLE.
     """
     now = timezone.now()
-    pending_entries = StoreEarningsLedger.objects.select_for_update().filter(
+    pending_entries = StoreEarningsLedger.objects.select_for_update(of=('self',)).filter(
         status=StoreEarningsLedger.STATUS_PENDING,
         available_at__lte=now,
     ).filter(models.Q(order__isnull=True) | models.Q(order__paid_total__gt=0)).select_related('wallet')
@@ -392,10 +392,63 @@ def request_merchant_payout(
         raise ValidationError({'amount': 'Enter a positive payout amount.'})
     if store and (store.user_id != user.pk or store.is_official):
         raise ValidationError({'store': 'Choose one of your merchant stores.'})
-    wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=user)
     settle_pending_merchant_earnings()
+    wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=user)
     calculate_merchant_financials(user)
     wallet.refresh_from_db()
+
+    allocations: list[tuple[Store, Decimal]] = []
+    if store:
+        store_available = Decimal(
+            calculate_store_financials(store)['available_balance']
+        )
+        if amount > store_available:
+            raise ValidationError({
+                'detail': (
+                    f'Requested payout amount (${amount}) exceeds the selected '
+                    f'store\'s available cleared balance (${store_available}).'
+                )
+            })
+        allocations = [(store, amount)]
+    else:
+        merchant_stores = list(
+            Store.objects.filter(user=user)
+            .exclude(is_official=True)
+            .exclude(user__is_superuser=True)
+            .order_by('pk')
+        )
+        balances = [
+            (
+                merchant_store,
+                max(
+                    Decimal('0.00'),
+                    Decimal(
+                        calculate_store_financials(merchant_store)[
+                            'available_balance'
+                        ]
+                    ),
+                ),
+            )
+            for merchant_store in merchant_stores
+        ]
+        merchant_available = sum(
+            (balance for _, balance in balances), Decimal('0.00')
+        )
+        if amount > merchant_available:
+            raise ValidationError({
+                'detail': (
+                    f'Requested payout amount (${amount}) exceeds available '
+                    f'merchant-store funds (${merchant_available}).'
+                )
+            })
+        remaining = amount
+        for merchant_store, balance in balances:
+            allocation = min(balance, remaining)
+            if allocation > 0:
+                allocations.append((merchant_store, allocation))
+                remaining -= allocation
+            if remaining <= 0:
+                break
 
     if amount > wallet.available_balance:
         raise ValidationError({
@@ -417,18 +470,21 @@ def request_merchant_payout(
         notes=notes,
     )
 
-    StoreEarningsLedger.objects.create(
-        wallet=wallet,
-        store=store,
-        entry_type=StoreEarningsLedger.TYPE_PAYOUT,
-        gross_amount=amount,
-        fee_amount=Decimal("0.00"),
-        net_amount=-amount,
-        status=StoreEarningsLedger.STATUS_PENDING,
-        description=f"Payout withdrawal request ({reference})"
-        + (f" for store '{store.name}'" if store else " (unified merchant balance)"),
-        reference=reference,
-    )
+    for allocated_store, allocated_amount in allocations:
+        StoreEarningsLedger.objects.create(
+            wallet=wallet,
+            store=allocated_store,
+            entry_type=StoreEarningsLedger.TYPE_PAYOUT,
+            gross_amount=allocated_amount,
+            fee_amount=Decimal("0.00"),
+            net_amount=-allocated_amount,
+            status=StoreEarningsLedger.STATUS_PENDING,
+            description=(
+                f"Payout withdrawal request ({reference}) for store "
+                f"'{allocated_store.name}'"
+            ),
+            reference=reference,
+        )
 
     return payout
 
@@ -455,11 +511,33 @@ def process_payout_status_change(
 
     if action == "approve":
         if payout.payout_method == StorePayout.METHOD_STRIPE_CONNECT:
-            if not wallet or not wallet.stripe_account_id or not getattr(settings, 'STRIPE_SECRET', ''):
+            if (
+                not wallet
+                or not wallet.stripe_account_id
+                or not getattr(settings, 'STRIPE_SECRET', '')
+            ):
                 raise ValidationError({'detail': 'Connect a Stripe account and configure payouts before approving this transfer.'})
             import stripe
             stripe.api_key = settings.STRIPE_SECRET
             try:
+                account = stripe.Account.retrieve(wallet.stripe_account_id)
+                wallet.stripe_details_submitted = bool(
+                    account.get('details_submitted', False)
+                )
+                wallet.stripe_payouts_enabled = bool(
+                    account.get('payouts_enabled', False)
+                )
+                wallet.save(
+                    update_fields=[
+                        'stripe_details_submitted',
+                        'stripe_payouts_enabled',
+                        'updated',
+                    ]
+                )
+                if not wallet.stripe_payouts_enabled:
+                    raise ValidationError({
+                        'detail': 'Stripe payouts are not enabled for this account yet.'
+                    })
                 transfer = stripe.Transfer.create(
                     amount=int((payout.amount * 100).quantize(Decimal('1'))),
                     currency=getattr(settings, 'STRIPE_CURRENCY', 'usd').lower(),
@@ -467,9 +545,11 @@ def process_payout_status_change(
                     metadata={'payout_id': str(payout.pk), 'reference': payout.reference},
                     idempotency_key=f"payout-transfer-{payout.reference}",
                 )
+            except ValidationError:
+                raise
             except Exception as exc:
                 logger.exception('Stripe payout transfer failed for payout %s', payout.pk)
-                raise ValidationError({'detail': 'The payout provider could not complete this transfer. Please retry.'}) from exc
+                raise ValidationError({'detail': 'Unable to verify or complete the Stripe transfer. Please retry.'}) from exc
             notes = f"Stripe transfer {transfer.id}" if not notes else f"{notes} · Stripe transfer {transfer.id}"
         payout.status = StorePayout.STATUS_COMPLETED
         payout.processed_at = timezone.now()
@@ -543,12 +623,28 @@ def calculate_store_financials(store: Store, days: int = 30) -> dict:
             )
             pending += max(Decimal("0"), sale.net_amount + refunds)
         cleared = net - pending
-        completed = store.payouts.filter(status=StorePayout.STATUS_COMPLETED).aggregate(
-            total=Sum("amount")
-        )["total"] or Decimal("0")
-        reserved = store.payouts.filter(status=StorePayout.STATUS_PENDING).aggregate(
-            total=Sum("amount")
-        )["total"] or Decimal("0")
+        payout_ledger = StoreEarningsLedger.objects.filter(
+            wallet__user=store.user,
+            store=store,
+            entry_type=StoreEarningsLedger.TYPE_PAYOUT,
+        )
+        payout_references = payout_ledger.values('reference')
+        completed = abs(
+            payout_ledger.filter(status=StoreEarningsLedger.STATUS_COMPLETED)
+            .aggregate(total=Sum('net_amount'))['total'] or Decimal('0')
+        ) + (
+            store.payouts.filter(status=StorePayout.STATUS_COMPLETED)
+            .exclude(reference__in=payout_references)
+            .aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        )
+        reserved = abs(
+            payout_ledger.filter(status=StoreEarningsLedger.STATUS_PENDING)
+            .aggregate(total=Sum('net_amount'))['total'] or Decimal('0')
+        ) + (
+            store.payouts.filter(status=StorePayout.STATUS_PENDING)
+            .exclude(reference__in=payout_references)
+            .aggregate(total=Sum('amount'))['total'] or Decimal('0')
+        )
         return {
             "gross_sales": format(gross, ".2f"),
             "platform_fee_percent": format(
@@ -660,6 +756,22 @@ def calculate_merchant_financials(user: Any) -> dict:
         total_cleared += Decimal(fin['cleared_total'])
         total_payouts_completed += Decimal(fin['payouts_completed'])
         total_payouts_pending += Decimal(fin['payouts_pending'])
+
+    payout_references = StoreEarningsLedger.objects.filter(
+        wallet=wallet,
+        entry_type=StoreEarningsLedger.TYPE_PAYOUT,
+        store__isnull=False,
+    ).values('reference')
+    unified_payouts = StorePayout.objects.filter(
+        wallet=wallet,
+        store__isnull=True,
+    ).exclude(reference__in=payout_references)
+    total_payouts_completed += unified_payouts.filter(
+        status=StorePayout.STATUS_COMPLETED
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    total_payouts_pending += unified_payouts.filter(
+        status=StorePayout.STATUS_PENDING
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
 
     # Synchronize wallet balance fields to match verified cleared funds
     computed_available = total_cleared - total_payouts_completed - total_payouts_pending

@@ -6,7 +6,7 @@ import { Camera, Trash2, Upload, UserRound, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { User } from '@/lib/types';
 import { useShop } from './providers';
-import { useDialogFocus } from './ui';
+import { ResponsiveMediaImage, useDialogFocus } from './ui';
 import { useQueryClient } from '@tanstack/react-query';
 
 type CropPosition = { x: number; y: number; zoom: number };
@@ -138,7 +138,13 @@ export function UserAvatarUpload({ user }: { user?: User | null }): ReactElement
       <div className="user-avatar-card">
         <div className="user-avatar-display">
           {user.avatar_url ? (
-            <img src={user.avatar_url} alt={`${user.first_name} profile`} />
+            <ResponsiveMediaImage
+              src={user.avatar_url}
+              alt={`${user.first_name} profile`}
+              sizes="128px"
+              width={256}
+              height={256}
+            />
           ) : (
             <span>{user.first_name?.[0]?.toUpperCase() || <UserRound size={32} />}</span>
           )}

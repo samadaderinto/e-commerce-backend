@@ -56,10 +56,10 @@ const tableCases: {
 }[] = [
   { path: '/admin/stores', endpoint: '/api/admin/staff/stores', headers: ['Created', 'Updated', 'Last active'], record: store },
   {
-    path: '/merchant/products', endpoint: '/api/stores/1/products', headers: ['Created', 'Updated'],
+    path: '/merchant/products', endpoint: '/api/stores/1/products', headers: ['Created', 'Updated', 'Units sold'],
     record: {
       id: 1, title: 'Date fixture product', category: 'electronics', price: '10.00',
-      images: [], available: 5, visibility: true, is_digital: false, created,
+      images: [], available: 5, sales: 7, visibility: true, is_digital: false, created,
       updated: null,
     },
   },
@@ -99,6 +99,8 @@ for (const tableCase of tableCases) {
     if (tableCase.path === '/merchant/products') {
       const updatedIndex: number = (await table.getByRole('columnheader').allTextContents()).indexOf('Updated');
       await expect(row.getByRole('cell').nth(updatedIndex)).toHaveText('Not recorded');
+      const salesIndex: number = (await table.getByRole('columnheader').allTextContents()).indexOf('Units sold');
+      await expect(row.getByRole('cell').nth(salesIndex)).toHaveText('7');
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)).toBe(false);
   });

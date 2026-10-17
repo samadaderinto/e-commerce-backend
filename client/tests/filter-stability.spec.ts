@@ -49,8 +49,13 @@ async function assertStableControl(
   const control = page.getByRole('combobox', { name: label, exact: true });
   const original = await control.elementHandle();
   if (!original) throw new Error(`Missing ${label}`);
+  const content = page.locator('.empty-state').first();
+  const initialContentBox = await content.count() ? await content.boundingBox() : null;
   await control.selectOption(option);
   await expect(page.locator('.loading.compact').first()).toBeVisible();
+  if (initialContentBox) {
+    expect((await content.boundingBox())?.y).toBeCloseTo(initialContentBox.y, 0);
+  }
   expect(await original.evaluate(element => element.isConnected)).toBe(true);
   await expect(control).toHaveValue(option);
 }
@@ -61,6 +66,7 @@ for (const profile of profiles) {
     const item: NotificationItem = {
       id: 1, level: 'info', unread: true, verb: 'Existing notice',
       timestamp: '2026-10-10T00:00:00Z', deleted: false, category: 'order',
+      data: { url: '/orders/1', order_id: 1 },
     };
     await page.route('**/api/notifications/filters', async route => {
       await route.fulfill({ json: {
@@ -77,6 +83,7 @@ for (const profile of profiles) {
     });
     await page.goto('/notifications');
     await expect(page.getByRole('heading', { name: 'Existing notice' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'View order' })).toHaveAttribute('href', '/orders/1');
     const input = page.getByPlaceholder('Search notifications by keyword, reference, order…');
     try {
       await input.fill('matching');
@@ -124,16 +131,21 @@ for (const profile of [undefined, ...profiles.filter(profile => !profile.is_staf
 for (const profile of profiles.filter(profile => profile.is_staff)) {
   test(`${profile.first_name}: backoffice role filter preserves controls`, async ({ page }) => {
     await mockProfile(page, profile);
+    const role = profile.is_superuser || profile.is_business_admin ? 'staff' : 'customer';
     let release: (() => void) | undefined;
     const pending = new Promise<void>(resolve => { release = resolve; });
     await page.route('**/api/admin/staff/users?**', async route => {
-      if (new URL(route.request().url()).searchParams.get('role') === 'staff') await pending;
+      if (new URL(route.request().url()).searchParams.get('role') === role) await pending;
       await route.fulfill({ json: { count: 0, results: [] } });
     });
     await page.goto('/admin/users');
     await expect(page.getByText('0 matching records', { exact: true })).toBeVisible();
     try {
-      await assertStableControl(page, 'users: Role', 'staff');
+      if (role === 'customer') {
+        await expect(page.getByRole('combobox', { name: 'users: Role' }).locator('option[value="staff"]')).toHaveCount(0);
+        await expect(page.getByRole('combobox', { name: 'users: Role' }).locator('option[value="admin"]')).toHaveCount(0);
+      }
+      await assertStableControl(page, 'users: Role', role);
       release?.();
       await expect(page.locator('.loading.compact')).toHaveCount(0);
     } finally {
@@ -198,14 +210,18 @@ for (const profile of profiles) {
       headers: { origin: new URL(baseURL!).origin },
       data: {
         email: `${profile.first_name}@proace.local`,
-        password: process.env.E2E_DEMO_PASSWORD || 'ProaceDemo2026!',
+        password: profile.is_superuser
+          ? process.env.E2E_TECHNICAL_ADMIN_PASSWORD || process.env.E2E_DEMO_PASSWORD || 'ProaceDemo2026!'
+          : process.env.E2E_DEMO_PASSWORD || 'ProaceDemo2026!',
       },
     });
     expect(login.ok()).toBe(true);
     const isStoreOwner: boolean = ['seller', 'merchant'].includes(profile.first_name);
     const path: string = profile.is_staff ? '/admin/users' : isStoreOwner ? '/merchant/products' : '/shop';
     const label: string = profile.is_staff ? 'users: Role' : 'Sort products';
-    const option: string = profile.is_staff ? 'staff' : isStoreOwner ? 'created' : 'price';
+    const option: string = profile.is_staff
+      ? profile.is_superuser || profile.is_business_admin ? 'staff' : 'customer'
+      : isStoreOwner ? 'created' : 'price';
     await page.goto(path);
     const control = page.getByRole('combobox', { name: label, exact: true });
     await expect(control).toBeVisible({ timeout: 30000 });

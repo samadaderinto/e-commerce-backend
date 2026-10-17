@@ -126,3 +126,44 @@ Transport references: [Redis Pub/Sub delivery semantics](https://redis.io/docs/l
 Transactional service emails cover store verification, blocking (including the review reason), and restoration; administrative account suspension/restoration and backoffice permission changes; successful password changes/resets; and low physical stock for the store owner and authorized operators. Store, account-security, and inventory notices use branded HTML templates through the existing delivery outbox. No-op moderation/access requests do not resend notices. When a dedicated receipt is sent for checkout, shipment/delivery, refund decisions, cancellation, wallet top-ups, or payout decisions, the companion inbox notification suppresses its generic email while retaining inbox and push delivery. Delivery requires the configured email provider and notification worker; local console delivery does not send real email.
 
 Inbox notifications and their email/push outbox rows are persisted in one database transaction. Worker dispatch waits until commit, so rollback removes both and broker outages leave persisted deliveries available for recovery.
+
+### Contextual notification actions
+
+Notification popup and inbox actions share labels and URL validation. Admin order,
+refund and payout links select their existing detail dialogs with `order`, `refund`
+and `payout` query parameters. Merchant payout/earnings dialogs accept `payout` and
+`ledger`; merchant orders retain their store/order deep link. Independent exact-record
+requests (`record_id`, positive integer) avoid current listing filters and pagination.
+Closing clears the detail parameter; missing or unauthorized records show a clean notice.
+Buyer order links retain the dedicated detail page. Wallet, store, referral and account
+notices open their existing relevant page. Saved inbox URLs and queued push URLs are
+resolved through current recipient routing; existing notifications do not need resending.
+
+### Store detail financial review
+
+Backoffice store pages include a Store payments section with financial summary cards,
+payout requests and an earnings ledger. Each history uses independent search, filters,
+counts, pagination and the existing styled detail dialog. Store-scoped financials and
+ledger APIs sit under `/admin/staff/stores/<id>/financials` and `/ledger`; payouts use
+`/admin/staff/payouts?store_id=<id>`. All requests use the same-origin proxy and existing
+backoffice permissions. Summary figures cover full store history; history filters do
+not change summary balances. Viewing these records never requests or processes a payout.
+
+
+The admin dashboard Refund operations preview uses a full-width, horizontally scrollable
+refund table: refund/order links open their detail dialogs, with customer, amount, method,
+status, reason, created date and existing approve/decline actions in separate columns.
+The preview retains the latest five requests; View all refunds opens the searchable,
+filterable full history. Styling uses shared table, button and status primitives in both themes.
+
+
+The dashboard operations previews are stacked at full width: Refund operations first,
+then Coupon operations. Coupons use a scrollable table with code/detail link, discount,
+usage, status, validity dates, creator email and existing toggle/delete controls.
+Used-coupon deletion protection and the full searchable coupon history are unchanged.
+
+
+Checkout address dialogs use the shared address form in embedded mode, without a
+second card or repeated heading. Address rows share label/input/error tracks to keep
+controls aligned when labels or validation messages wrap, and stack on narrow screens.
+Standalone address forms retain their heading and card; both modes use theme tokens.

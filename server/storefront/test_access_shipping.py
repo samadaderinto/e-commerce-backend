@@ -76,8 +76,9 @@ class AccessAndShippingTests(TestCase):
 
     def test_invitation_verification_then_credentials_then_mandatory_change(self):
         self.client.force_authenticate(self.business)
-        response = self.client.post('/api/v1/admin/staff/', {'email': 'invited@test.com', 'first_name': 'Invited', 'last_name': 'Staff', 'phone1': '+2348012345678', 'gender': 'female'}, format='json')
+        response = self.client.post('/api/v1/admin/staff/', {'email': 'Invited@Test.com', 'first_name': 'Invited', 'last_name': 'Staff', 'phone1': '+2348012345678', 'gender': 'female'}, format='json')
         self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data['email'], 'invited@test.com')
         self.assertNotIn('password', response.data)
         self.assertNotIn('staff_invitation_secret', response.data)
         user = User.objects.get(email='invited@test.com')
@@ -97,6 +98,8 @@ class AccessAndShippingTests(TestCase):
         uid, reset_token = match.group(1), match.group(2)
         reset_res = self.client.post('/api/v1/auth/reset/', {'uid': uid, 'token': reset_token, 'password': 'PermanentStaffPass123!'}, format='json')
         self.assertEqual(reset_res.status_code, 200)
+        replay = self.client.post('/api/v1/auth/reset/', {'uid': uid, 'token': reset_token, 'password': 'AnotherPermanentPass123!'}, format='json')
+        self.assertEqual(replay.status_code, 400)
         self.assertEqual(self.client.post('/api/v1/auth/verify/', {'token': token}, format='json').status_code, 400)
         login = self.client.post('/api/v1/auth/login/', {'email': user.email, 'password': 'PermanentStaffPass123!'}, format='json')
         self.assertEqual(login.status_code, 200)
@@ -127,6 +130,16 @@ class AccessAndShippingTests(TestCase):
         response = self.client.get(f'/api/v1/checkout/shipping-rates/?address={self.address.pk}&carrier=UPS')
         self.assertEqual(response.status_code, 400, response.data)
         self.assertIn('store_address', response.data['error']['details'])
+
+    def test_cart_does_not_quote_delivery_before_shopper_selects_address(self) -> None:
+        self.client.force_authenticate(self.buyer)
+        self.client.post('/api/v1/cart/', {'product': self.product.pk, 'quantity': 1}, format='json')
+
+        response = self.client.get('/api/v1/cart/')
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIsNone(response.data['shipping'])
+        self.assertEqual(response.data['total'], response.data['subtotal'])
 
     def test_military_address_consistency_and_partial_updates(self) -> None:
         self.client.force_authenticate(self.buyer)
@@ -228,6 +241,21 @@ class AccessAndShippingTests(TestCase):
         self.assertEqual(rate['amount'], '16.00')
         self.assertEqual(len(rate['shipments']), 2)
         self.assertEqual(mocked.call_count, 2)
+
+    @patch('payment.carriers.live_rates')
+    @override_settings(FREE_SHIPPING_THRESHOLD=Decimal('20'))
+    def test_free_shipping_zeroes_each_shipment_breakdown(self, mocked):
+        mocked.return_value = [{'service_id': 'ups_03', 'name': 'UPS Ground', 'amount': '8.00', 'carrier': 'UPS', 'currency': 'USD', 'source': 'live'}]
+        other = Store.objects.create(user=self.seller, name='Second', status='active', verified_at=timezone.now())
+        StoreAddress.objects.create(store=other, is_default=True, zip='10001', country='US', state='NY', city='New York', address='Test')
+        product = Product.objects.create(store=other, title='Other', price='10', discount=0, available=2)
+        self.client.force_authenticate(self.buyer)
+        self.client.post('/api/v1/cart/', {'product': product.pk, 'quantity': 1}, format='json')
+
+        rate = self.rates()[0]
+
+        self.assertEqual(rate['amount'], '0.00')
+        self.assertEqual([shipment['amount'] for shipment in rate['shipments']], ['0.00', '0.00'])
 
     @patch('storefront.views.stripe.checkout.Session.retrieve')
     @patch('storefront.views.stripe.checkout.Session.create')

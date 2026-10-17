@@ -15,6 +15,7 @@ class GenericNotificationRelatedField(serializers.RelatedField):
 
 
 class NotificationSerializer(serializers.ModelSerializer):
+    data = serializers.SerializerMethodField()
     actor = GenericNotificationRelatedField(read_only=True)
     target = GenericNotificationRelatedField(read_only=True)
     action_object = GenericNotificationRelatedField(read_only=True)
@@ -45,6 +46,11 @@ class NotificationSerializer(serializers.ModelSerializer):
             "store",
         ]
         read_only_fields = fields
+
+    def get_data(self, obj: Notification) -> dict[str, object]:
+        from notification.policy import notification_payload
+
+        return notification_payload(obj)
 
     def get_category(self, obj: Notification) -> str:
         return obj.category

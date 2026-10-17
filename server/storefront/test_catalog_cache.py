@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.core.cache import cache
 from django.db import connection, transaction
@@ -13,6 +13,7 @@ from rest_framework.test import APIClient
 
 from core.models import User
 from product.models import Product, Specification
+from staff.models import Post
 from store.models import Store
 from storefront.catalog_cache import REVISION_KEY
 
@@ -65,6 +66,22 @@ class CatalogSnapshotTests(TransactionTestCase):
         warm_catalog_snapshot()
         response = self.client.get("/api/v1/products/")
         self.assertEqual(response["X-Catalog-Cache"], "HIT")
+
+    def test_warm_lock_stays_held_until_background_warm_finishes(self) -> None:
+        from storefront.catalog_cache import WARM_LOCK_KEY, WARM_URL_KEY
+        from storefront.tasks import warm_catalog_snapshot
+
+        cache.set(WARM_URL_KEY, "http://testserver/api/v1/products/", timeout=60)
+        cache.set(WARM_LOCK_KEY, True, timeout=120)
+
+        def serve(request: Any) -> Mock:
+            self.assertTrue(cache.get(WARM_LOCK_KEY))
+            return Mock(status_code=200)
+
+        with patch("storefront.views.ProductsView.as_view", return_value=serve):
+            warm_catalog_snapshot()
+
+        self.assertIsNone(cache.get(WARM_LOCK_KEY))
 
     @override_settings(CATALOG_CACHE_WARM_ENABLED=True)
     def test_invalidation_enqueues_one_warm_after_commit(self) -> None:
@@ -153,6 +170,24 @@ class CatalogSnapshotTests(TransactionTestCase):
             self.client.get("/api/v1/products/").data["results"][0]["tags"], []
         )
 
+    def test_blog_tag_changes_do_not_use_product_tag_invalidation(self) -> None:
+        self.product.tags.add("shared tag")
+        post = Post.objects.create(staff=self.owner, title="Tagged blog post")
+        expected = self.warm()
+        revision = cache.get(REVISION_KEY)
+
+        with patch("storefront.catalog_signals._invalidate_product_payloads") as invalidate:
+            post.tags.add("shared tag")
+            post.tags.remove("shared tag")
+            post.tags.add("shared tag")
+            post.tags.clear()
+
+        invalidate.assert_not_called()
+        self.assertEqual(cache.get(REVISION_KEY), revision)
+        response = self.client.get("/api/v1/products/")
+        self.assertEqual(response["X-Catalog-Cache"], "HIT")
+        self.assertEqual(response.data, expected)
+
     def test_rollback_cannot_publish_or_invalidate_uncommitted_snapshot(self) -> None:
         expected = self.warm()
         revision = cache.get(REVISION_KEY)
@@ -179,6 +214,55 @@ class CatalogSnapshotTests(TransactionTestCase):
 
         self.assertEqual(response.status_code, 500)
         self.assertNotIn("X-Catalog-Cache", response)
+
+    def test_model_saves_invalidate_legacy_product_response_caches(self) -> None:
+        from product.models import ProductImg
+        from product.cache import (
+            LANDING_PRODUCTS_CACHE_KEY,
+            product_cache_key,
+            store_product_cache_key,
+        )
+
+        keys = [
+            LANDING_PRODUCTS_CACHE_KEY,
+            product_cache_key(self.product.pk),
+            store_product_cache_key(self.store.pk, self.product.pk),
+        ]
+        for key in keys:
+            cache.set(key, {"cached": True}, timeout=60)
+
+        self.product.title = "Updated through model save"
+        self.product.save(update_fields=["title", "updated"])
+
+        for key in keys:
+            self.assertIsNone(cache.get(key))
+
+        for key in keys:
+            cache.set(key, {"cached": True}, timeout=60)
+        ProductImg.objects.create(product=self.product, image="images/new.png")
+        for key in keys:
+            self.assertIsNone(cache.get(key))
+
+    def test_store_visibility_changes_invalidate_cached_product_responses(self) -> None:
+        from product.cache import (
+            LANDING_PRODUCTS_CACHE_KEY,
+            product_cache_key,
+            store_product_cache_key,
+        )
+
+        keys = [
+            LANDING_PRODUCTS_CACHE_KEY,
+            product_cache_key(self.product.pk),
+            store_product_cache_key(self.store.pk, self.product.pk),
+        ]
+        for key in keys:
+            cache.set(key, {"cached": True}, timeout=60)
+
+        self.store.status = Store.STATUS_BLOCKED
+        self.store.save(update_fields=["status", "updated"])
+
+        for key in keys:
+            self.assertIsNone(cache.get(key))
 
     def test_redis_invalidation_failure_surfaces(
         self,
@@ -254,13 +338,14 @@ class CatalogSnapshotTests(TransactionTestCase):
             self.client.get("/api/v1/products/").data["results"][0]["tags"], []
         )
 
-    def test_query_variants_and_empty_pages_do_not_share_snapshots(self) -> None:
+    def test_query_variants_have_separate_snapshots_and_empty_pages_are_cached(self) -> None:
         self.warm()
         filtered = self.client.get("/api/v1/products/?min_price=11")
         self.assertEqual(filtered.data["results"], [])
         self.assertEqual(filtered["X-Catalog-Cache"], "MISS")
         again = self.client.get("/api/v1/products/?min_price=11")
-        self.assertEqual(again["X-Catalog-Cache"], "MISS")
+        self.assertEqual(again["X-Catalog-Cache"], "HIT")
+        self.assertEqual(again.data["results"], [])
         self.assertEqual(self.client.get("/api/v1/products/")["X-Catalog-Cache"], "HIT")
         invalid = self.client.get("/api/v1/products/?page=0")
         self.assertEqual(invalid.status_code, 400)

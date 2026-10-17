@@ -63,11 +63,19 @@ def _deliver_push(delivery):
     app = _firebase_app()
     metadata = delivery.metadata or {}
     pending_tokens = metadata.get("pending_tokens")
-    if not isinstance(pending_tokens, list):
-        pending_tokens = list(
-            PushDevice.objects.filter(user_id=notification.recipient_id)
-            .values_list("token", flat=True)
-        )
+    registered_tokens = list(
+        PushDevice.objects.filter(user_id=notification.recipient_id)
+        .order_by("pk")
+        .values_list("token", flat=True)
+    )
+    registered_token_set = set(registered_tokens)
+    if isinstance(pending_tokens, list):
+        pending_tokens = list(dict.fromkeys(
+            token for token in pending_tokens
+            if isinstance(token, str) and token in registered_token_set
+        ))
+    else:
+        pending_tokens = registered_tokens
     if not pending_tokens:
         return {"sent": 0, "failed": 0}
 
@@ -80,7 +88,8 @@ def _deliver_push(delivery):
     event = (notification.data or {}).get("event")
     if isinstance(event, str):
         data["event"] = event
-    url = (notification.data or {}).get("url")
+    from notification.policy import notification_payload
+    url = notification_payload(notification).get("url")
     if isinstance(url, str) and url.startswith("/") and not url.startswith("//"):
         data["url"] = url
 
@@ -88,10 +97,7 @@ def _deliver_push(delivery):
     failed_tokens = []
     for start in range(0, len(pending_tokens), 500):
         batch = pending_tokens[start:start + 500]
-        try:
-            multicast_message = messaging.MulticastMessage(data=data, fids=batch)
-        except TypeError:
-            multicast_message = messaging.MulticastMessage(data=data, tokens=batch)
+        multicast_message = messaging.MulticastMessage(data=data, tokens=batch)
         response = messaging.send_each_for_multicast(
             multicast_message,
             app=app,
@@ -107,6 +113,7 @@ def _deliver_push(delivery):
                 "messaging/registration-token-not-registered",
                 "messaging/invalid-registration-token",
                 "UNREGISTERED",
+                "NOT_FOUND",
             }:
                 PushDevice.objects.filter(
                     user_id=notification.recipient_id,

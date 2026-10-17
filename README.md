@@ -1,5 +1,22 @@
 # Proace Commerce
 
+Local Docker Compose workers use `CELERY_WORKER_CONCURRENCY` (default `2`) to
+bound prefork memory. Set it to `7` to restore the earlier CPU-sized pool; this
+does not change host-managed Celery defaults. See [worker memory tuning](docs/performance.md#local-celery-worker-memory).
+
+Demo seeding uses `populate_fake_data`; blog-tag changes are excluded from the
+product-specific catalog invalidation handler. Product-tag invalidation remains
+enabled. See [backend documentation](docs/backend.md).
+
+Frontend route bundles load on demand with SSR preserved; unconfigured browser
+push does not download the Firebase SDK. See [performance](docs/performance.md)
+for measured bundle reductions and verification commands. Authentication and
+private-data cache freshness are unchanged.
+
+Saved payout destinations support bank/holder/account-suffix search and default-account filtering; the API accepts `search` and `is_default` on the owner-scoped bank-account list.
+
+Payout destinations have a dedicated `/account/payout-accounts` page in My Account. Bank account and Stripe connected-account identifiers are encrypted at rest and masked in the UI; destinations are owner-scoped and support edit, deletion, and a default per destination type. Treasury withdrawal forms group amount and method together, show available funds clearly, and keep the destination and content-sized submit action within a 620px form; the destination opens a checkout-style management modal to select, add, edit, delete, or set a default bank or Stripe destination, with a link to the full payout accounts page inside the modal. Only its ID is submitted for server-side resolution. A Stripe destination records where an audited transfer request is intended to go; it does not itself execute a Stripe transfer. `/settings/bank-accounts` redirects to the My Account page. Apply migrations through `core.0024_stripepayoutdestination` before using saved Stripe destinations. Preserve the application secret key (or migrate encrypted data when rotating it). Staff directory access is limited to regular accounts; staff can change their active state but cannot inspect or change privileged accounts. Stripe payment returns confirm payment and navigate to the specific order through `/orders/stripe-return`; orders are created only after payment confirmation. Stripe Connect discards demo `acct_mock_*` placeholders and replaces accounts reported missing by Stripe; fake-data seeding never marks payouts as connected. Object storage never silently falls back when enabled dependencies are unavailable. Root browser media downloads are ignored by Git.
+
 Celery uses the worker by default, including debug mode. `CELERY_TASK_ALWAYS_EAGER=true` explicitly runs tasks inline and should be reserved for tests or deliberate local diagnostics.
 
 Catalog invalidation queues a Celery task after commit to warm the first anonymous page at the last observed backend origin. Pending warm jobs are coalesced for ten seconds; broker failures are logged without failing committed commerce changes. Warming requires the worker and Redis and retains host-specific cache keys and authoritative row checks. Apple public signing keys are shared in Redis for one hour, with forced refresh on key rotation and a five-second provider timeout. These improvements require measurements before claiming a latency gain.
@@ -12,7 +29,7 @@ Shop filters update browser history without route navigation. Filtered catalog, 
 
 Catalog responses expose the backend `visibility` flag. The product page shows the draft preview banner only for explicit `visibility: false`; missing metadata is not evidence of a draft. Hidden products return 404, and unverified-store previews require the store owner or an authorized operator, even with `?preview=1`.
 
-Shared frontend styling in `client/src/app/design-system.css` standardizes form controls, buttons, cards, dialogs, catalog typography, and ClickBank partner badges across light and dark themes. Mobile controls use readable input sizes, touch devices expose quick product actions, and reduced-motion preferences are respected.
+Shared frontend styling in `client/src/app/design-system.css` standardizes form controls, buttons, cards, dialogs, catalog typography, and ClickBank partner badges across light and dark themes. Dense actions use the reusable 12px, 36px `.button.compact` variant, including backoffice and merchant heading actions; rounded store contact actions use `.button.compact.pill`. Mobile controls use readable input sizes, touch devices expose quick product actions, and reduced-motion preferences are respected.
 
 Lifecycle tracking records JWT sign-ins, throttled authenticated user/store activity, profile/catalog revisions, cart mutations, notification reads, review edits, coupon redemptions, affiliate clicks, and order transitions. Apply the new Django migrations with `python server/manage.py migrate`; admin/account/merchant views surface the timestamps. Existing unknown activity and transition times remain unrecorded rather than being inferred.
 
@@ -79,6 +96,22 @@ python3 -m venv .venv
 .venv/bin/python server/manage.py populate_fake_data --settings=codematics.storefront_settings --password 'ProaceDemo2026!'
 ```
 
+In Docker Compose, the API applies migrations and configured default-account
+bootstrap at startup when `RUN_MIGRATIONS=true`; Celery worker and beat containers
+wait for that shared schema and never run migrations or account bootstrap.
+
+For a larger local dataset, run `populate_fake_data --scale large` (200 users,
+25 seeded stores, 500 products, 1,500 orders, and 1,100 reviews). Re-running
+adds bulk-seeded products and orders; it does not require deleting Docker
+volumes. `--clear` deletes commerce rows throughout the database, so use it
+only with disposable data. Each invocation is transactional: failures roll
+back both generated rows and any requested clear, and search indexing starts
+after commit. The command requires at least 11 users for its guaranteed
+accounts, never prints the configured seed password, and is disabled whenever
+`DEBUG=False`. Volume overrides must be positive; `--users` must include the
+11 guaranteed accounts. Seeded merchant wallets do not pretend to have a
+real Stripe Connect account. Stripe onboarding returns to merchant settings, where the backend refreshes `details_submitted` and `payouts_enabled`; enabled accounts show a connected state, submitted accounts under review show a pending state, and neither can create another onboarding link. Accounts with required details remaining can resume setup.
+
 Run the API and client in separate terminals:
 
 ```sh
@@ -96,8 +129,17 @@ Set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` / `NEXT_PUBLIC_APPLE_CLIENT_ID` in
 `server/.env` to enable real Google and Apple customer sign-in. Rebuild the
 client container after changing either `NEXT_PUBLIC_*` value because Next.js
 embeds them into the browser bundle at build time.
+Product cards, storefront media, review photos and avatars use responsive
+Next.js AVIF/WebP optimization with blurred loading placeholders for configured
+MinIO, Unsplash and Google image hosts. Product detail and opened media views
+retain the original resolution. Set `MINIO_PUBLIC_URL` before building the
+client container so its image optimizer allows the correct public media host;
+inside Docker it fetches MinIO through the internal service address. Listing
+thumbnails use reduced image quality, and generated image variants cache for
+seven days; uploaded objects use non-overwriting paths.
 Customer email verification and password-reset links print to the API terminal with the local console email backend. Staff credential issuance requires a private email backend such as Resend or SMTP.
 Set `FRONTEND_URL=http://127.0.0.1:3000` to keep email links on that exact host.
+Use `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` for normal local development and `EMAIL_BACKEND=notification.email_backend.ResendEmailBackend` for production or a temporary real-email test locally. See [email backend setup](docs/getting-started.md#email-backend-local-development-and-resend-testing) for sender requirements, environment refresh commands and switching back after testing.
 
 ## Run The Container Stacks
 
@@ -132,7 +174,7 @@ From the repository root:
 
 ```sh
 .venv/bin/python monitoring/init_local.py
-docker compose -f server/compose.yaml up --build -d api redis postgres elasticsearch
+docker compose -f server/compose.yaml up --build -d api notification-stream redis postgres elasticsearch
 docker compose -f server/compose.yaml exec api python manage.py rebuild_product_index
 ```
 
@@ -218,22 +260,25 @@ SQLite database is `server/storefront.sqlite3`; existing databases are untouched
 - Storefront with product photography, categories, deals, and Elasticsearch fuzzy search.
 - Search, category/price filters, sorting, and pagination.
 - **Product Variants**: The base product remains a selectable **Original edition**, with opt-in size, color, material, and digital-format options that apply their own price delta and inventory updates.
-- **Verified Reviews & Photos**: In-place review submission and 1–3 photo uploads exclusively for verified product purchasers, with real-time rating updates and photo gallery lightbox.
+- **Verified Reviews & Photos**: In-place reviews exclusively for purchasers, with 1–3 secure HTTPS photo URLs, real-time rating updates, and a photo gallery lightbox. The rating summary opens the reviews tab and scrolls it into view. Authors can edit/delete their reviews; store owners and backoffice staff can remove reviews. Admin edits and removals keep catalog averages synchronized.
 - **Flash Deals & Live Countdowns**: Urgency badges and real-time countdown clocks on limited-time discounts.
 - **Store Profiles & Announcements**: Dedicated merchant showcase pages with marquee announcements, pinned items, and direct "Message Store" contact actions.
 - **Seller Tier Badges**: Dynamic verification tick and rank badges (Starter 🔵, Booster ⚪, Accelerator 🟣, Power 🟢, Mega 🟠, Legendary 👑, and Official 🟡).
 - **ClickBank Affiliate & Partner Offers**: Seamless integration of external ClickBank partner products coexisting alongside native marketplace listings. Features partner badges, custom CTA labels ("Buy on Partner Site"), and transparent partner fulfillment notes. Secure outbound routing via `/api/affiliates/clickbank/outbound/<id>` attaches tracking tokens (`tid=cb_*`) and logs outbound clicks while blocking local cart checkout.
-- Saved items and persistent guest bag with automatic guest-to-account merge on sign-in.
+- Saved items and persistent guest bag with automatic guest-to-account merge on sign-in; product detail quantity reflects the desired total in the bag, adding or reducing the difference as needed. Items that fail to sync remain available for review and retry.
 - Email-verified registration, sign-in, password reset, and session management.
-- **Google & Apple Social Authentication**: Customer registration and sign-in with Google or Apple identity tokens. Google Identity Services renders its official account-selection button, with dual-theme Apple styling, strict staff/admin sign-in guardrails, and affiliate referral synchronization awarding \$25 promotional store credit to referring marketers on new customer social signups.
-- **Product Sharing & Instant Link Copy**: One-click Share button integrated into product purchase actions, rating header, and operator/merchant preview banners. Supports native Web Share API with clipboard copy fallback, dynamic "Copied!" feedback, and toast notifications across both public product pages and draft preview modes.
+- Email identities are normalized case-insensitively; reset links are single-use and invalidated when credentials change. Staff and admin accounts remain password-only.
+- **Google & Apple Social Authentication**: Customer registration and sign-in with Google or Apple identity tokens. Google Identity Services renders its official account-selection button, with dual-theme Apple styling, strict staff/admin sign-in guardrails, and affiliate referral synchronization awarding \$25 promotional store credit to referring marketers after new customer email verification.
+- **Product Sharing & Instant Link Copy**: Product detail copy controls write the listing URL to the clipboard on the first click without opening the system share sheet. They show copied feedback and a toast; product preview banners also provide link sharing.
 - Profile, personal avatars with circular 512x512 crop dialog, delivery addresses, order history, and detailed order pages.
 - **User Avatar & Photo Management**: Profile picture upload with client-side circular crop tool (`UserAvatarCropDialog`), 512x512 server validation, MinIO media persistence, managed centrally in Personal details (`/account/profile`) with instant reflection across customer account, merchant workspaces, and backoffice staff tables.
+- **Public Image Upload Protection**: User/store avatars, store branding, and product gallery images accept JPEG, PNG, and WebP up to 5 MB. The server applies EXIF orientation and removes embedded metadata before public storage, with a 40-million-pixel decode limit. Digital downloads and variants support files up to 50 MiB through the upload proxy.
 - **App Settings & Email Preferences**: Global `/settings` page supporting theme customization (Light / Dark / System) with an authenticated user section for **Email communication preferences** (opting in/out of product recommendations and promotional marketing emails via `/api/v1/me/`).
-- **Order Tracking & Dual-Theme Milestone Tracker**: Dynamic 3-stage fulfillment tracker (Confirmed, Shipped, Delivered) with WCAG-compliant high-contrast rendering across light and dark modes, and official USPS, UPS, FedEx, and DHL tracking links. Shipping service and carrier quotes are preserved in each order.
+- **Order Tracking & Dual-Theme Milestone Tracker**: Dynamic fulfillment tracker with official USPS, UPS, FedEx, and DHL links; multi-store orders show tracking for each store shipment. Shipping service and carrier quotes are preserved in each order.
+- **Address-Based Delivery Pricing**: Physical cart delivery is calculated after selecting a destination and carrier at checkout; digital delivery remains free. Multi-store quotes expose shipment-level amounts consistent with the selected delivery total.
 - **In-App Password Management**: In-dialog password updates (`/api/v1/password/change/`) verifying current passwords and enforcing secure credential hygiene.
 - **ProAce Wallet, Top-Ups & Refunds**: Integrated customer wallet balance with Stripe Checkout top-up sessions (`/api/v1/wallet/topup-session/`), 7-day physical return window with per-product claim idempotency (declined and processed items cannot be re-requested), and instant store credit refund resolution.
-- **Order Cancellation**: Self-service shopper cancellation for unfulfilled physical orders within 12 hours of placement, with atomic variant inventory restock, merchant earnings reversal, and refunds limited to actual wallet/card payments (instant digital downloads are non-cancellable).
+- **Order Cancellation**: Self-service shopper cancellation for unfulfilled physical orders within 12 hours of placement, with atomic variant inventory restock, merchant earnings reversal, and refunds limited to actual wallet/card payments. Shared order transitions also block cancellation of instant digital orders and physical orders already shipped, delivered, or picked up; post-fulfillment financial adjustments use the refund workflow.
 - **Flexible Checkout**: Supports Cash-on-Delivery, ProAce Wallet balance, and Stripe Wallet payments with transactional stock deductions and idempotent retry handling.
 
 ## Seller Experience
@@ -244,19 +289,21 @@ Visit `/merchant` after signing in:
 - **Partner Offer Configuration**: Publish ClickBank affiliate listings with direct HopLink URLs, vendor account nicknames, and custom landing CTA buttons, with automatic bypassing of physical shipping and variant restrictions. Partner listings enforce partner-controlled pricing (locking platform discounts to 0% and omitting flash sale countdowns to avoid fictitious price discrepancies).
 - **Bulk CSV Catalog Import**: RFC 4180-compliant batch upload supporting quotes, multiline values, variants, and tags.
 - **Storefront Customization**: Configure store announcement banner, banner covers, avatars, bio, and direct customer inquiry channels.
-- **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`). Official company stores automatically consolidate 100% of retail sales into Platform Treasury.
+- **Escrow & Wallet Management**: 7-day review escrow holding net sales from new orders, transparent 4% platform commission calculation, available balance release, and withdrawal requests (`/merchant/payouts`). Store-scoped withdrawals cannot spend another store's earnings; combined wallet withdrawals remain available through the unified endpoint. Stripe Connect transfers require an account whose payouts are enabled. Official company stores automatically consolidate 100% of retail sales into Platform Treasury.
 - **Official Store Ownership Separation**: Staff and administrators can operate official company stores from the merchant workspace, but official products are not serialized as a user's own seller listing in the customer catalog. Backoffice accounts see preview-only purchase controls.
-- **Order Fulfillment**: Review store-specific customer orders, assign carrier & tracking numbers, update fulfillment milestones, and trigger instant buyer notifications.
+- **Order Fulfillment**: Review store-specific customer orders, click an order reference for its detail dialog, print order details, assign carrier & tracking numbers, update fulfillment milestones, and open linked orders directly from notifications. Notification links select the owning store and open that order’s detail dialog, even when it is outside the current page. Merchant payout and earnings-ledger references open printable detail dialogs; bank and routing numbers are masked.
+- **Product Sales Counts**: The merchant product list and its CSV export show units sold for each ProAce product. Affiliate partner listing sales are marked as not tracked because purchases complete on the external partner site.
 
 ## Admin & Staff Experience
 
 Visit `/admin` (Platform Intelligence), `/admin/commission` (Platform Treasury), and `/admin/staff` (Team Administration):
+- **Staff Profiles**: Selecting a staff member's photo or name in Team Administration opens their full backoffice profile; the row's Details action remains available for a quick summary.
 - **Executive Analytics Dashboard**: Platform gross revenue, order volume, active user growth, and store fleet health across 7/30/90/365-day periods.
 - **Order Status Distribution Chart**: Visual fulfillment pipeline breakdown across order lifecycle stages.
 - **Customer Order Audit & Emergency Controls**: Centralized order management (`/admin/orders`) with status overrides, tracking inspection, and multi-dimensional filtering across order status, payment tender, and delivery courier (USPS, UPS, FedEx, DHL, Digital).
-- **Moderation & Payout Queues**: Review 7-day customer refund requests, moderate or remove abusive product reviews, and approve/reject third-party merchant payout requests (`/admin/payouts`).
-- **Platform Treasury & Commission Wallet**: Unified corporate finance ledger (`/admin/commission`) consolidating marketplace 4% fee commissions and 100% of official company store retail sales with audited withdrawal workflows.
-- **Store Moderation**: Review pending store onboardings, approve verified sellers, or suspend non-compliant stores with instant catalog cache invalidation.
+- **Moderation & Payout Queues**: Review 7-day customer refund requests, moderate or remove abusive product reviews, and approve/reject third-party merchant payout requests (`/admin/payouts`). Refund and payout decisions require an explicit action; declines and rejections require an audit reason.
+- **Platform Treasury & Commission Wallet**: Unified corporate finance ledger (`/admin/commission`) consolidating marketplace 4% fee commissions and 100% of official company store retail sales. Pending withdrawals can be completed only with a recorded external transfer confirmation or failed with a reason, which releases the reservation.
+- **Store Moderation**: Staff can inspect stores; only business and technical administrators can approve onboarding or suspend/reactivate merchant stores from the store directory or store detail page. General user activation controls cannot grant staff roles; new staff must use the verified invitation flow. Moderation updates invalidate catalog cache.
 - **Role Hierarchy & Credential Isolation**:
   - **Technical Super Admin (`is_superuser=True`)**: Password resets via UI or `manage.py recover_privileged_user` automatically sync across Django, MinIO, and Grafana via `server/core/auth_sync.py`.
   - **Business Admin (`is_business_admin=True`)**: Operators manage staff, verify stores, and review payouts; strictly isolated from infrastructure credential sync.
@@ -291,14 +338,16 @@ Run locally before staging or committing changes:
 # 1. Frontend TypeScript Validation (zero type errors required)
 npm run typecheck
 
-# 2. Frontend Unit Tests (28 tests via Node native runner)
+# 2. Frontend Unit Tests (33 tests via Node native runner)
 npm run test:unit
 
-# 3. Backend Test Suite (Django / Pytest: 409 tests; 400 passed, 9 environment-dependent skips offline)
+# 3. Backend Test Suite (Django / Pytest: 477 tests; 468 passed, 9 environment-dependent skips offline)
 .venv/bin/pytest server/
 ```
 
 ### Tier 2: Integration & End-to-End Suites (Live Dev Servers)
+The seeded technical admin may retain a custom password. Supply `E2E_TECHNICAL_ADMIN_PASSWORD` separately from `E2E_DEMO_PASSWORD` for its live role checks; never reset that account to make tests pass. Disable trace recording (`--trace=off`) when using protected account credentials.
+
 Run with the backend (`python server/manage.py runserver 127.0.0.1:8000`) and frontend (`npm run dev`) running with seeded demo data (`manage.py populate_fake_data`):
 
 ```bash
@@ -367,7 +416,7 @@ Product updates accept the existing server-generated cover URL, including local 
 
 Backoffice order-status overrides require an audit reason in the confirmation dialog. Browser commerce tests select listings and seller names from the seeded API and use ProAce Wallet checkout rather than legacy cash-on-delivery flows.
 
-The unsaved product preview displays variant options with selectable prices and images, plus the configured flash deal countdown in the product price block. Expired draft deals show an explanation instead of disappearing.
+The unsaved product preview displays variant options with selectable prices and images, plus the configured flash deal countdown in the product price block. Countdown badges stay content-sized beside price details on both the preview and product detail page. Expired draft deals show an explanation instead of disappearing.
 
 Anonymous API failures cannot clear cookies set by a concurrent successful login; authenticated failures still expire invalid sessions.
 
@@ -381,7 +430,7 @@ Time handling: Django stores timezone-aware UTC instants (`TIME_ZONE=UTC`, `USE_
 
 Military postal delivery: APO/FPO/DPO destinations use USPS only with the currently supported integrations. Checkout disables other carrier options and the server rejects unsupported carriers in both demo and live rating and payment flows. Address city/state/ZIP must agree: AA uses 340xx, AE uses 090xx–098xx, AP uses 962xx–966xx, with country United States. This is a supported-service policy, not a claim that all commercial postal handoff services are prohibited: UPS Ground Saver and Mail Innovations have military-address support but are not integrated here. See [USPS military addressing standards](https://pe.usps.com/text/dmm300/703.htm) and [UPS supported services](https://www.ups.com/us/en/support/shipping-support/print-shipping-labels/how-to-write-address). ZIP blocks alone do not guarantee an active destination or eligibility for every USPS service; live carrier availability and military mail content/customs requirements still apply.
 
-Commerce safety: split-tender checkout reserves wallet funds and records recoverable Stripe attempts with 30-minute expiry; Celery Beat retries failed refunds and releases abandoned holds. Cart lines persist variants, merchant refund debt is retained, destination sales tax is computed via a hybrid database & Stripe Tax engine, and buyer digital downloads are authenticated streams. Apply the new cart/payment migrations before running the updated app. See [audit remediation](docs/security-audit-remediation.md) for recovery behavior, import limits and verification boundaries.
+Commerce safety: split-tender checkout reserves wallet funds and records recoverable Stripe attempts with 30-minute expiry; cancellation returns reserved funds only after Stripe confirms the exact session expired, and Celery Beat retries failed refunds and releases abandoned holds. Top-up cancellation serializes against payment confirmation and leaves ambiguous or provider-unverified sessions pending. Cart lines persist variants, merchant refund debt is retained, destination sales tax is computed via a hybrid database & Stripe Tax engine, and buyer digital downloads are authenticated streams. Apply the new cart/payment migrations before running the updated app. See [audit remediation](docs/security-audit-remediation.md) for recovery behavior, import limits and verification boundaries.
 
 Commerce bug-audit fixes persist settled tender amounts, allocated coupon/tax line totals, cumulative refunds, store-scoped fulfillment, and unique wallet funding receipts. Apply `python server/manage.py migrate` before running the updated backend, then restart API/Celery processes. COD supports physical goods only and never grants paid balances or digital access. See [the remediation and verification record](docs/bug-audit-2026-10-08.md) and [backend accounting rules](docs/backend.md).
 
@@ -399,15 +448,18 @@ Store profile pages (`/shop?store=<id>`) list only that store’s products. Filt
 
 The catalog supports 29 departments shared by homepage category tiles, shop/store filters, and merchant product forms: Electronics, Fashion, Phones, Computing, Sports & outdoors, Books, Toys & games, Kids & baby, Home & living, Kitchen & dining, Beauty & personal care, Health & wellness, Pet supplies, Gaming, Tablets, Fishing, Lingerie & sleepwear, Coffee, tea & drinks, Garden & tools, Automotive, Jewelry & watches, Software & apps, Courses & learning, Templates & planners, Design assets, Photos & video, Music & audio, Business resources, Digital tools & presets. New department keys are validated by Django product choices; apply product migrations before using them. Existing product category keys are preserved.
 
-Backoffice user profiles use a compact identity card with contact and activity details, three financial summary cards, and bordered wallet, activity, and order panels. The layout stacks on smaller screens and respects the active theme.
+Backoffice user profiles use a compact identity card with contact and activity details, three financial summary cards, and bordered wallet, activity, and order panels. The layout stacks on smaller screens and respects the active theme. In customer, user, and staff directories, clicking the avatar or name opens that profile; row actions handle account status and staff access. In admin listings, store names open the dedicated store profile, while payout references, order IDs, coupon codes, refund IDs, and refund order IDs open their matching detail dialogs without duplicate Details buttons.
 
-Every digital product can have an uploaded downloadable file per variant. Merchants declare each option as Image, Audio, Video, or Document/software before upload; the server enforces that the file matches the declared option type. Digital-artwork gallery uploads and image variants are converted into watermarked carousel previews, while original downloads remain private until an authorized purchase. Completed orders use the file mapped to the option purchased.
+The backoffice store catalog audit shows tracked units sold for standard products, labels externally fulfilled partner offer sales as not tracked, and links each product name to its read-only product preview.
+
+Every digital product can have an uploaded downloadable file per variant. Merchants declare each option as Image, Audio, Video, or Document/software before upload; the server enforces that the file matches the declared option type and belongs to that product. Digital-artwork gallery uploads and image variants are converted into watermarked carousel previews, while original downloads remain private until an authorized purchase. Completed orders use the file mapped to the option purchased. Digital downloads up to 50 MiB are supported through the upload proxy.
 
 Dates across customer, merchant, and backoffice records use the shared `DateStamp` component: an unambiguous date (e.g. `10 Oct 2026`) and local 24-hour time without seconds. Table timestamps have separate columns, including Created, Updated, Last active, Requested, Processed, Valid from, and Valid to where applicable. Date fields are never stacked together or joined with slashes in a table cell. Tables scroll horizontally on narrow screens; profile activity uses aligned label/value rows. API timestamps and calendar-input timezone handling remain unchanged.
 
 Backoffice user-profile order history supports debounced reference/coupon/carrier/tracking search, status (including pickup), courier, payment method, sorting, reset, and 15-row server pagination. Profile order totals and lifetime spend remain independent of order filters.
 
 Backoffice coupon attribution displays the recorded creator’s email. Coupon creation assigns the authenticated staff/admin server-side; records without a creator show “Not recorded” rather than an assumed staff identity.
+
 
 Agent workflow: after verified implementation changes, agents automatically rebuild and recreate only the affected local Docker services (`client`, `api`, and affected `notification-worker`/`celery-beat` consumers) using Compose `up -d --build --no-deps`, then check startup and health. Documentation-only changes require no rebuild. See `AGENTS.md` for the standing authorization and service scope rules.
 
@@ -428,13 +480,15 @@ The [notification audit of 11 October 2026](docs/notification-audit-2026-10-11.m
 
 Notification remediation (11 October 2026): one canonical event identity per recipient, recipient-scoped multi-store associations, canonical categories and archived/list filters, selected-store refund reviewer routing, treasury/affiliate/review coverage, transactional inbox/outbox writes, credential outbox delivery, stable email/push queue keys and provider idempotency, shared SSE/FCM toast deduplication, and numeric order-detail links. Apply notification migrations before using the updated API and restart API, notification-worker and celery-beat together. Migration backfills do not send messages; duplicate legacy order-created notices are archived rather than deleted. Local test mode intentionally retains console email and disabled FCM; external provider delivery has not been verified. See the notification audit for channel policy and regression coverage.
 
+Store suspension and restoration notifications go to the store owner and queue browser push when that owner has a registered device. The browser waits for its Firebase service worker to activate before registering; backend delivery uses FCM registration tokens (`tokens`, not Firebase installation IDs) and removes registrations Firebase reports as not found.
+
 Customer order tracking reflects backend Pending, Confirmed, Shipped, Delivered, Picked up, Cancelled, and Refunded states. Terminal states replace the fulfillment tracker with a status notice; digital orders omit shipping. Digital orders are fulfilled electronically immediately into Delivered status upon purchase and cannot be transitioned to physical delivery statuses (shipped, picked up) or reverted from delivered in backoffice or merchant tools. Customer order lists and detail views refresh every 15 seconds while active to reflect staff changes. Cancellation and return actions retain the existing backend rules.
 
 Customer payment labels derive Paid, Awaiting payment, Partial payment, and refund outcomes from authoritative `paid_total`, `refunded_total`, and `total` amounts, rather than labelling every order as paid.
 
 Transactional email contacts use `SUPPORT_EMAIL` (default `admin@proaceintl.com`) and `ORDER_SUPPORT_EMAIL` (default `productace@proaceintl.com`), matching the storefront contacts. Sender identity uses `RESEND_FROM_EMAIL` separately. Order/refund replies go to order support; other replies go to general support. Missing contacts omit their labeled template rows.
 
-The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts the invite code visibly in an optional field. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped) and `/api/v1/admin/affiliates/` (backoffice-only).
+The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts an invite code visibly in an optional field; rewards are issued only after email verification. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit, and reward issuance is serialized per affiliate to enforce the cap under concurrent signups. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information; affiliate account, wallet, and referral routes reject backoffice accounts. Generated links can only target published products in active, verified stores and stop redirecting if a listing becomes unavailable. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped), `/api/v1/affiliates/referrals/` (owner-scoped, paginated), and `/api/v1/admin/affiliates/` (backoffice-only).
 
 Digital product onboarding & variant enhancements:
 - **Redundant Cover Photo Elimination & Auto-Cover**: For digital image products (artwork, wallpapers, photography), uploading a digital file automatically populates `product.image_url` if no custom cover was specified, removing redundant cover uploads. Custom promotional banners remain optional.
@@ -443,6 +497,12 @@ Digital product onboarding & variant enhancements:
 
 
 ### Performance benchmark validation
+
+Catalog pagination now selects ordered IDs before hydrating the 24 product graphs, supported by created/ID and category/created/ID indexes (`product.0015`). Public snapshot misses use a two-second builder lease with at most 200 ms follower waiting, retaining authoritative price/stock/visibility checks; waiting falls back to an ordinary rebuild rather than stale data. Catalog image URLs are resolved once per product per response. Elasticsearch's reusable connection pool defaults to 32 per worker (`ELASTICSEARCH_CONNECTIONS_PER_NODE`, range 1–64); fuzzy search behavior and exact totals are unchanged, and partial/timed-out results use the existing database fallback.
+
+Compose now isolates notification SSE in the internal `notification-stream` service, defaulting to one process × 32 threads (`STREAM_WORKERS` / `STREAM_THREADS`). The browser still uses `/api/notifications/stream`; Next.js routes only that exact path to `NOTIFICATION_STREAM_URL`, while authentication refresh remains on `API_URL` and shares refresh deduplication with ordinary requests. The stream process exposes only SSE and health probes, uses the same JWT/access-revocation rules, has no public port, runs no migrations, and uses a separate metrics directory. API threads remain at 2 × 32 until workload tests justify changing them. Start/rebuild the stream service with the API; non-Compose development can leave the stream URL unset to retain the single-process path. See [performance](docs/performance.md) and [deployment](docs/deployment.md).
+
+Authenticated stream contention testing confirmed that the reduced 2-process/8-thread candidate is not a safe global default: with 20 requested notification streams it established at most 13 and timed out 51 of 1,099 catalog requests; the default 2-process/32-thread configuration established all 20 and completed 974 requests without errors. The default is retained. This local test exercised Redis-backed streams and dependency I/O, not live carrier providers or production capacity. See [performance guidance](docs/performance.md) for scope and limitations.
 
 Catalog responses load specifications in the product query and aggregate seller earnings once per response. This keeps catalog database query counts bounded as product and store counts grow, while retaining current tiers, ownership checks, and the existing 24-item page contract.
 
@@ -470,6 +530,14 @@ Catalog review counts use a scalar subquery so page totals do not group the full
 
 Anonymous catalog pages use a short-lived Redis-backed shared snapshot (`PUBLIC_CATALOG_CACHE_SECONDS=15`, range 0–60; 0 disables). Runtime Django cache is Redis-only; local development defaults to `redis://127.0.0.1:6379/0`, containers use Compose Redis, and cache connection failures surface instead of silently falling back to uncached catalog responses. Warm snapshots perform two lightweight database checks instead of fetching and serializing the model graph. Every hit rechecks current product visibility, active/verified store status, ownership, price, discount, stock and variants. Model, image, specification, review, tag and earnings changes invalidate after commit, with store timestamps covering missed Redis invalidations. Earnings-related timestamps update after commit to avoid adding Store row locks to financial transactions. Authenticated, transactional and search requests bypass snapshots; checkout retains authoritative database validation. Bulk changes that skip model signals and explicit invalidation can leave metadata, page membership and totals stale until the bounded TTL; use model saves or `invalidate_product_cache()` for such writes. Load reports record HIT/MISS/BYPASS counts and describe their mixed warm/uncached workload.
 
+Repeated empty catalog-filter pages are cached independently, and the Redis warm lock remains held until the background warm finishes. Product, image, tag, and store-visibility model changes clear the legacy product response cache after commit. Elasticsearch product indexing and deletion run as Celery tasks after commit so external search requests do not hold up merchant writes; search results may reflect a recent edit after the worker processes its queue.
+
+Anonymous, nontransactional Elasticsearch searches explicitly opt into the shard request cache (`SEARCH_REQUEST_CACHE_ENABLED=true`; set false to compare or disable). This caches only ID/count search results and invalidates at Elasticsearch refresh; Django still hydrates current database records for every response, including current ownership, visibility, price, stock and variants. Authenticated and transactional requests do not opt in. No additional Redis search-response TTL is introduced, fuzzy matching and exact total-hit counting are unchanged, and search requests omit unused Elasticsearch document sources. Indexing remains eventually consistent; the cache does not make search totals transactionally current.
+
+API responses expose a generated `X-Request-ID` and bounded `Server-Timing` durations (`app`, `db`). The same-origin proxy forwards only validated diagnostics plus `X-Catalog-Cache`, appending an inclusive `proxy` duration (not proxy-only overhead). Internal request logs include bounded catalog `stage_durations_ms`, with corresponding OpenTelemetry spans when tracing is enabled. See [performance guidance](docs/performance.md) for measurement boundaries and worker/thread trials.
+
+Cached landing and product payloads prefetch images and tags and aggregate wishlist counts in the product query. Serializer methods use an annotated count without evaluating an unnecessary per-product fallback query.
+
 USPS live rating uses HTTPX async I/O with one bounded three-connection pool: authenticate once, then request Ground Advantage, Priority Mail and Priority Mail Express concurrently. Failure cancels sibling requests before closing the pool and returns a sanitized shipping error without invented rates. Other carriers retain their existing adapters. Tests use mock transports; live carrier latency and credentials are not established by these tests.
 
 The API runs two Gunicorn processes with 32 request threads each by default. Async USPS calls are bridged into the synchronous request stack; the request thread waits while network operations overlap. Celery already runs background work in separate processes. Async is appropriate for independent network waits; CPU-heavy work needs process workers, and checkout/payment/inventory transactions stay synchronous and atomic. A full ASGI migration would also require async-compatible middleware/authentication, native async I/O, database connection-pooling review, and benchmarks; merely changing `def` to `async def` does not provide that migration. See [Django async guidance](https://docs.djangoproject.com/en/5.2/topics/async/) and [HTTPX async clients](https://www.python-httpx.org/async/).
@@ -478,8 +546,137 @@ The API runs two Gunicorn processes with 32 request threads each by default. Asy
 
 Product-page interaction hooks, including share-link feedback state, are initialized before loading/error returns. This keeps hook order stable when asynchronous catalog data arrives and prevents the product page from crashing during guest browsing and checkout.
 
-Collection refetches retain visible results and controls while a compact, accessible spinner indicates that fresh data is loading in shopper search, seller, store, backoffice, and notification listings.
+Collection refetches retain visible results and controls while a compact, accessible spinner indicates that fresh data is loading in shopper search, seller, store, backoffice, and notification listings. The staff user directory reserves space for active-filter controls so filtering does not shift results on mobile.
 
-Elasticsearch search reuses one thread-safe client and its persistent connection pool per process instead of creating a client for every request. Forked workers reset the inherited client and lock; configuration changes replace the local pool. Search still queries Elasticsearch for current IDs/counts and retains the existing database fallback. This is connection reuse, not caching search results or an ASGI migration. See [the official Python client's connection/thread guarantees](https://github.com/elastic/elasticsearch-py).
+Catalog full-text search spans product title, brand, category, tags, and description. Multiword searches require all terms; Elasticsearch ranks title and brand matches higher and applies fuzzy matching. Searches shorter than three characters use database substring matching so a query like `k` can find `k` inside a product word; longer searches use Elasticsearch with a database fallback when it is unavailable. Product saves/deletes sync through signals, and store status or verification changes reindex the store's products after commit so public search eligibility stays current. Repair an older stale index with `python server/manage.py rebuild_product_index`. Elasticsearch search reuses one thread-safe client and its persistent connection pool per process; forked workers reset inherited clients and configuration changes replace the local pool. See [the official Python client's connection/thread guarantees](https://github.com/elastic/elasticsearch-py).
 
 The backoffice overview shows pending merchant payouts, recent requests with detail dialogs, and the affiliate/referral board directly below the summary cards. Payout details remain available for pending, completed, and rejected requests. Authorized staff, business administrators, and technical administrators can inspect, complete, or decline pending requests from the list or details dialog. Account and routing numbers show only their first two and last two characters; legacy last-four-only values show only their final two characters. Approval initiates a Stripe Connect transfer. Bank transfers are sent outside the app and must be confirmed before marking the request completed.
+
+Store creation includes optional store profile picture and Store label (banner/cover) uploads with cropping and previews. JPEG, PNG, and WebP images up to 5 MB use the existing protected branding endpoints after the store is created. Failed image uploads can be retried without creating another store. Creating an additional store selects it before opening the first-product editor. Creating a merchant's first store also initializes their unified merchant wallet in the same transaction; later stores share it. Stripe Express account IDs are committed before onboarding-link creation, so a temporary link failure can be retried against the same account.
+
+Notification operations: see [worker settings and troubleshooting](docs/getting-started.md#notification-worker-settings-and-troubleshooting) and [local-to-production transition](docs/deployment.md#transitioning-notifications-from-local-to-production), including sender verification, effective backend checks, scheduler startup and production Compose environment wiring. Push retries are scoped to devices still registered to the notification recipient, so a token moved to another account will not receive the prior account's queued notice.
+
+All example environment files include fictional format samples. Follow [the example environment guide](docs/getting-started.md#reading-the-example-environment-files) to replace them with real credentials or clear unused integrations before running the app.
+
+Social signup imports a missing Google profile image from the verified credential into configured media storage (MinIO/S3 when enabled), preserving user-selected avatars. When tokeninfo omits the picture, the accepted ID token supplies that claim after provider verification. Google/Apple sign-in with an empty phone number prompts for a phone number and saves it through the authenticated profile endpoint before continuing; existing phones are preserved. Referral codes from the signup field, URL or remembered auth-page referral remain attached to new social signups only; existing-account logins do not create or reassign referrals. A missing Google image or unavailable image service does not block authentication and is retried on the next sign-in while the avatar remains empty.
+
+Logout immediately aborts pending API requests and cancels account queries before push cleanup or server revocation. The proxy propagates cancellation to backend and refresh requests so a late token-refresh response cannot restore auth cookies. It expires both root-path auth cookies even when Django returns its empty HTTP 204 logout response, updates the observed session query to an anonymous value, and removes other cached account data without detaching the session observer. Unauthorized profile responses clear the displayed identity instead of retaining a previous signed-in greeting.
+
+Customers can manage Google/Apple connections and password sign-in in profile/settings. Provider subjects resolve to a single account, verified matching emails link existing customer profiles, and disconnect preserves at least one login method. See [social account linking](docs/social-account-linking.md) for the schema, authenticated API routes, legacy account migration, security rules and frontend flow.
+
+Settings use compact expandable sections for appearance, browser alerts, optional email preferences and sign-in methods. Signed-in users can enable or disable push alerts for the current device in App Settings or the backoffice notification menu; both controls stay synchronized and wait for the Firebase service worker to activate before registering the device. Unsupported browsers and blocked permissions are explained in the UI. Authentication pages remain viewable while signed in, with email/password above horizontal Google/Apple alternatives. Sign-in and registration controls are disabled during session loading or an active session; an explicit sign-out action permits account switching. The backend rejects login, registration and public social sign-in attempts carrying a valid current session with HTTP 409, while expired/revoked credentials can recover through normal sign-in. Existing authentication throttling remains active. Password recovery and authenticated provider linking remain available.
+
+Treasury destination selectors keep bank and Stripe account management available even when no default is selected or no accounts are saved. Choose account opens the selector; empty states stay inside it, with compact add/manage actions and edit/default/delete controls for saved accounts.
+
+Treasury withdrawal references expose a hover/focus summary and open a printable details dialog. The Payout accounts page uses explicit default badges and compact per-account Actions menus for editing, deleting, and setting the default.
+
+Saved bank and Stripe account lists share a compact filtering toolbar: debounced search with field-specific placeholders, default-account selection, recent/name sorting, matched counts, and a conditional Clear filters action. Filtering uses the complete owner-scoped saved collection.
+
+Bank account list requests return both default and non-default accounts when `is_default` is omitted. The default-account filter is applied only when explicitly supplied; switching a default remains visible after list refresh.
+
+Payout account actions prevent overlapping mutations and report successful default/deletion changes. Pickers discard selections that disappear from refreshed account lists. Unified merchant payout history applies search, status, method, date and amount criteria before pagination, with deterministic creation/ID ordering.
+
+Merchant bank-transfer payout requests require an owner-scoped saved bank account or legacy bank-name/account-number details before reserving funds. Bank account IDs are rejected for other payout methods.
+
+Open payout-account Actions menus layer above neighboring account controls so Edit/Delete/Set default remain clickable in multi-account lists.
+
+Merchant payout requests use the treasury-style compact amount/note form and shared bank destination picker. Change/Choose account opens the saved-account management popup instead of embedding full account cards in the withdrawal form. Saved bank accounts are user-provided destinations, not independently bank-verified accounts.
+
+Merchant escrow settlement locks ledger rows explicitly (`FOR UPDATE OF self`) so nullable order joins work on PostgreSQL; wallet balances remain protected by separate row locks. The API and Celery consumers must be refreshed when this shared service changes.
+
+Store dashboards expose `withdrawable_balance`, capped by both the store’s cleared funds and the unified wallet after pending/completed payouts. Merchant payout controls use that amount. Repeated fake-data seeding preserves existing payout debits and does not generate another automated demo payout for the same wallet.
+
+
+### Notification record navigation
+
+Notification actions use recipient-scoped destinations and contextual labels for orders,
+refunds, payouts, stores, wallet, referrals, and account notices. Admin orders/refunds/payouts
+and merchant payouts/earnings consume `order`, `refund`, `payout`, or `ledger` query IDs to
+open their existing detail dialogs. Buyer orders retain their dedicated detail page;
+stores/accounts/wallet/referrals open their existing relevant page. Closing a notification
+dialog clears its record query parameter. Unavailable records show a clean access/unavailable
+message and leave the listing usable.
+
+Dialog resolution uses a separate, user-keyed request with `record_id`, `limit=1`, and
+`offset=0`, independent of listing search, filters, and pagination. `record_id` is a positive
+integer accepted by shared filtered listing endpoints and admin order/refund listings;
+existing endpoint permissions and tenant ownership still apply. Saved notification payloads
+are resolved through the current routing policy when serialized and when push is dispatched,
+so legacy list-only URLs do not require database reseeding or a notification resend.
+
+
+### Backoffice store order history
+
+`/admin/stores/<id>` includes a Store orders section with independent debounced
+search, status/carrier/payment filters, sorting, reset, counts, pagination and the
+existing order detail dialog. The shared admin order endpoint accepts a positive
+`store_id` and filters before pagination. Immutable item snapshots define store
+membership, with fulfillment associations and an empty-snapshot legacy cart fallback.
+Mixed orders appear for each participating store; displayed totals and emergency
+status actions apply to the complete customer order, as labeled. Migration
+`payment.0021_order_items_store_gin` adds a PostgreSQL GIN index for snapshot store
+membership (SQLite uses its test-compatible index implementation). Existing backoffice
+permissions apply; this does not grant access to third-party merchant dashboards.
+
+
+### Backoffice store payments
+
+Admin store detail pages include store financial totals, payout history and an earnings
+ledger with detail dialogs. The summary uses the existing store financial calculation;
+filters apply to histories independently of the all-time summary. Each history has its
+own debounced search, status/type/method/date/amount filters, reset, count and pagination.
+`GET /api/v1/admin/staff/stores/<id>/financials/` returns the typed financial summary;
+`GET /api/v1/admin/staff/stores/<id>/ledger/` returns filtered, paginated store ledger
+entries. The existing `/api/v1/admin/staff/payouts/?store_id=<id>` endpoint scopes payout
+history to that store before filtering and pagination. Unallocated merchant-wallet payouts
+are not attributed to individual stores. These endpoints retain backoffice permissions
+and do not grant merchant-dashboard access or submit financial transactions.
+
+
+The admin dashboard Refund operations preview uses a full-width, horizontally scrollable
+refund table: refund/order links open their detail dialogs, with customer, amount, method,
+status, reason, created date and existing approve/decline actions in separate columns.
+The preview retains the latest five requests; View all refunds opens the searchable,
+filterable full history. Styling uses shared table, button and status primitives in both themes.
+
+
+The dashboard operations previews are stacked at full width: Refund operations first,
+then Coupon operations. Coupons use a scrollable table with code/detail link, discount,
+usage, status, validity dates, creator email and existing toggle/delete controls.
+Used-coupon deletion protection and the full searchable coupon history are unchanged.
+Backoffice refund listings (overview and full history) and refund detail dialogs show the processing staff or administrator's email under “Processed by” after an action. Attribution comes from the backend's recorded refund processor; pending or older records without a processor show no invented identity. This field is exposed only through the existing backoffice refund serializer and access controls.
+App-wide audit fixes (2026-10-15): merchant order history resolves recorded snapshot/fulfillment membership, with live-cart fallback for legacy records. Merchant shipment events are store-scoped; delivery addresses appear only for that store's physical items. Digital download links include an encoded `variant` selector when required and resolve only purchased order lines; legacy single-item links remain supported. Guest physical carts display “Calculated at checkout” and keep totals limited to item costs until the backend quotes delivery. Failed refund attempts retain the operator email, timestamp and reason, while customer/backoffice payloads use safe failure text, including for older failed records. Malformed password-reset identifiers return validation errors. The security runner requires expected live response statuses, uses the current protected routes, treats unreachable probes as failures and exits nonzero on failure. Run `.venv/bin/pytest scripts/qa/test_security_reports.py` for offline runner regressions in addition to the standard test suites.
+The security runner, its offline regression tests and shared report helper are explicitly exempted from the local `scripts/` ignore rule so their fixes can be versioned; generated `qa-reports/` output remains ignored.
+Order-list latency optimization (2026-10-15): customer and merchant histories batch related refunds and fulfillments per page, and snapshot-backed merchant orders avoid current-cart reads. Query counts remain bounded as page size grows, without shared caching of private data. See [latency and query performance](docs/performance.md) for the offline regression command and live-measurement limits.
+
+
+Checkout address dialogs use the shared address form in embedded mode, without a
+second card or repeated heading. Address rows share label/input/error tracks to keep
+controls aligned when labels or validation messages wrap, and stack on narrow screens.
+Standalone address forms retain their heading and card; both modes use theme tokens.
+
+The dedicated notification-stream image installs `server/requirements-stream.txt`
+and returns database connections to a PostgreSQL pool capped at four physical
+connections per stream worker (three-second acquisition timeout). Non-Compose
+dedicated stream deployments must install this extra dependency as well.
+
+Guest cart and saved-item persistence is optional: blocked/full browser storage
+keeps the active in-memory session usable. Public catalog GETs can recover
+anonymously from refresh-service transport or parsing failures without clearing
+still-valid refresh cookies; private reads and writes never receive that fallback.
+Malformed affiliate product paths return 404, malformed review moderation IDs
+return 400, and listing end dates must be earlier than `9999-12-31`. See
+[frontend](docs/frontend.md) and [backend](docs/backend.md) for regression coverage.
+
+
+Signed-out visitors to `/orders/<id>` are redirected to `/login?next=...` after the
+session check, then returned to that order after authentication. A signed-in viewer
+without access sees an unavailable-order message with Your orders and an explicit
+Switch account action. Switching uses normal logout before opening sign-in and retains
+the order return path. Missing and inaccessible orders share the same safe 404 response;
+no owner identity is revealed. Expired-session 401s return to sign-in, while other order
+loading failures show a generic retry message without exposing backend internals.
+
+The customer order detail header centers the order status above the Print receipt action, with consistent spacing on desktop and mobile.
+
+Order refund forms use compact item rows with separate titles, quantities and amounts, theme-aware separators, and wrapping actions. The shopping action is hidden while a refund request is being edited.

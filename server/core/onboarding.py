@@ -10,6 +10,7 @@ from django.core import signing
 from django.db import transaction
 from rest_framework.exceptions import ValidationError
 from core.models import User
+from core.auth_tokens import credential_version_token_generator
 from notification.delivery import queue_email_delivery
 from utils.functions import send_mail as send_html_mail
 
@@ -83,12 +84,11 @@ def activate_staff(token: str) -> User:
     user.credential_version += 1
     user.save(update_fields=['is_active', 'staff_email_verified', 'must_change_password', 'staff_invitation_secret', 'credential_version'])
 
-    from django.contrib.auth.tokens import default_token_generator
     from django.utils.encoding import force_bytes
     from django.utils.http import urlsafe_base64_encode
 
     uid = urlsafe_base64_encode(force_bytes(user.pk))
-    reset_token = default_token_generator.make_token(user)
+    reset_token = credential_version_token_generator.make_token(user)
     reset_url = f'{settings.FRONTEND_URL}/reset-password?uid={uid}&token={reset_token}'
 
     # Notify staff member to set their permanent password via the reset flow

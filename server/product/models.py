@@ -145,6 +145,12 @@ class Product(DatesMixin):
         help_text='List of product variant options (e.g. size, color, stock, price delta).',
     )
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['-created', '-id'], name='catalog_created_id_idx'),
+            models.Index(fields=['category', '-created', '-id'], name='catalog_category_page_idx'),
+        ]
+
     @property
     def sale_price(self) -> str:
         if self.product_type == self.PRODUCT_TYPE_AFFILIATE_CLICKBANK:

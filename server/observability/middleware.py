@@ -9,6 +9,7 @@ from opentelemetry.trace import SpanKind, StatusCode
 from .logging import request_context
 from .metrics import DB_DURATION, DB_QUERIES, DURATION, INFLIGHT, REQUESTS
 from .tracing import tracer
+from .stages import request_stages
 
 logger = logging.getLogger('codematics.requests')
 EXCLUDED = {'/metrics/', '/health/live/', '/health/ready/', '/health/status/'}
@@ -53,6 +54,8 @@ class ObservabilityMiddleware:
                                               record_exception=False, set_status_on_exception=False) as span:
             trace_id = span.get_span_context().trace_id
             token = request_context.set({'request_id': request_id, 'trace_id': f'{trace_id:032x}' if trace_id else None})
+            stages: dict[str, float] = {}
+            stages_token = request_stages.set(stages)
             INFLIGHT.inc()
             try:
                 with ExitStack() as stack:
@@ -61,6 +64,10 @@ class ObservabilityMiddleware:
                     result = self.get_response(request)
                 status = result.status_code
                 result['X-Request-ID'] = request_id
+                result['Server-Timing'] = (
+                    f'app;dur={(perf_counter() - started) * 1000:.2f}, '
+                    f'db;dur={sql_seconds * 1000:.2f}'
+                )
                 return result
             finally:
                 elapsed = perf_counter() - started
@@ -84,5 +91,7 @@ class ObservabilityMiddleware:
                     'route': route, 'path': request.path, 'method': method, 'status_code': status,
                     'duration_ms': round(elapsed * 1000, 3), 'db_queries': queries,
                     'db_duration_ms': round(sql_seconds * 1000, 3),
+                    'stage_durations_ms': {name: round(value, 3) for name, value in stages.items()},
                 })
+                request_stages.reset(stages_token)
                 request_context.reset(token)

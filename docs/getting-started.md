@@ -45,7 +45,10 @@ Open <http://127.0.0.1:3000>. The client calls the Django API at
 
 The dev password above is for local seeded accounts only. `populate_fake_data` is
 refused when `DJANGO_DEBUG=false`; do not use demo credentials or template
-secrets in deployed environments.
+secrets in deployed environments. A seed run is atomic, requires at least 11
+users for its guaranteed accounts, and never prints the password. If a step
+fails, its generated rows and a requested `--clear` are rolled back together.
+The catalog search index is rebuilt after the database transaction commits.
 
 ### Seeding & Demo Data
 - **Authoritative Seeding (`populate_fake_data`)**: The single command to populate the local environment. It always creates all essential role profiles (`admin@proace.local`, `business-admin@proace.local`, `staff@proace.local`, `seller@proace.local`, `shopper@proace.local`) along with a full catalog, reviews, orders, and financial escrow balances.
@@ -55,10 +58,84 @@ secrets in deployed environments.
 - **Reindexing Search (`rebuild_product_index`)**: Rebuilds the Elasticsearch catalog index (`commerce-products`).
   *(See [Backend Engineering](backend.md#management-commands--data-seeding) for full flag descriptions and Docker commands).*
 
-Email delivery uses Resend: set
-`RESEND_API_KEY` and a Resend-verified `RESEND_FROM_EMAIL` in `server/.env` when
-you want local flows to send real messages. Tests use an in-memory backend and
-do not send email.
+### Email backend: local development and Resend testing
+
+Keep normal local development on the console backend in `server/.env`:
+
+```dotenv
+EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+```
+
+To test real Resend delivery locally, temporarily replace that value with:
+
+```dotenv
+EMAIL_BACKEND=notification.email_backend.ResendEmailBackend
+```
+
+Set `RESEND_API_KEY` to your actual key and `RESEND_FROM_EMAIL` to a sender on
+your Resend-verified domain. Keep secrets out of Git. This setting sends real
+emails even when Django runs locally. Trigger a normal email flow with a test
+recipient you control, then check both Resend delivery status and the recipient's
+inbox; rendering a template or creating an outbox row alone does not verify delivery.
+
+After changing `server/.env`, recreate the affected Compose services from the
+repository root so their environment is refreshed (a plain restart is insufficient):
+
+```sh
+docker compose -f server/compose.yaml up -d --no-deps --force-recreate api notification-worker celery-beat notification-stream
+```
+
+For processes running directly on your host, stop and restart the API, worker and
+scheduler instead. Switch `EMAIL_BACKEND` back to the console value after the local
+test and recreate/restart those processes again. Console email output appears in
+the process handling delivery, normally the notification worker for queued email.
+Staff credential issuance requires a private backend and cannot use console mail.
+
+Production should explicitly use `notification.email_backend.ResendEmailBackend`
+with its own API key and verified sender. If `EMAIL_BACKEND` is omitted, the app
+selects Resend when `RESEND_API_KEY` is present or debug mode is off; otherwise it
+uses console mail. An explicit console setting overrides that automatic selection,
+even when a real key is configured. Tests use an in-memory backend and do not send
+email.
+
+### Notification worker settings and troubleshooting
+
+The API creates inbox/outbox records; `notification-worker` sends queued email and
+push. `celery-beat` schedules recovery of pending or abandoned deliveries. All three
+must use the intended environment. Updating the API alone can leave the worker on
+console mail, even though the API reports Resend.
+
+| Setting | Local default / purpose | Production requirement |
+| --- | --- | --- |
+| `EMAIL_BACKEND` | Explicit console backend for ordinary development | `notification.email_backend.ResendEmailBackend` |
+| `RESEND_API_KEY` | Required only for a real email test | Actual production Resend key |
+| `RESEND_FROM_EMAIL` | Actual sender for real email tests | Address on a Resend-verified domain |
+| `FRONTEND_URL` | `http://127.0.0.1:3000` | Public HTTPS storefront origin |
+| `CELERY_BROKER_URL` | Compose sets `redis://redis:6379/1` | API, worker and scheduler share the same broker |
+| `CELERY_WORKER_CONCURRENCY` | Local Compose defaults to `2` | Prefork children for `notification-worker` only; use `7` for the previous pool size |
+| `NOTIFICATION_DELIVERY_MAX_ATTEMPTS` | `8` | Bounded retries; adjust only deliberately |
+| `NOTIFICATION_DELIVERY_STALE_SECONDS` | `300` | Recovery threshold for abandoned work |
+| `FCM_ENABLED` | `false` | Enable only after Firebase credentials/configuration are ready |
+
+Check the effective backend in both running containers without printing API keys:
+
+```sh
+docker compose -f server/compose.yaml exec -T api python manage.py shell -c 'from django.conf import settings; print(settings.EMAIL_BACKEND)'
+docker compose -f server/compose.yaml exec -T notification-worker python manage.py shell -c 'from django.conf import settings; print(settings.EMAIL_BACKEND)'
+docker compose -f server/compose.yaml ps api notification-worker celery-beat notification-stream
+```
+
+A valid Resend key does not verify the sender domain. If Resend rejects the sender,
+complete domain verification in the Resend dashboard or select a sender on an
+already verified domain. Apply any changed environment to all three services.
+Pending deliveries retry until the configured limit; failed deliveries need a
+controlled retry after the cause is corrected. Messages marked `sent` through
+console mail do not resend automatically when switching to Resend. Resend acceptance
+also does not establish inbox delivery: check provider delivery events and the inbox.
+Avoid repeatedly toggling store status just to trigger another email.
+
+See [transitioning notifications to production](deployment.md#transitioning-notifications-from-local-to-production)
+for deployment environment handling and release checks.
 
 ## Run with containers
 
@@ -153,3 +230,22 @@ Optional PostgreSQL race verification uses `codematics.postgres_test_settings` a
 The audit regressions include three concurrent-request tests that skip on SQLite. Run the mandatory offline suites normally, then run this optional suite to verify PostgreSQL row locking. Apply all Django migrations before testing the live app.
 
 Live wallet-checkout browser tests require a funded seeded `shopper@proace.local` account. Successful checkout tests cancel their own orders afterward to restore inventory and wallet funds. On a slow development frontend, authentication, placement and preview assertions allow up to 30 seconds; per-test execution can be raised with Playwright `--timeout=120000`.
+
+### Reading the example environment files
+
+`client/.env.example`, `server/.env.example` and `deploy/hostgator/.env.example`
+contain fictional values to show each setting's expected shape. They are format
+references, not working credentials. Replace all `FAKE`/`REPLACE` values before
+using a provider; clear unused provider keys and social IDs for offline development
+so their presence does not make unavailable integrations appear configured. Keep
+local email on console and `FCM_ENABLED=false` until real credentials are ready.
+
+Firebase browser values come from the web app configuration; the VAPID value is
+the public Web Push certificate key. Backend `FIREBASE_CREDENTIALS_JSON` requires
+the entire downloaded service-account JSON on one quoted line, preserving `\n`
+inside the private key. The example private key is intentionally invalid. Google
+web OAuth client IDs end in `.apps.googleusercontent.com` and must match in both
+applications; Apple uses the configured Services ID. Carrier and payment samples
+must be replaced with credentials issued by those providers. Never copy test Stripe
+keys to production: use the production account's live keys there. Use your actual
+verified Resend sender and unique production secrets, not example account details.

@@ -336,13 +336,13 @@ class NotificationApiTests(TestCase):
         send_result = SimpleNamespace(
             success_count=1,
             responses=[
-                SimpleNamespace(success=True, exception=None),
                 SimpleNamespace(
                     success=False,
                     exception=SimpleNamespace(
-                        code="messaging/registration-token-not-registered",
+                        code="NOT_FOUND",
                     ),
                 ),
+                SimpleNamespace(success=True, exception=None),
             ],
         )
 
@@ -363,7 +363,39 @@ class NotificationApiTests(TestCase):
         self.assertIsNone(message.notification)
         self.assertEqual(message.data["recipient_id"], str(self.user.pk))
         self.assertEqual(message.data["url"], "/account/orders")
-        self.assertEqual(set(message.fids or message.tokens), {"expired-token", "valid-token"})
+        self.assertIsNone(message.fids)
+        self.assertEqual(set(message.tokens), {"expired-token", "valid-token"})
+
+    @override_settings(FCM_ENABLED=True, FIREBASE_PROJECT_ID="test-project")
+    def test_push_retry_does_not_send_to_device_reassigned_to_another_account(self):
+        notification = create_notification(
+            recipient=self.user,
+            verb="private account update",
+            description="This update belongs to the original account.",
+        )
+        delivery = NotificationDelivery.objects.create(
+            channel=NotificationDelivery.CHANNEL_PUSH,
+            notification=notification,
+            recipient=self.user,
+            metadata={"pending_tokens": ["reassigned-token", "current-token"]},
+        )
+        PushDevice.objects.create(user=self.staff, token="reassigned-token")
+        PushDevice.objects.create(user=self.user, token="current-token")
+        send_result = SimpleNamespace(
+            success_count=1,
+            responses=[SimpleNamespace(success=True, exception=None)],
+        )
+
+        with (
+            patch("firebase_admin.get_app", return_value=object()),
+            patch("firebase_admin.messaging.send_each_for_multicast", return_value=send_result) as send,
+        ):
+            result = deliver_notification_task.run(delivery.pk)
+
+        self.assertEqual(result["status"], NotificationDelivery.STATUS_SENT)
+        message = send.call_args.args[0]
+        self.assertIsNone(message.fids)
+        self.assertEqual(message.tokens, ["current-token"])
 
     def test_full_text_search_filters_notifications(self):
         create_notification(

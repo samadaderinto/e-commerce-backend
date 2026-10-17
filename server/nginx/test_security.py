@@ -16,6 +16,13 @@ import unittest
 ROOT = Path(__file__).resolve().parent
 
 
+class UploadProxyConfigurationTests(unittest.TestCase):
+    def test_proxy_accepts_backend_maximum_digital_upload_size(self) -> None:
+        configuration = (ROOT / 'nginx.conf').read_text()
+        self.assertRegex(configuration, r'client_max_body_size\s+(?:5[0-9]|[6-9][0-9])m;')
+        self.assertRegex(configuration, r'client_body_timeout\s+(?:[6-9][0-9]|[1-9][0-9]{2,})s;')
+
+
 class Backend(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)

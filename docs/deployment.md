@@ -5,6 +5,12 @@ Shared hosting is not supported because the application requires Docker,
 long-running worker processes, PostgreSQL, Redis, Elasticsearch, and the
 observability services.
 
+Set `CELERY_WORKER_CONCURRENCY` explicitly in the production environment after
+capacity testing. The deployment helper reuses `server/compose.yaml`, whose
+default pool is 2 for the measured local memory profile; it is not a production
+throughput guarantee. See [worker memory tuning](performance.md#local-celery-worker-memory)
+for measurements and the seven-process rollback example.
+
 The production topology is:
 
 - Caddy on ports 80/443, with automatic TLS for
@@ -201,3 +207,65 @@ and [carrier setup and checkout API](shipping-integrations.md).
 Apply the new core, store, and payment migrations before starting this version.
 Staff/admin accounts use operational workspaces and cannot shop. Grafana requires
 technical-admin credentials; anonymous access is disabled.
+
+Email backend selection: use `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` for normal local development; use `EMAIL_BACKEND=notification.email_backend.ResendEmailBackend` for production or temporary local delivery testing. An explicit console backend overrides a configured Resend key. See [local and production email setup](getting-started.md#email-backend-local-development-and-resend-testing) for verified sender requirements, recreating services after environment changes, and returning to console mode.
+
+## Transitioning notifications from local to production
+
+1. Keep normal local development explicitly on console mail in `server/.env`.
+   For a temporary local Resend test, use the Resend backend, an actual API key,
+   and a verified sender; recreate API, worker and scheduler together. Restore
+   console mode afterward. See [worker settings](getting-started.md#notification-worker-settings-and-troubleshooting).
+2. Verify the intended sender domain in Resend before enabling production sends.
+   Set `EMAIL_BACKEND=notification.email_backend.ResendEmailBackend`,
+   `RESEND_API_KEY` and `RESEND_FROM_EMAIL` in the protected production environment.
+   Set `DJANGO_DEBUG=false` and `FRONTEND_URL` to the public HTTPS storefront so
+   email links point to production. Use production credentials and a production
+   database/broker; do not deploy the local demo database or run demo seeding.
+3. Account for the current Compose environment wiring: `--env-file
+   deploy/hostgator/.env` supplies Compose interpolation, while the backend services
+   also load `server/.env` as their container `env_file`. `EMAIL_BACKEND` and
+   `RESEND_FROM_EMAIL` currently come from that container env file, not explicit
+   Compose environment mappings. Ensure the **production host's `server/.env`**
+   contains the intended production backend and sender as well; a local console
+   setting there will override automatic Resend selection. Keep both files private,
+   untracked and permission-restricted. Do not copy a developer's local environment
+   unchanged to the production host. Declare shared values once in the production
+   environment and reference them through variable substitution where appropriate.
+4. Follow the deployment procedure above, apply migrations through the API, and
+   explicitly start/recreate the notification worker and scheduler. The current
+   `deploy.sh` starts API and worker but does not start `celery-beat`; run the
+   following additional command on the production host from the repository root:
+
+   ```sh
+   docker compose --env-file deploy/hostgator/.env -f server/compose.yaml up -d --no-deps --force-recreate api notification-worker celery-beat notification-stream
+   ```
+
+   This refreshes environment settings without removing infrastructure or volumes.
+   Environment-only changes do not require an image rebuild. For application code
+   updates, rebuild the affected services before recreation. Run one scheduler for
+   this broker/environment to avoid duplicate periodic dispatch.
+5. Verify the effective email backend in both API and worker using the commands
+   in the worker guide, adding `--env-file deploy/hostgator/.env` after `docker compose`.
+   Check container status, worker readiness and scheduler recovery logs. Send a
+   controlled email through a normal application flow to a recipient you control;
+   check outbox status, Resend delivery events, links and the actual inbox. Do not
+   interpret a historical console `sent` record as live delivery. Retry historical
+   failed/console-completed messages only deliberately after configuration is fixed.
+6. Keep `FCM_ENABLED=false` if email is the only channel being enabled. To enable
+   browser push, configure `FIREBASE_PROJECT_ID`, backend Firebase credentials and
+   the existing frontend Firebase configuration, rebuild the client when its build
+   configuration changes, then test recipient permissions and device registration.
+   Email credentials alone do not enable push.
+
+If email must be temporarily disabled in production, switching to console stops
+real sends but records them as handled; preserve the affected delivery IDs for a
+controlled recovery. Console logs may contain message content, so restrict log
+access. Correct the configuration and recreate services before resuming live mail.
+
+The production `.env.example` contains fictional format samples, including an intentionally invalid Firebase private key. Replace every sample credential and account detail before deploying, use live Stripe keys, verify the email sender, and clear optional integrations that are not enabled. See [the example environment guide](getting-started.md#reading-the-example-environment-files).
+## Dedicated notification streaming
+
+The stream image sets the Docker build argument `INSTALL_STREAM_POOL=true` to install `requirements-stream.txt`. Each stream worker uses a PostgreSQL pool capped at four physical sockets (`min_size=0`, acquisition timeout 3 seconds), returning connections after access checks instead of retaining one per SSE thread or reconnecting on every heartbeat. Install that requirements file explicitly when deploying the dedicated settings without Compose.
+
+The backend Compose stack now includes internal `notification-stream`; deploy it with `api`, `notification-worker` and `celery-beat` before recreating `client`. The HostGator helper builds/starts all four backend consumers. Browser traffic remains same-origin: only `/api/notifications/stream` is routed by Next.js to the internal stream process. `CONTAINER_NOTIFICATION_STREAM_URL` defaults to `http://notification-stream:8000/api/v1`; token refresh stays on the main API. The new service exposes only the stream and health routes, publishes no host port, uses normal JWT/access checks, runs no migrations, and isolates metrics files. Defaults are one process / 32 threads (`STREAM_WORKERS`, `STREAM_THREADS`); budget database connections across services. See [performance](performance.md) for limitations, verification and routing rollback. Migration `product.0015_catalog_pagination_indexes` must be applied through the API container; on a large production table, schedule index creation or use a reviewed concurrent-index rollout to avoid write-lock surprises.

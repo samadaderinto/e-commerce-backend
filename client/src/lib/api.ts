@@ -7,6 +7,16 @@ export class ApiError extends Error {
   }
 }
 
+const pendingApiRequests = new Set<AbortController>();
+
+/** Abort browser requests that could still refresh and restore an auth cookie. */
+export function cancelPendingApiRequests(): void {
+  for (const controller of pendingApiRequests) {
+    controller.abort();
+  }
+  pendingApiRequests.clear();
+}
+
 function cleanErrorMessage(str: string): string {
   const errorDetailMatch = /ErrorDetail\(string=['"](.*?)['"],\s*code=['"].*?['"]\)/.exec(str);
   if (errorDetailMatch) {
@@ -62,25 +72,31 @@ export async function api<T>(path: string, method = 'GET', data?: unknown): Prom
   const multipart = data instanceof FormData;
   const headers = data && !multipart ? { 'Content-Type': 'application/json' } : undefined;
   const body = data ? (multipart ? data : JSON.stringify(data)) : undefined;
+  const controller = new AbortController();
+  pendingApiRequests.add(controller);
 
-  const response = await fetch(`/api/${path}`, {
-    method,
-    signal: AbortSignal.timeout(25000),
-    credentials: 'same-origin',
-    headers,
-    body,
-  }).catch((error: unknown) => {
-    if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
-      throw new ApiError('The server took too long to respond. Please try again shortly.', 503);
+  try {
+    const response = await fetch(`/api/${path}`, {
+      method,
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(25000)]),
+      credentials: 'same-origin',
+      headers,
+      body,
+    }).catch((error: unknown) => {
+      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+        throw new ApiError('The server took too long to respond. Please try again shortly.', 503);
+      }
+      throw error;
+    });
+
+    const result = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new ApiError(message(result), response.status);
     }
-    throw error;
-  });
-
-  const result = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new ApiError(message(result), response.status);
+    return result as T;
+  } finally {
+    pendingApiRequests.delete(controller);
   }
-  return result as T;
 }
 
 export const money = (value: string | number) =>

@@ -85,21 +85,21 @@ class AffiliateWalletSerializer(serializers.ModelSerializer):
 
 
 class ReferralSerializer(serializers.ModelSerializer):
-    referred_email = serializers.EmailField(source="referred_user.email", read_only=True)
-
     class Meta:
         model = Referral
         fields = [
             "id",
-            "marketer",
-            "referred_user",
-            "referred_email",
             "reward_amount",
             "status",
             "created",
             "updated",
         ]
         read_only_fields = fields
+
+
+class ReferralPageSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    results = ReferralSerializer(many=True)
 
 
 class AffiliateLinkRequestSerializer(serializers.Serializer):

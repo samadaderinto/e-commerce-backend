@@ -49,13 +49,15 @@ The application runs as modular container stacks sharing the `commerce-network` 
 From the repository root:
 ```sh
 .venv/bin/python monitoring/init_local.py
-docker compose -f server/compose.yaml up --build -d api redis postgres elasticsearch
+docker compose -f server/compose.yaml up --build -d api notification-stream redis postgres elasticsearch
 docker compose -f server/compose.yaml exec api python manage.py rebuild_product_index
 ```
 
 Contains:
 - `api`: Django/Gunicorn API service built from `server/Dockerfile`.
-- `notification-worker`: Celery worker & beat for email and event processing.
+- `notification-worker`: Celery worker for email and event processing; local
+  concurrency is `${CELERY_WORKER_CONCURRENCY:-2}`.
+- `celery-beat`: Separate periodic task scheduler; unaffected by worker pool sizing.
 - `postgres`: PostgreSQL 17 database.
 - `redis`: Redis 7.4 cache & Celery broker.
 - `elasticsearch`: Elasticsearch 8.15 product search index.
@@ -113,7 +115,8 @@ Application container files:
 - `server/.env`: local server/runtime env file. It is ignored by Git.
 - `server/.env.example`: documented server env template.
 - `server/requirements.txt`: base API dependencies.
-- `server/requirements-storage.txt`: optional object-storage dependencies.
+- `server/requirements-storage.txt`: optional pinned object-storage overrides;
+  the base API dependencies already include required S3 storage packages.
 
 Monitoring and operations files:
 
@@ -164,12 +167,12 @@ Important API environment variables:
 | `DATABASE_ENGINE` | Database backend selector | `postgres` |
 | `POSTGRES_HOST` | Database hostname inside Compose | `postgres` |
 | `CACHE_URL` | Required Django Redis cache URL inside Compose; host-run Django defaults to `redis://127.0.0.1:6379/0` when unset | `redis://redis:6379/0` |
-| `OBJECT_STORAGE_ENABLED` | Enables S3-compatible media storage | `false` |
+| `OBJECT_STORAGE_ENABLED` | Required S3-compatible media storage; disabling fails startup | `true` |
 | `OBSERVABILITY_TOKEN` | Bearer token for `/metrics/` and detailed health | generated/local placeholder |
 | `OTEL_TRACING_ENABLED` | Enables OTLP tracing | `false` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Trace exporter endpoint | `http://tempo:4318` |
 | `PROMETHEUS_MULTIPROC_DIR` | Gunicorn Prometheus multiprocess directory | `/tmp/prometheus` |
-| `RUN_MIGRATIONS` | Run migrations at container startup | `true` |
+| `RUN_MIGRATIONS` | Run migrations and configured default-account bootstrap at container startup | `true` for API; `false` for Celery worker and beat |
 | `RUN_COLLECTSTATIC` | Run collectstatic at container startup | `false` |
 | `ELASTICSEARCH_ENABLED` | Enables product search indexing/search | `true` in Compose |
 | `ELASTICSEARCH_URL` | Elasticsearch HTTP endpoint for host-run Django | `http://127.0.0.1:9200` |
@@ -335,3 +338,7 @@ Local backend Compose startup now starts MinIO and waits for `minio-init` to fin
 
 
 Notification remediation (11 October 2026): one canonical event identity per recipient, recipient-scoped multi-store associations, canonical categories and archived/list filters, selected-store refund reviewer routing, treasury/affiliate/review coverage, transactional inbox/outbox writes, credential outbox delivery, stable email/push queue keys and provider idempotency, shared SSE/FCM toast deduplication, and numeric order-detail links. Apply notification migrations before using the updated API and restart API, notification-worker and celery-beat together. Migration backfills do not send messages; duplicate legacy order-created notices are archived rather than deleted. Local test mode intentionally retains console email and disabled FCM; external provider delivery has not been verified. See the notification audit for channel policy and regression coverage.
+
+Email backend selection: use `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` for normal local development; use `EMAIL_BACKEND=notification.email_backend.ResendEmailBackend` for production or temporary local delivery testing. An explicit console backend overrides a configured Resend key. See [local and production email setup](getting-started.md#email-backend-local-development-and-resend-testing) for verified sender requirements, recreating services after environment changes, and returning to console mode.
+
+For effective API/worker backend checks and retry interpretation, see [notification worker settings](getting-started.md#notification-worker-settings-and-troubleshooting). Follow the [production transition](deployment.md#transitioning-notifications-from-local-to-production) to refresh all delivery processes, start the scheduler and avoid carrying a local console backend into production.

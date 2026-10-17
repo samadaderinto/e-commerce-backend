@@ -72,14 +72,18 @@ export const financialFields: CollectionField[] = [
   { key: 'max_amount', label: 'Maximum amount', type: 'number' },
 ];
 
-export function CollectionFilters({ filters, fields, label, hideSearch = false }: {
+export function CollectionFilters({ filters, fields, label, hideSearch = false, reserveStatusSpace = false }: {
   filters: CollectionFilterState;
   fields: CollectionField[];
   label: string;
   hideSearch?: boolean;
+  reserveStatusSpace?: boolean;
 }): React.JSX.Element {
   return (
-    <div className="collection-filters" aria-label={`${label} filters`}>
+    <div
+      className={`collection-filters${reserveStatusSpace ? ' collection-filters-stable-status' : ''}`}
+      aria-label={`${label} filters`}
+    >
       {!hideSearch && (
         <label>
         <span>Search {label}</span>
@@ -119,16 +123,33 @@ export function CollectionFilters({ filters, fields, label, hideSearch = false }
           )}
         </label>
       ))}
-      {filters.active && (
-        <button
-          type="button"
-          className="button secondary"
-          onClick={filters.reset}
-        >
-          Reset filters
-        </button>
+      {reserveStatusSpace ? (
+        <div className="collection-filter-status" aria-live="polite">
+          {filters.active && (
+            <button
+              type="button"
+              className="button secondary"
+              onClick={filters.reset}
+            >
+              Reset filters
+            </button>
+          )}
+          {filters.active && <span className="muted">Filters active</span>}
+        </div>
+      ) : (
+        <>
+          {filters.active && (
+            <button
+              type="button"
+              className="button secondary"
+              onClick={filters.reset}
+            >
+              Reset filters
+            </button>
+          )}
+          {filters.active && <span className="muted">Filters active</span>}
+        </>
       )}
-      {filters.active && <span className="muted">Filters active</span>}
     </div>
   );
 }

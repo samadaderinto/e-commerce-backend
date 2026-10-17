@@ -65,7 +65,7 @@ Test bases are `https://apis-tem.usps.com`, `https://wwwcie.ups.com`, `https://a
 Only customer/seller JWTs may call checkout endpoints; admin/staff tokens receive `403`.
 
 1. `GET /api/v1/checkout/shipping-rates/?address={owned_address_id}&carrier=UPS` returns available service plans. Carrier values are `USPS`, `UPS`, `FEDEX`, or `DHL`.
-2. Each plan includes `carrier`, `service_id`, `name`, `description`, decimal-string `amount`, `currency`, `source`, `is_default`, `tax`, `shipments`, and `quote_token`. Digital delivery has zero shipping and no physical shipment list.
+2. Each plan includes `carrier`, `service_id`, `name`, `description`, decimal-string `amount`, `currency`, `source`, `is_default`, `tax`, `shipments`, and `quote_token`. Shipment amounts sum to the quoted plan total, including when the cheapest eligible plan is free. Digital delivery has zero shipping and no physical shipment list.
 3. Selecting a plan updates the client total immediately. The selected `shipping_service` and `shipping_quote` are submitted with `address`, `checkout_key`, and optional `coupon` to direct checkout or Stripe wallet-session creation.
 
 Example:
@@ -82,9 +82,9 @@ Stripe Checkout and its PaymentIntent retain the carrier, service, quote token, 
 
 Physical deliveries retain the existing US-only service area; digital products remain available worldwide. Parcels are consolidated by pickup ZIP, summing physical weights. For different origin ZIPs, quotes sum shipment charges and expose only services offered for every origin. Every store must supply a complete default business address, including digital-only sellers. Physical shipping quotes use that address and fail clearly when it is missing; there is no fallback pickup ZIP. Configure parcel dimensions to match the fulfillment operation; product-specific packing and international customs are outside this implementation.
 
-Tax uses the configured fixed fraction, not an external jurisdictional tax engine. Quote tax is shown before coupon entry; the server applies coupon discounts before computing final tax. Cart estimates are development estimates until a delivery address and carrier are selected.
+Tax uses the configured fixed fraction, not an external jurisdictional tax engine. Quote tax is shown before coupon entry; the server applies coupon discounts before computing final tax. Physical `/api/v1/cart/` responses do not invent a delivery estimate: `shipping` is null and `total` is the item subtotal until a destination and carrier are selected at checkout. Digital-only carts show zero shipping. Checkout shipping quotes are authoritative.
 
-The rating APIs are synchronous and need no carrier webhook registration. This change does not implement carrier label purchasing or carrier scan webhooks. Fulfillment staff record milestones through the existing store tracking endpoint; customers receive those milestones and official carrier tracking links. Retired USPS XML endpoints are no longer called, and synthetic scan events are not presented as live carrier data. Existing Stripe confirmation still validates payment through Stripe; no new payment webhook URL is introduced.
+The rating APIs are synchronous and need no carrier webhook registration. This change does not implement carrier label purchasing or carrier scan webhooks. Fulfillment staff record milestones through the existing store tracking endpoint; customer order detail and tracking responses expose tracking information per store when an order has multiple shipments. Retired USPS XML endpoints are no longer called, and synthetic scan events are not presented as live carrier data. Existing Stripe confirmation still validates payment through Stripe; no new payment webhook URL is introduced.
 
 ## Validation and maintenance
 

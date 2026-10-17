@@ -273,6 +273,39 @@ class EdgeCaseAuditTests(TestCase):
         payout.refresh_from_db()
         self.assertEqual(payout.status, 'pending')
 
+    @patch('stripe.Transfer.create')
+    def test_stripe_payout_requires_connected_account_payouts_enabled(self, transfer: Any) -> None:
+        from unittest.mock import patch as mock_patch
+
+        wallet = MerchantWallet.objects.create(
+            user=self.seller,
+            stripe_account_id='acct_test_pending',
+            stripe_details_submitted=True,
+            stripe_payouts_enabled=True,
+        )
+        payout = StorePayout.objects.create(
+            wallet=wallet,
+            store=self.store,
+            amount=5,
+            reference='edge-stripe-pending',
+            payout_method=StorePayout.METHOD_STRIPE_CONNECT,
+        )
+
+        with mock_patch(
+            'stripe.Account.retrieve',
+            return_value={
+                'details_submitted': True,
+                'payouts_enabled': False,
+            },
+        ) as retrieve:
+            with self.assertRaises(ValidationError):
+                process_payout_status_change(payout, 'approve', self.seller)
+
+        payout.refresh_from_db()
+        self.assertEqual(payout.status, StorePayout.STATUS_PENDING)
+        retrieve.assert_called_once_with('acct_test_pending')
+        transfer.assert_not_called()
+
     def test_account_closure_receipt_is_escaped_and_matches_retained_data(self) -> None:
         self.buyer.first_name = '<script>bad()</script>'
         self.buyer.save()

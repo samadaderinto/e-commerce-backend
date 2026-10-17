@@ -6,9 +6,9 @@ import { Upload, X } from 'lucide-react';
 import { api } from '@/lib/api';
 import type { Store, StoreProfile } from '@/lib/types';
 import { useShop } from './providers';
-import { useDialogFocus } from './ui';
+import { ResponsiveMediaImage, useDialogFocus } from './ui';
 
-type ImageKind = 'avatar' | 'banner';
+export type ImageKind = 'avatar' | 'banner';
 type CropSelection = {
   kind: ImageKind;
   sourceUrl: string;
@@ -56,10 +56,14 @@ export function StoreBranding({
   store,
   profile,
   onSaved,
+  onDraftChange,
+  disabled = false,
 }: {
-  store: Store;
-  profile: StoreProfile | undefined;
-  onSaved: (profile: StoreProfile) => Promise<void>;
+  store: Pick<Store, 'name' | 'username'> & { id?: number };
+  profile: Pick<StoreProfile, 'avatar_url' | 'banner_url'> | undefined;
+  onSaved?: (profile: StoreProfile) => Promise<void>;
+  onDraftChange?: (kind: ImageKind, file: File | null) => void;
+  disabled?: boolean;
 }): ReactElement {
   const { notify } = useShop();
   const [selection, setSelection] = useState<CropSelection | null>(null);
@@ -120,23 +124,31 @@ export function StoreBranding({
   async function save(file: File): Promise<void> {
     if (!selection) return;
     const kind = selection.kind;
-    const form = new FormData();
-    form.append('image', file);
-    const result = await api<StoreProfile>(`stores/${store.id}/profile-images/${kind}`, 'POST', form);
-    await onSaved(result);
+    if (onDraftChange) {
+      onDraftChange(kind, file);
+    } else {
+      const form = new FormData();
+      form.append('image', file);
+      const result = await api<StoreProfile>(`stores/${store.id}/profile-images/${kind}`, 'POST', form);
+      await onSaved?.(result);
+    }
     if (!mounted.current) return;
     URL.revokeObjectURL(selection.sourceUrl);
     pendingUrl.current = null;
     setSelection(null);
-    notify(`Store ${dimensions[kind].label} saved`);
+    notify(`Store ${dimensions[kind].label} ${onDraftChange ? 'ready for creation' : 'saved'}`);
   }
 
   async function remove(kind: ImageKind): Promise<void> {
     setBusy(true);
     setError('');
     try {
-      const result = await api<StoreProfile>(`stores/${store.id}/profile-images/${kind}`, 'DELETE');
-      await onSaved(result);
+      if (onDraftChange) {
+        onDraftChange(kind, null);
+      } else {
+        const result = await api<StoreProfile>(`stores/${store.id}/profile-images/${kind}`, 'DELETE');
+        await onSaved?.(result);
+      }
       notify(`Store ${dimensions[kind].label} removed`);
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : 'Could not remove this image.');
@@ -149,12 +161,26 @@ export function StoreBranding({
     <section className="store-branding" aria-label="Store branding">
       <div className="store-branding-preview">
         <div className="store-branding-banner">
-          {profile?.banner_url && <img src={profile.banner_url} alt={`${store.name} banner`} />}
+          {profile?.banner_url && (
+            <ResponsiveMediaImage
+              src={profile.banner_url}
+              alt={`${store.name} banner`}
+              sizes="(max-width: 720px) 100vw, 640px"
+              width={1600}
+              height={600}
+            />
+          )}
         </div>
         <div className="store-branding-identity">
           <div className="store-branding-avatar">
             {profile?.avatar_url ? (
-              <img src={profile.avatar_url} alt={`${store.name} profile image`} />
+              <ResponsiveMediaImage
+                src={profile.avatar_url}
+                alt={`${store.name} profile image`}
+                sizes="96px"
+                width={192}
+                height={192}
+              />
             ) : (
               <span>{store.name[0]}</span>
             )}
@@ -171,7 +197,7 @@ export function StoreBranding({
           const existing = kind === 'avatar' ? profile?.avatar_url : profile?.banner_url;
           return (
             <div className="store-branding-picker" key={kind}>
-              <strong>{kind === 'avatar' ? 'Profile image' : 'Store banner'}</strong>
+              <strong>{kind === 'avatar' ? 'Store profile picture' : 'Store label (banner / cover)'}</strong>
               <p className="muted">
                 {kind === 'avatar' ? 'A circular crop for your store identity.' : 'A wide crop for your storefront header.'}
                 {' '}Choose a photo at least {size.width} × {size.height} pixels.
@@ -183,7 +209,7 @@ export function StoreBranding({
                   type="file"
                   accept="image/jpeg,image/png,image/webp"
                   aria-label={`Upload ${size.label}`}
-                  disabled={busy || selection !== null}
+                  disabled={disabled || busy || selection !== null}
                   onChange={(event: ChangeEvent<HTMLInputElement>): void => { void choose(event, kind); }}
                 />
               </label>
@@ -191,7 +217,7 @@ export function StoreBranding({
                 <button
                   type="button"
                   className="text-link"
-                  disabled={busy || selection !== null}
+                  disabled={disabled || busy || selection !== null}
                   onClick={(): void => { void remove(kind); }}
                 >
                   Remove {size.label}
@@ -201,7 +227,7 @@ export function StoreBranding({
           );
         })}
       </div>
-      <p className="muted">JPEG, PNG or WebP · Up to 5 MB. Images save immediately after cropping.</p>
+      <p className="muted">JPEG, PNG or WebP · Up to 5 MB. {onDraftChange ? 'Images upload when you create your store.' : 'Images save immediately after cropping.'}</p>
       {error && <p role="alert" className="store-branding-error">{error}</p>}
       {selection && <CropDialog selection={selection} onClose={close} onSave={save} />}
     </section>

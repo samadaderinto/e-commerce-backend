@@ -21,9 +21,38 @@ const product = {
   is_digital: false,
 };
 
-test('bounded pagination and committed bag quantities across breakpoints', async ({ page }) => {
+for (const storageError of ['SecurityError', 'QuotaExceededError']) {
+  test(`shopping remains usable when persistence throws ${storageError}`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (error: Error) => errors.push(error.message));
+    await page.addInitScript((name: string) => {
+      Storage.prototype.setItem = (): void => {
+        throw new DOMException('Storage unavailable', name);
+      };
+    }, storageError);
+    await page.route('**/api/**', route => {
+      const path: string = new URL(route.request().url()).pathname.replace(/\/$/, '');
+      if (path === '/api/me') {
+        return route.fulfill({ status: 401, json: { detail: 'Sign in' } });
+      }
+      if (path === '/api/products/991') return route.fulfill({ json: product });
+      if (path === '/api/products') {
+        return route.fulfill({ json: { count: 1, pages: 1, results: [product] } });
+      }
+      return route.fulfill({ json: [] });
+    });
+    await page.goto('/products/991');
+    await page.getByRole('button', { name: 'Add to bag', exact: true }).click();
+    await page.locator('a[href="/cart"]').first().click();
+    await expect(page.getByRole('link', { name: product.title }).first()).toBeVisible();
+    await expect(page.getByText(/This page couldn.t load/)).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}
+
+test('bounded pagination and stock-limited bag quantities across breakpoints', async ({ page }) => {
   await page.route('**/api/**', (route) => {
-    const path = new URL(route.request().url()).pathname;
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
     if (path === '/api/me') return route.fulfill({ status: 401, json: { detail: 'Sign in' } });
     if (path === '/api/products/991') return route.fulfill({ json: product });
     if (path === '/api/products') return route.fulfill({ json: { count: 840, pages: 42, results: [product] } });
@@ -43,17 +72,105 @@ test('bounded pagination and committed bag quantities across breakpoints', async
   await page.goto('/products/991');
   await page.getByRole('button', { name: 'Increase quantity' }).click();
   await page.getByRole('button', { name: 'Add to bag', exact: true }).click();
-  await expect(page.locator('.purchase-actions').getByRole('button').first()).toBeDisabled();
   await expect
     .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('proace-cart') || '[]')[0]?.quantity))
     .toBe(2);
 
+  const addButton = page.locator('.purchase-actions').getByRole('button').first();
+  await expect(page.getByRole('button', { name: '2 in bag', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: 'Increase quantity' }).click();
-  await page.getByRole('button', { name: 'Add to bag', exact: true }).click();
+  await expect(addButton).toBeEnabled();
+  await addButton.click();
+  await expect
+    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('proace-cart') || '[]')[0]?.quantity))
+    .toBe(3);
   await expect(page.getByRole('button', { name: 'Max quantity in bag', exact: true })).toBeDisabled();
 
   await page.reload();
   await expect(page.getByRole('button', { name: 'Max quantity in bag', exact: true })).toBeDisabled();
+});
+
+test('lowering product quantity after adding a larger amount stays enabled', async ({ page }) => {
+  const stockedProduct = { ...product, available: 12 };
+  await page.route('**/api/**', (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path === '/api/me') return route.fulfill({ status: 401, json: { detail: 'Sign in' } });
+    if (path === '/api/products/991') return route.fulfill({ json: stockedProduct });
+    if (path === '/api/products') return route.fulfill({ json: { count: 1, pages: 1, results: [stockedProduct] } });
+    return route.fulfill({ json: [] });
+  });
+
+  await page.goto('/shop?page=1');
+  await page.goto('/products/991');
+  for (let index = 0; index < 5; index++) {
+    await page.getByRole('button', { name: 'Increase quantity' }).click();
+  }
+  await page.getByRole('button', { name: 'Add to bag', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('proace-cart') || '[]')[0]?.quantity))
+    .toBe(6);
+  await expect(page.getByRole('button', { name: '6 in bag', exact: true })).toBeDisabled();
+
+  for (let index = 0; index < 3; index++) {
+    await page.getByRole('button', { name: 'Decrease quantity' }).click();
+  }
+  await expect(page.getByRole('button', { name: 'Update bag', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Update bag', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('proace-cart') || '[]')[0]?.quantity))
+    .toBe(3);
+  await expect(page.getByRole('button', { name: '3 in bag', exact: true })).toBeDisabled();
+});
+
+test('product page copy control copies the link without opening native sharing', async ({ page }) => {
+  await page.addInitScript(() => {
+    const testWindow = window as Window & {
+      __shareCalls: number;
+      __copiedProductUrl: string;
+    };
+    testWindow.__shareCalls = 0;
+    testWindow.__copiedProductUrl = '';
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: async () => {
+        testWindow.__shareCalls += 1;
+      },
+    });
+    Object.defineProperty(navigator, 'canShare', {
+      configurable: true,
+      value: () => true,
+    });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (value: string) => {
+          testWindow.__copiedProductUrl = value;
+        },
+      },
+    });
+  });
+  await page.route('**/api/**', (route) => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path === '/api/me') return route.fulfill({ status: 401, json: { detail: 'Sign in' } });
+    if (path === '/api/products/991') return route.fulfill({ json: product });
+    if (path === '/api/products') return route.fulfill({ json: { count: 1, pages: 1, results: [product] } });
+    return route.fulfill({ json: [] });
+  });
+
+  await page.goto('/shop?page=1');
+  await page.goto('/products/991');
+  const copyButton = page.getByRole('button', { name: 'Share product' });
+  await copyButton.click();
+
+  await expect(copyButton).toHaveAttribute('title', 'Link copied!');
+  const copiedUrl = await page.evaluate(
+    () => (window as Window & { __copiedProductUrl: string }).__copiedProductUrl,
+  );
+  expect(copiedUrl).toBe(new URL('/products/991', page.url()).href);
+  const shareCalls = await page.evaluate(
+    () => (window as Window & { __shareCalls: number }).__shareCalls,
+  );
+  expect(shareCalls).toBe(0);
 });
 
 test('four carriers switch plans and totals', async ({ page }) => {

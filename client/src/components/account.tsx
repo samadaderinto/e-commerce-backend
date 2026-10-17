@@ -13,9 +13,10 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, ChartNoAxesCombined, Check, Clock, ChevronRight, ExternalLink, Eye, EyeOff, FileText, Printer, Heart, LockKeyhole, LogOut, MapPin, Package, Pencil, Plus, RotateCcw, ShoppingBag, Settings, Store, Trash2, Truck, UserRound, UsersRound, WalletCards, X } from 'lucide-react';
+import { ArrowDownToLine, ArrowLeft, ArrowRight, Bell, ChartNoAxesCombined, Check, Clock, ChevronRight, ExternalLink, Eye, EyeOff, FileText, Printer, Heart, Landmark, LockKeyhole, LogOut, MapPin, Package, Pencil, Plus, RotateCcw, ShoppingBag, Settings, Store, Trash2, Truck, UserRound, UsersRound, WalletCards, X } from 'lucide-react';
 
-import { api, money } from '@/lib/api';
+import { api, ApiError, money } from '@/lib/api';
+import { clearSignedInSession } from '@/lib/session-cache';
 import type { Address, Order, User, UserWallet } from '@/lib/types';
 import {
   getAppleCredential,
@@ -23,6 +24,10 @@ import {
   type SocialCredential,
 } from '@/lib/social-auth';
 import { UserAvatarUpload } from './user-avatar';
+import { ResponsiveMediaImage } from './ui';
+import { ConnectedAccounts } from './connected-accounts';
+import { BankAccounts } from './bank-accounts';
+import { StripePayoutDestinations } from './stripe-destinations';
 import {
   COUNTRIES,
   DEFAULT_COUNTRY_NAME,
@@ -39,8 +44,19 @@ import {
 import { useShop } from './providers';
 import { Empty, ErrorState, Field, Loading, ProductImage, Status, useDialogFocus } from './ui';
 
-export function Gate({ children, next = '/account' }: { children: ReactNode; next?: string }) {
+export function Gate({ children, next = '/account', redirectToSignIn = false }: {
+  children: ReactNode;
+  next?: string;
+  redirectToSignIn?: boolean;
+}): React.JSX.Element {
+  const router = useRouter();
   const { user, sessionLoading } = useShop();
+  useEffect(() => {
+    if (redirectToSignIn && !sessionLoading && !user) {
+      router.replace(`/login?next=${encodeURIComponent(next)}`);
+    }
+  }, [redirectToSignIn, sessionLoading, user, next, router]);
+  if (redirectToSignIn && !user) return <Loading />;
   if (sessionLoading) return <Loading />;
   if (!user) {
     return (
@@ -124,16 +140,19 @@ function GoogleSignInButton({
 }
 
 export function AuthPage({ mode }: { mode: string }) {
-  const { login, socialLogin, user, notify } = useShop();
+  const { login, socialLogin, logout, user, sessionLoading, notify } = useShop();
   const router = useRouter();
   const params = useSearchParams();
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [needsPhone, setNeedsPhone] = useState(false);
+  const queryClient = useQueryClient();
   const isRegister = mode === 'register';
   const isForgot = mode === 'forgot-password';
   const isReset = mode === 'reset-password';
+  const authBlocked = !isForgot && !isReset && (!!user || sessionLoading);
 
   useEffect(() => {
     const refParam = params.get('ref');
@@ -159,6 +178,10 @@ export function AuthPage({ mode }: { mode: string }) {
     provider: 'google' | 'apple',
     socialCredential: SocialCredential,
   ) {
+    if (authBlocked) {
+      setError('Sign out before signing in with another account.');
+      return;
+    }
     setBusy(true);
     setError('');
     let storedRef = '';
@@ -169,10 +192,11 @@ export function AuthPage({ mode }: { mode: string }) {
         /* Continue without a stored referral when browser storage is unavailable. */
       }
     }
-    const referralCode = (params.get('ref') || storedRef || '').trim();
+    const referralInput = document.querySelector<HTMLInputElement>('input[name="referral_code"]');
+    const referralCode = (referralInput?.value || params.get('ref') || storedRef || '').trim();
 
     try {
-      await socialLogin(provider, {
+      const signedInUser = await socialLogin(provider, {
         ...socialCredential,
         referral_code: referralCode,
       });
@@ -183,6 +207,11 @@ export function AuthPage({ mode }: { mode: string }) {
         } catch {
           /* Ignore storage errors */
         }
+      }
+
+      if (!signedInUser.phone1?.trim()) {
+        setNeedsPhone(true);
+        return;
       }
 
       const next = params.get('next') || '/account';
@@ -216,6 +245,10 @@ export function AuthPage({ mode }: { mode: string }) {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (authBlocked) {
+      setError('Sign out before signing in or creating another account.');
+      return;
+    }
     setBusy(true);
     setError('');
     const data = Object.fromEntries(new FormData(event.currentTarget)) as Record<string, string>;
@@ -253,6 +286,29 @@ export function AuthPage({ mode }: { mode: string }) {
     }
   }
 
+  async function completePhone(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    const data = new FormData(event.currentTarget);
+    try {
+      const updated = await api<User>('me', 'PATCH', {
+        phone1: String(data.get('phone1') || '').trim(),
+      });
+      queryClient.setQueryData<User>(['me'], updated);
+      const next = params.get('next') || '/account';
+      router.push(
+        next.startsWith('/') && !next.startsWith('//') && !next.includes('\\')
+          ? next
+          : '/account'
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="auth-page container">
       <div className="auth-story">
@@ -268,9 +324,10 @@ export function AuthPage({ mode }: { mode: string }) {
           And the ones you haven&apos;t found yet.
         </p>
         <div className="auth-photo">
-          <img
+          <ResponsiveMediaImage
             src="https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=900&q=85"
             alt="A minimal watch on a light background"
+            sizes="(max-width: 720px) 100vw, 40vw"
           />
         </div>
         <span className="wordmark">
@@ -279,7 +336,27 @@ export function AuthPage({ mode }: { mode: string }) {
       </div>
 
       <div className="auth-form-wrap">
-        {mode === 'verify-email' ? (
+        {needsPhone ? (
+          <>
+            <h1>Complete your profile</h1>
+            <p>Add your phone number to finish setting up your account.</p>
+            <form className="form-stack" onSubmit={completePhone}>
+              <Field label="Phone number">
+                <input
+                  name="phone1"
+                  type="tel"
+                  autoComplete="tel"
+                  placeholder="+1 202 555 0100"
+                  required
+                />
+              </Field>
+              {error && <p className="form-error" role="alert">{error}</p>}
+              <button className="button" disabled={busy}>
+                {busy ? 'Saving…' : 'Save and continue'}
+              </button>
+            </form>
+          </>
+        ) : mode === 'verify-email' ? (
           <>
             <div className="auth-icon">
               <Check />
@@ -335,127 +412,155 @@ export function AuthPage({ mode }: { mode: string }) {
                     : 'Sign in to your everyday marketplace.'}
             </p>
 
+            {user && !isForgot && !isReset && (
+              <div className="signed-in-notice" role="status">
+                <p>You are signed in as {user.email}. Sign out to use another account.</p>
+                <div className="form-row">
+                  <Link className="text-link" href="/account">Go to your account</Link>
+                  <button
+                    type="button"
+                    className="text-link"
+                    disabled={busy}
+                    onClick={async () => {
+                      setBusy(true);
+                      setError('');
+                      try {
+                        await logout();
+                      } catch (err) {
+                        setError((err as Error).message);
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    Sign out to switch accounts
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <form onSubmit={submit} className="form-stack">
+              <fieldset className="auth-fields" disabled={busy || authBlocked}>
+                {isRegister && (
+                  <div className="form-row">
+                    <Field label="First name">
+                      <input name="first_name" required autoComplete="given-name" maxLength={30} />
+                    </Field>
+                    <Field label="Last name">
+                      <input name="last_name" required autoComplete="family-name" maxLength={30} />
+                    </Field>
+                  </div>
+                )}
+
+                {!isReset && (
+                  <Field label="Email address">
+                    <input
+                      name="email"
+                      type="email"
+                      required
+                      autoComplete="email"
+                      placeholder="you@example.com"
+                    />
+                  </Field>
+                )}
+
+                {isRegister && (
+                  <Field label="Phone number">
+                    <input
+                      name="phone1"
+                      type="tel"
+                      autoComplete="tel"
+                      required
+                      placeholder="+1 301 325 1550"
+                    />
+                  </Field>
+                )}
+
+                {isRegister && (
+                  <Field label="Referral code (optional)">
+                    <input
+                      name="referral_code"
+                      defaultValue={params.get('ref') || ''}
+                      maxLength={70}
+                      autoComplete="off"
+                    />
+                  </Field>
+                )}
+
+                {!isForgot && (
+                  <Field label="Password">
+                    <div className="password-input">
+                      <input
+                        name="password"
+                        type={show ? 'text' : 'password'}
+                        required
+                        minLength={isRegister || isReset ? 8 : 1}
+                        maxLength={128}
+                        autoComplete={isRegister || isReset ? 'new-password' : 'current-password'}
+                        placeholder={isRegister ? 'At least 8 characters' : 'Your password'}
+                      />
+                      <button
+                        type="button"
+                        aria-label={show ? 'Hide password' : 'Show password'}
+                        onClick={() => setShow(!show)}
+                      >
+                        {show ? <EyeOff size={18} /> : <Eye size={18} />}
+                      </button>
+                    </div>
+                  </Field>
+                )}
+
+                {!isRegister && !isForgot && !isReset && (
+                  <Link href="/forgot-password" className="forgot-link">
+                    Forgot password?
+                  </Link>
+                )}
+
+                {error && (
+                  <p className="form-error" role="alert">
+                    {error}
+                  </p>
+                )}
+
+                <button className="button" disabled={busy}>
+                  {busy
+                    ? 'One moment…'
+                    : isRegister
+                      ? 'Create account'
+                      : isForgot
+                        ? 'Send reset link'
+                        : isReset
+                          ? 'Update password'
+                          : 'Sign in'}
+                  <ArrowRight size={17} />
+                </button>
+              </fieldset>
+            </form>
+
             {!isForgot && !isReset && (
               <>
+                <div className="auth-divider"><span>or continue with</span></div>
                 <div className="social-auth-group">
                   <GoogleSignInButton
                     text={isRegister ? 'signup_with' : 'signin_with'}
-                    disabled={busy}
+                    disabled={busy || authBlocked}
                     onCredential={handleGoogleCredential}
                     onError={handleGoogleError}
                   />
                   <button
                     type="button"
                     className="social-auth-btn apple-btn"
-                    disabled={busy}
+                    disabled={busy || authBlocked}
                     onClick={handleAppleSignIn}
                   >
                     <AppleIcon />
-                    <span>{isRegister ? 'Sign up with Apple' : 'Continue with Apple'}</span>
+                    <span>Apple</span>
                   </button>
                 </div>
 
-                <div className="auth-divider">
-                  <span>or with email</span>
-                </div>
               </>
             )}
 
-            <form onSubmit={submit} className="form-stack">
-              {isRegister && (
-                <div className="form-row">
-                  <Field label="First name">
-                    <input name="first_name" required autoComplete="given-name" maxLength={30} />
-                  </Field>
-                  <Field label="Last name">
-                    <input name="last_name" required autoComplete="family-name" maxLength={30} />
-                  </Field>
-                </div>
-              )}
-
-              {!isReset && (
-                <Field label="Email address">
-                  <input
-                    name="email"
-                    type="email"
-                    required
-                    autoComplete="email"
-                    placeholder="you@example.com"
-                  />
-                </Field>
-              )}
-
-              {isRegister && (
-                <Field label="Phone number">
-                  <input
-                    name="phone1"
-                    type="tel"
-                    autoComplete="tel"
-                    required
-                    placeholder="+1 301 325 1550"
-                  />
-                </Field>
-              )}
-
-              {isRegister && (
-                <Field label="Referral code (optional)">
-                  <input
-                    name="referral_code"
-                    defaultValue={params.get('ref') || ''}
-                    maxLength={70}
-                    autoComplete="off"
-                  />
-                </Field>
-              )}
-
-              {!isForgot && (
-                <Field label="Password">
-                  <div className="password-input">
-                    <input
-                      name="password"
-                      type={show ? 'text' : 'password'}
-                      required
-                      minLength={isRegister || isReset ? 8 : 1}
-                      maxLength={128}
-                      autoComplete={isRegister || isReset ? 'new-password' : 'current-password'}
-                      placeholder={isRegister ? 'At least 8 characters' : 'Your password'}
-                    />
-                    <button
-                      type="button"
-                      aria-label={show ? 'Hide password' : 'Show password'}
-                      onClick={() => setShow(!show)}
-                    >
-                      {show ? <EyeOff size={18} /> : <Eye size={18} />}
-                    </button>
-                  </div>
-                </Field>
-              )}
-
-              {!isRegister && !isForgot && !isReset && (
-                <Link href="/forgot-password" className="forgot-link">
-                  Forgot password?
-                </Link>
-              )}
-
-              {error && (
-                <p className="form-error" role="alert">
-                  {error}
-                </p>
-              )}
-
-              <button className="button" disabled={busy}>
-                {busy
-                  ? 'One moment…'
-                  : isRegister
-                    ? 'Create account'
-                    : isForgot
-                      ? 'Send reset link'
-                      : isReset
-                        ? 'Update password'
-                        : 'Sign in'}
-                <ArrowRight size={17} />
-              </button>
-            </form>
 
             <p className="auth-switch">
               {isRegister ? 'Already have an account?' : 'New around here?'}{' '}
@@ -479,10 +584,12 @@ export function AddressForm({
   onSaved,
   onCancel,
   initialData,
+  embedded = false,
 }: {
   onSaved: (address: Address) => void;
   onCancel?: () => void;
   initialData?: Address | null;
+  embedded?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -653,8 +760,8 @@ export function AddressForm({
   }
 
   return (
-    <form className="form-stack address-form" onSubmit={submit}>
-      <h3>{isEditing ? 'Edit delivery address' : 'Add a delivery address'}</h3>
+    <form className={`form-stack address-form${embedded ? ' address-form-embedded' : ''}`} onSubmit={submit}>
+      {!embedded && <h3>{isEditing ? 'Edit delivery address' : 'Add a delivery address'}</h3>}
 
       {/* Row 1: Country Dropdown (Full Width) */}
       <div className="address-form-country-row">
@@ -701,7 +808,7 @@ export function AddressForm({
             autoComplete="address-line1"
             required
             minLength={5}
-            placeholder="e.g., 742 Evergreen Terrace or 123 Market Street"
+            placeholder="Street name and number"
             aria-invalid={!!streetError}
             aria-describedby={streetError ? 'street-address-error' : undefined}
           />
@@ -712,14 +819,14 @@ export function AddressForm({
           )}
         </Field>
 
-        <Field label="Apt, Suite, Unit, Block (Optional)">
+        <Field label="Unit (optional)">
           <input
             name="unit"
             value={unitNumber}
             onChange={handleUnitChange}
             autoComplete="address-line2"
             maxLength={30}
-            placeholder="e.g., Apt 4B, Suite 300, Block 12"
+            placeholder="Apartment or suite"
             aria-invalid={!!unitError}
             aria-describedby={unitError ? 'unit-number-error' : undefined}
           />
@@ -752,7 +859,7 @@ export function AddressForm({
           )}
         </Field>
 
-        <Field label="State / Province / Territory">
+        <Field label="State / region">
           {subdivisions.length > 0 ? (
             <select
               name="state"
@@ -786,7 +893,7 @@ export function AddressForm({
           )}
         </Field>
 
-        <Field label="Postal / ZIP code">
+        <Field label="ZIP / postal code">
           <input
             name="zip"
             type="text"
@@ -1085,24 +1192,29 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
   }, [params, user?.id, isBackoffice]);
   useEffect(() => {
     if (params.get('topup_cancelled') === '1' && user && !isBackoffice) {
-      void api('wallet/topup-cancel', 'POST', {})
-        .then(() => {
-          notify('Top-up cancelled.');
+      void api<{ detail?: string; released?: boolean }>('wallet/topup-cancel', 'POST', {})
+        .then((result) => {
+          notify(result.released ? 'Top-up cancelled.' : (result.detail || 'Top-up status could not be confirmed.'), !result.released);
           void client.invalidateQueries({ queryKey: ['wallet', user.id] });
           router.replace('/account/wallet');
         })
-        .catch(() => {});
+        .catch((error: unknown) => {
+          notify(error instanceof Error ? error.message : 'Unable to verify top-up cancellation.', true);
+          router.replace('/account/wallet');
+        });
     }
   }, [params, user?.id, isBackoffice, router, notify, client]);
   const links = isBackoffice
     ? [
         ['profile', 'Personal details', UserRound],
+        ['payout-accounts', 'Payout accounts', Landmark],
       ] as const
     : [
         ['overview', 'Overview', UserRound],
         ['orders', 'My orders', Package],
         ['wallet', 'ProAce Wallet', WalletCards],
         ['addresses', 'Address book', MapPin],
+        ['payout-accounts', 'Payout accounts', Landmark],
         ['affiliates', 'Affiliates & referrals', UsersRound],
         ['profile', 'Personal details', UserRound],
       ] as const;
@@ -1133,10 +1245,13 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
           <aside className="account-sidebar">
             <div className="account-avatar">
               {user?.avatar_url ? (
-                <img
+                <ResponsiveMediaImage
                   src={user.avatar_url}
                   alt={user.first_name}
                   style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }}
+                  sizes="64px"
+                  width={128}
+                  height={128}
                 />
               ) : (
                 user?.first_name?.[0] || 'P'
@@ -1234,7 +1349,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
             </nav>
           </aside>
           <div className="account-content">
-            {isBackoffice || section === 'profile' ? (
+            {section === 'profile' || (isBackoffice && section !== 'payout-accounts') ? (
               <>
                 <h1>Personal details</h1>
                 <ActivityDetails {...user} />
@@ -1277,6 +1392,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                     <ArrowRight size={16} />
                   </button>
                 </form>
+                <ConnectedAccounts />
               </>
             ) : section === 'overview' ? (
               <>
@@ -1302,6 +1418,12 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                     <span>Saved addresses</span>
                     <ArrowRight size={17} />
                   </Link>
+                  <Link href="/account/payout-accounts">
+                    <Landmark />
+                    <strong>Manage</strong>
+                    <span>Payout accounts</span>
+                    <ArrowRight size={17} />
+                  </Link>
                 </div>
                 <div className="section-heading">
                   <h2>Recent orders</h2>
@@ -1315,6 +1437,16 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                   error={orders.error}
                 />
               </>
+            ) : section === 'payout-accounts' ? (
+              <div className="payout-accounts-page">
+                <span className="eyebrow green">ACCOUNT FINANCE</span>
+                <h1>Payout accounts</h1>
+                <p className="muted">
+                  Manage saved bank and Stripe destinations for withdrawals.
+                </p>
+                <BankAccounts heading="Saved bank accounts" />
+                <StripePayoutDestinations />
+              </div>
             ) : section === 'orders' ? (
               <>
                 <h1>My orders</h1>
@@ -1592,14 +1724,57 @@ function OrderList({ orders, loading, error, filtered = false }: { orders?: Orde
   );
 }
 
+function carrierTrackingUrl(carrier: string, trackingNumber: string): string {
+  const encodedNumber = encodeURIComponent(trackingNumber);
+  switch (carrier.toUpperCase()) {
+    case 'FEDEX':
+      return `https://www.fedex.com/fedextrack/?trknbr=${encodedNumber}`;
+    case 'UPS':
+      return `https://www.ups.com/track?tracknum=${encodedNumber}`;
+    case 'DHL':
+      return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encodedNumber}`;
+    case 'USPS':
+      return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodedNumber}`;
+    default:
+      return '';
+  }
+}
+
 export function OrderPage({ id }: { id: string }) {
-  const { user, notify } = useShop(); const params = useSearchParams(); const client = useQueryClient();
+  const { user, notify, logout } = useShop();
+  const params = useSearchParams();
+  const client = useQueryClient();
+  const router = useRouter();
+  const loginUrl = `/login?next=${encodeURIComponent(`/orders/${id}`)}`;
+  const [switchingAccount, setSwitchingAccount] = useState(false);
   const order = useQuery({
     queryKey: ['order', id, user?.id],
     queryFn: () => api<Order>(`orders/${id}`),
     enabled: !!user,
-    refetchInterval: 15000,
+    retry: (attempt, error) => !(error instanceof ApiError && [401, 403, 404].includes(error.status)) && attempt < 1,
+    refetchInterval: query => query.state.error instanceof ApiError
+      && [401, 403, 404].includes(query.state.error.status) ? false : 15000,
   });
+  const unauthorized = order.error instanceof ApiError && order.error.status === 401;
+  const unavailable = order.error instanceof ApiError && [403, 404].includes(order.error.status);
+
+  useEffect(() => {
+    if (!unauthorized) return;
+    void clearSignedInSession(client).then(() => router.replace(loginUrl));
+  }, [unauthorized, client, router, loginUrl]);
+
+  async function switchAccount(): Promise<void> {
+    setSwitchingAccount(true);
+    try {
+      await logout();
+      router.replace(loginUrl);
+    } catch {
+      notify('Unable to switch accounts. Please try again.', true);
+    } finally {
+      setSwitchingAccount(false);
+    }
+  }
+
   const [requestingRefund, setRequestingRefund] = useState(false);
   const [editingRefund, setEditingRefund] = useState(false);
   const [reason, setReason] = useState('item_damaged');
@@ -1722,6 +1897,7 @@ export function OrderPage({ id }: { id: string }) {
       : carrierCode === 'DHL'
       ? `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encodeURIComponent(data?.tracking_number || '')}`
       : `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(data?.tracking_number || '')}`);
+  const multipleFulfillments = (data?.fulfillments || []).length > 1;
 
   const hoursElapsed = (Date.now() - createdTime) / (1000 * 60 * 60);
   const isWithin12Hours = hoursElapsed <= 12;
@@ -1772,15 +1948,34 @@ export function OrderPage({ id }: { id: string }) {
   }
 
   return (
-    <Gate next={`/orders/${id}`}>
+    <Gate next={`/orders/${id}`} redirectToSignIn>
       <div className="container order-detail">
         <Link className="text-link" href="/account/orders">
           <ArrowLeft size={16} />All orders
         </Link>
         {order.isLoading ? (
           <Loading />
+        ) : unauthorized ? (
+          <Loading />
+        ) : unavailable ? (
+          <section className="empty-state" aria-labelledby="order-unavailable-title">
+            <LockKeyhole size={38} aria-hidden="true" />
+            <h2 id="order-unavailable-title">This order isn’t available to your account</h2>
+            <p>Check your orders or switch to the account used for this purchase.</p>
+            <div className="form-actions">
+              <Link className="button" href="/account/orders">Your orders</Link>
+              <button
+                type="button"
+                className="button secondary"
+                disabled={switchingAccount}
+                onClick={() => void switchAccount()}
+              >
+                {switchingAccount ? 'Switching account…' : 'Switch account'}
+              </button>
+            </div>
+          </section>
         ) : order.error ? (
-          <ErrorState error={order.error} />
+          <ErrorState error={new Error('Unable to load this order right now. Please try again.')} retry={() => void order.refetch()} />
         ) : (
           data && (
             <>
@@ -1805,17 +2000,56 @@ export function OrderPage({ id }: { id: string }) {
                     ? `Your order ${data.reference} is ${data.status}. Thank you for shopping with ProAce.`
                     : `Placed on ${displayDate(data.created)}`}
                 </p>
-                <Status value={data.status} />
-                <button
-                  type="button"
-                  className="button secondary receipt-print-button"
-                  onClick={() => window.print()}
-                >
-                  <Printer size={16} />Print receipt
-                </button>
+                <div className="order-status-actions">
+                  <Status value={data.status} />
+                  <button
+                    type="button"
+                    className="button secondary receipt-print-button"
+                    onClick={() => window.print()}
+                  >
+                    <Printer size={16} />Print receipt
+                  </button>
+                </div>
               </div>
 
-              {data.tracking_number && (
+              {multipleFulfillments ? (
+                <div className="shipping-banner shipping-banner-multiple">
+                  <div className="shipment-tracking-heading">
+                    <Truck size={24} className="shipping-banner-icon" />
+                    <strong className="shipping-banner-title">Delivery updates by store</strong>
+                  </div>
+                  <div className="shipment-tracking-list">
+                    {data.fulfillments.map((fulfillment) => {
+                      const trackingHref = fulfillment.tracking_number
+                        ? carrierTrackingUrl(fulfillment.carrier, fulfillment.tracking_number)
+                        : '';
+                      return (
+                        <div className="shipment-tracking-row" key={fulfillment.store}>
+                          <div className="shipment-tracking-meta">
+                            <strong>{fulfillment.store_name || `Store ${fulfillment.store}`}</strong>
+                            <span>Status: {fulfillment.status.toUpperCase()}</span>
+                            {fulfillment.tracking_number && (
+                              <span>
+                                {fulfillment.carrier}: {fulfillment.tracking_number}
+                              </span>
+                            )}
+                          </div>
+                          {trackingHref && (
+                            <a
+                              href={trackingHref}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="button secondary compact"
+                            >
+                              Track shipment <ExternalLink size={14} />
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : data.tracking_number && (
                 <div className="shipping-banner">
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <Truck size={24} className="shipping-banner-icon" />
@@ -2022,9 +2256,9 @@ export function OrderPage({ id }: { id: string }) {
                     </button>
                   )}
                   {requestingRefund && !['cancelled', 'refunded'].includes(data.status) && (
-                    <form className="form-stack" onSubmit={submitRefund} style={{ marginTop: '1rem' }}>
+                    <form className="order-refund-form" onSubmit={submitRefund}>
                       <h4>{editingRefund ? 'Edit refund request' : 'Request refund (7-day window)'}</h4>
-                      <fieldset className="form-stack">
+                      <fieldset className="order-refund-items">
                         <legend>Select items to return</legend>
                         {data.items.map((item) => {
                           const isClaimedByOther = claimedProductIds.includes(item.product) && !activeRefund?.product_ids?.includes(item.product);
@@ -2032,7 +2266,7 @@ export function OrderPage({ id }: { id: string }) {
                           const isDisabled = Boolean(item.is_digital) || isClaimed;
 
                           return (
-                            <label className="check-row" key={item.product}>
+                            <label className="order-refund-item" key={item.product}>
                               <input
                                 type="checkbox"
                                 disabled={isDisabled}
@@ -2045,24 +2279,29 @@ export function OrderPage({ id }: { id: string }) {
                                   )
                                 }
                               />
-                              {item.title} · {money(Number(item.unit_price) * item.quantity)}
-                              {item.is_digital ? (
-                                <small>
-                                  Digital products are non-refundable. If you are experiencing issues, please contact support via email.
-                                </small>
-                              ) : isClaimed ? (
-                                <small style={{ color: 'var(--muted, #64748b)' }}>
-                                  Refund already requested, processed, or declined for this item.
-                                </small>
-                              ) : null}
+                              <span className="order-refund-item-copy">
+                                <strong>{item.title}</strong>
+                                <span className="muted">
+                                  Quantity: {item.quantity} · {money(Number(item.unit_price) * item.quantity)}
+                                </span>
+                                {item.is_digital ? (
+                                  <small>
+                                    Digital products are non-refundable. If you are experiencing issues, please contact support via email.
+                                  </small>
+                                ) : isClaimed ? (
+                                  <small style={{ color: 'var(--muted, #64748b)' }}>
+                                    Refund already requested, processed, or declined for this item.
+                                  </small>
+                                ) : null}
+                              </span>
                             </label>
                           );
                         })}
                       </fieldset>
-                      <Field label="Refund Destination">
+                      <Field label="Refund destination">
                         <select value={refundType} onChange={(e) => setRefundType(e.target.value)}>
-                          <option value="store_credit">Instant ProAce Store Credit (Wallet)</option>
-                          <option value="original_payment">Original Payment Method (Card / Bank)</option>
+                          <option value="store_credit">ProAce Wallet credit</option>
+                          <option value="original_payment">Original payment method</option>
                         </select>
                       </Field>
                       <Field label="Reason for return">
@@ -2083,7 +2322,7 @@ export function OrderPage({ id }: { id: string }) {
                           />
                         </Field>
                       )}
-                      <div className="form-row">
+                      <div className="order-refund-actions">
                         <button className="button" disabled={busy || refundProducts.length === 0}>
                           {busy ? (editingRefund ? 'Updating…' : 'Submitting…') : (editingRefund ? 'Save changes' : 'Submit request')}
                         </button>
@@ -2108,9 +2347,11 @@ export function OrderPage({ id }: { id: string }) {
                       Digital products are non-refundable. If you are experiencing issues, please contact support via email.
                     </p>
                   )}
-                  <Link className="button" href="/shop">
-                    Keep discovering <ArrowRight size={16} />
-                  </Link>
+                  {!requestingRefund && (
+                    <Link className="button" href="/shop">
+                      Keep discovering <ArrowRight size={16} />
+                    </Link>
+                  )}
                 </aside>
               </div>
             </>
@@ -2157,10 +2398,11 @@ export function OrderPage({ id }: { id: string }) {
                   <iframe title={viewer.title} src={viewer.url} style={{ width: '100%', height: '100%', border: 0 }} />
                 ) : (
                   <div style={{ position: 'relative', maxWidth: '100%', maxHeight: '100%' }}>
-                    <img
+                    <ResponsiveMediaImage
                       src={viewer.url}
                       alt={viewer.title}
                       style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      detail
                     />
                   </div>
                 )}

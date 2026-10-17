@@ -1,5 +1,5 @@
 """Validated collection criteria applied before pagination and serialization."""
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Mapping, TypeVar
 
 from django.db.models import Model, Q, QuerySet
@@ -9,6 +9,8 @@ Record = TypeVar("Record", bound=Model)
 
 
 class ListingQuerySerializer(serializers.Serializer):
+    record_id = serializers.IntegerField(min_value=1, required=False)
+    store_id = serializers.IntegerField(min_value=1, required=False)
     status = serializers.CharField(required=False, allow_blank=True)
     payout_method = serializers.CharField(required=False, allow_blank=True)
     entry_type = serializers.CharField(required=False, allow_blank=True)
@@ -20,6 +22,7 @@ class ListingQuerySerializer(serializers.Serializer):
     is_digital = serializers.BooleanField(required=False)
     product_type = serializers.CharField(required=False, allow_blank=True)
     type = serializers.CharField(required=False, allow_blank=True)
+    ordering = serializers.CharField(required=False, allow_blank=True)
     validity = serializers.ChoiceField(choices=["", "current", "expired", "upcoming"], required=False)
     created_by = serializers.CharField(required=False, allow_blank=True)
     category = serializers.CharField(required=False, allow_blank=True)
@@ -30,6 +33,11 @@ class ListingQuerySerializer(serializers.Serializer):
     max_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, required=False)
     limit = serializers.IntegerField(min_value=1, max_value=100, default=20)
     offset = serializers.IntegerField(min_value=0, default=0)
+
+    def validate_end_date(self, value: date) -> date:
+        if value == date.max:
+            raise serializers.ValidationError('Choose an end date earlier than 9999-12-31.')
+        return value
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         for lower, upper in [("start_date", "end_date"), ("min_amount", "max_amount")]:
@@ -50,6 +58,8 @@ def filter_records(
     query = ListingQuerySerializer(data=params)
     query.is_valid(raise_exception=True)
     criteria = query.validated_data
+    if criteria.get("record_id"):
+        records = records.filter(pk=criteria["record_id"])
     search = criteria["search"].strip()
     if search and search_fields:
         condition = Q()

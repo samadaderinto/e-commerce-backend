@@ -123,3 +123,121 @@ test('store images crop, preview, retry, persist and remove without submitting o
   expect(settingsWrites).toBe(0);
   expect(await page.evaluate((): boolean => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
+
+test('store creation stages both images and retries uploads without duplicating the store', async ({page}) => {
+  let creates = 0;
+  let avatarUploads = 0;
+  let bannerUploads = 0;
+  const store = {id: 99, name: 'New studio', username: 'new-studio', status: 'active'};
+  await page.route('**/api/**', async route => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.replace(/\/$/, '');
+    if (path === '/api/stores' && request.method() === 'POST') {
+      creates += 1;
+      return route.fulfill({json: store});
+    }
+    if (path.includes('/profile-images/')) {
+      if (path.endsWith('/avatar')) avatarUploads += 1;
+      else bannerUploads += 1;
+      if (bannerUploads === 1) return route.fulfill({status: 503, json: {detail: 'Please retry.'}});
+      return route.fulfill({json: {email: 'seller@test.com'}});
+    }
+    const json: unknown = path === '/api/me'
+      ? {id: 2, email: 'seller@test.com', first_name: 'Seller'}
+      : path === '/api/stores'
+      ? {count: creates ? 1 : 0, results: creates ? [store] : []}
+      : path === '/api/cart'
+      ? {items: [], subtotal: '0', shipping: '0', total: '0'}
+      : path === '/api/wishlist'
+      ? []
+      : {count: 0, results: []};
+    await route.fulfill({json});
+  });
+  await page.goto('/merchant');
+  const original = await photo(page, 2048, 1024);
+  for (const label of ['profile image', 'banner']) {
+    await page.getByLabel(`Upload ${label}`, {exact: true}).setInputFiles({name: 'brand.png', mimeType: 'image/png', buffer: original});
+    await page.getByRole('dialog').getByRole('button', {name: `Save ${label}`, exact: true}).click();
+  }
+  expect(avatarUploads).toBe(0);
+  expect(bannerUploads).toBe(0);
+  await expect(page.locator('.store-branding-avatar img')).toBeVisible();
+  await expect(page.locator('.store-branding-banner img')).toBeVisible();
+  for (const [name, value] of Object.entries({name: 'New studio', email: 'seller@test.com', address: '1 Test Road', city: 'Tampa', state: 'FL', country: 'US', zip: '33602'})) {
+    await page.locator(`[name="${name}"]`).fill(value);
+  }
+  await page.getByRole('button', {name: 'Create my store'}).click();
+  await expect(page.locator('.form-error')).toContainText('Retry to finish uploading');
+  expect(creates).toBe(1);
+  await page.getByRole('button', {name: 'Create my store'}).click();
+  await expect(page).toHaveURL(/\/merchant\/products\/new/);
+  expect(creates).toBe(1);
+  expect(avatarUploads).toBe(1);
+  expect(bannerUploads).toBe(2);
+});
+
+test('creating an additional store selects it before opening the first-product editor', async ({ page }) => {
+  const existingStore = {
+    id: 11,
+    name: 'Existing shop',
+    username: 'existing-shop',
+    status: 'active',
+  };
+  const newStore = {
+    id: 99,
+    name: 'New studio',
+    username: 'new-studio',
+    status: 'active',
+  };
+  const onboardingStore = { ...newStore, address: { id: 99 } };
+  let created = false;
+
+  await page.route('**/api/**', async (route): Promise<void> => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.replace(/\/$/, '');
+    let json: unknown = {};
+
+    if (path === '/api/me') {
+      json = { id: 2, email: 'seller@test.com', first_name: 'Seller' };
+    } else if (path === '/api/stores' && request.method() === 'POST') {
+      created = true;
+      json = onboardingStore;
+    } else if (path === '/api/stores') {
+      json = {
+        count: created ? 2 : 1,
+        results: created ? [newStore, existingStore] : [existingStore],
+      };
+    } else if (path === '/api/stores/99') {
+      json = newStore;
+    } else if (path === '/api/stores/11') {
+      json = existingStore;
+    } else if (path === '/api/cart') {
+      json = { items: [], subtotal: '0', shipping: '0', total: '0' };
+    } else if (path === '/api/wishlist') {
+      json = [];
+    }
+
+    await route.fulfill({ json });
+  });
+
+  await page.goto('/merchant/new-store', { waitUntil: 'domcontentloaded' });
+  await expect(page.getByRole('button', { name: 'Create my store' })).toBeVisible();
+  for (const [name, value] of Object.entries({
+    name: 'New studio',
+    email: 'seller@test.com',
+    address: '1 Test Road',
+    city: 'Tampa',
+    state: 'Florida',
+    country: 'United States',
+    zip: '33602',
+  })) {
+    await page.locator(`[name="${name}"]`).fill(value);
+  }
+
+  await page.getByRole('button', { name: 'Create my store' }).click();
+
+  await expect(page).toHaveURL(/\/merchant\/products\/new$/);
+  await expect(page.getByRole('combobox', { name: 'Select store' })).toHaveValue('99');
+  await expect(page.getByRole('heading', { name: 'Something new to discover.' })).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('proace-active-store-2'))).toBe('99');
+});

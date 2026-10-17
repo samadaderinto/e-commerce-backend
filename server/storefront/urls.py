@@ -1,3 +1,4 @@
+from core.social_accounts import AuthenticationMethodsView, ConnectSocialAccountView, DisconnectSocialAccountView, SocialPasswordSetupView
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
@@ -14,6 +15,7 @@ from .views import (
 from store.views import StoreReviewViewSet
 from staff.views import StaffViewSet
 from affiliates.workspace import ReferralWorkspaceView, AffiliateOperatorView
+from core.bank_accounts import BankAccountsView, StripePayoutDestinationsView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -21,6 +23,10 @@ urlpatterns = [
     path('api/schema/', SpectacularAPIView.as_view(permission_classes=[AllowAny], authentication_classes=[]), name='schema'),
     path('api/docs/', SpectacularSwaggerView.as_view(url_name='schema', permission_classes=[AllowAny], authentication_classes=[]), name='swagger-ui'),
     path('api/redoc/', SpectacularRedocView.as_view(url_name='schema', permission_classes=[AllowAny], authentication_classes=[]), name='redoc'),
+    path('api/v1/auth/methods/', AuthenticationMethodsView.as_view()),
+    path('api/v1/auth/connect/<str:provider>/', ConnectSocialAccountView.as_view()),
+    path('api/v1/auth/disconnect/<str:provider>/', DisconnectSocialAccountView.as_view()),
+    path('api/v1/auth/password/', SocialPasswordSetupView.as_view()),
     path('api/v1/auth/<str:action>/', AuthView.as_view()),
     path('api/v1/password/change/', PasswordChangeView.as_view()),
     path('api/v1/me/', MeView.as_view()),
@@ -37,6 +43,10 @@ urlpatterns = [
     path('api/v1/users/<int:pk>/public/images/avatar/', PublicUserImageView.as_view()),
     path('api/v1/wishlist/', WishlistView.as_view()),
     path('api/v1/addresses/', AddressesView.as_view()),
+    path('api/v1/bank-accounts/', BankAccountsView.as_view()),
+    path('api/v1/bank-accounts/<int:pk>/', BankAccountsView.as_view()),
+    path('api/v1/stripe-payout-destinations/', StripePayoutDestinationsView.as_view()),
+    path('api/v1/stripe-payout-destinations/<int:pk>/', StripePayoutDestinationsView.as_view()),
     path('api/v1/addresses/<int:pk>/', AddressesView.as_view()),
     path('api/v1/cart/', CartView.as_view()),
     path('api/v1/checkout/', CheckoutView.as_view()),

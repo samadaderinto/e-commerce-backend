@@ -45,6 +45,49 @@ test('selecting a mapped variant activates its photo and preserves carousel navi
   await expect(photo).toHaveAttribute('src', cover);
 });
 
+test('product detail flash timer stays compact beside sale price details', async ({ page }) => {
+  const product = {
+    id: 992,
+    title: 'Flash deal product',
+    description: 'A product with a limited-time offer.',
+    category: 'electronics',
+    brand: 'Demo',
+    price: '100.00',
+    sale_price: '80.00',
+    discount: 20,
+    available: 5,
+    store: 1,
+    store_name: 'Demo',
+    store_username: 'demo',
+    average_rating: '0',
+    rating_count: 0,
+    sales: 0,
+    images: [],
+    image: '',
+    tags: [],
+    created: '2026-10-05T00:00:00Z',
+    is_own_store: false,
+    is_digital: false,
+    flash_sale_end: '2099-12-31T23:59:00Z',
+  };
+  await page.route('**/api/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === '/api/me') return route.fulfill({ status: 401, json: { detail: 'Sign in' } });
+    if (path === '/api/products/992') return route.fulfill({ json: product });
+    if (path === '/api/products') return route.fulfill({ json: { results: [], count: 0 } });
+    return route.fulfill({ json: [] });
+  });
+
+  await page.goto('/products/992');
+  const timer = page.getByLabel(/Flash deal ends in/);
+  await expect(timer).toBeVisible();
+  const timerBox = await timer.boundingBox();
+  const priceBox = await page.locator('.detail-price').boundingBox();
+  expect(timerBox).not.toBeNull();
+  expect(priceBox).not.toBeNull();
+  expect(timerBox!.width).toBeLessThan(priceBox!.width / 2);
+});
+
 test('merchant image mapping survives saving and reopening a variant', async ({ page }) => {
   const cover = 'http://127.0.0.1:3000/variant-photos/black.svg';
   const blue = 'http://127.0.0.1:3000/variant-photos/blue.svg';

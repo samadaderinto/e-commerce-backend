@@ -37,7 +37,7 @@ Paths below have prefix `/api/v1/`. Staff members have global backoffice access 
 | `password/change` POST | Own account | Own account | Own account | Own account (syncs MinIO/Grafana) |
 | `products`, public store catalog GET | Public | Public preview API | Public preview API | Public preview API |
 | `cart`, `wishlist`, `addresses`, `wallet`, `orders` collection | Own only | Denied | Denied | Denied |
-| `products/{id}/reviews` GET/POST/DELETE | Authenticated (posting: verified buyer; DELETE: own review) | Moderation DELETE allowed | Moderation DELETE allowed | Moderation DELETE allowed |
+| `products/{id}/reviews` GET/POST/DELETE | Public GET; verified purchasers may post; authors and the product's store owner may DELETE | Moderation DELETE allowed | Moderation DELETE allowed | Moderation DELETE allowed |
 | `checkout/validate-coupon` POST | Cart discount validation | Denied | Denied | Denied |
 | `checkout`, shipping rates, wallet session/confirm | Own only (split-tender allowed) | Denied | Denied | Denied |
 | `orders/{id}/cancel` POST | Own pending/confirmed orders | Denied | Denied | Denied |
@@ -64,6 +64,8 @@ Paths below have prefix `/api/v1/`. Staff members have global backoffice access 
 | Platform Treasury & Commission withdrawal POST | Denied | Denied | Allowed (audited platform treasury) | Allowed (audited platform treasury) |
 | Notifications | Own recipient inbox | Own inbox (unfiltered global operator notifications) | Own inbox (unfiltered global operator notifications) | Own inbox (unfiltered global operator notifications) |
 | Grafana, Silk technical profiling | Denied | Denied | Denied | Separate technical credentials / root session |
+
+The staff user-directory PATCH accepts only `is_active` for an existing non-admin account. It cannot grant or remove staff/admin roles; new staff accounts must be created through the verified staff invitation flow below. Store suspension and reactivation are restricted to business and technical administrators in both the centralized backoffice routes and the legacy store-review route. Staff can still read the store directory and review operational data.
 
 Legacy cart and payment viewsets also use the consumer policy. Monitoring scrape endpoints use a separate server-only `OBSERVABILITY_TOKEN`, not commerce JWTs. Keep that service token within technical operations.
 

@@ -1,22 +1,25 @@
 'use client';
 
+import { useNotificationDetail } from './notification-detail';
+
 import { CollectionCount, CollectionFilters, CollectionPagination, financialFields, useCollectionFilters, useDebouncedValue } from './collection-filters';
 
 
 import { browserTimeZone, calendarDateLabel, toLocalDateTimeInput } from '@/lib/datetime';
 
 import { DateStamp, activityDate } from './activity';
-import { StoreBranding } from './store-branding';
+import { StoreBranding, type ImageKind } from './store-branding';
+import { BankAccounts } from './bank-accounts';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, RotateCcw, Search, Settings, Share2, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
+import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Plus, Printer, RotateCcw, Search, Settings, Share2, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Truck, Upload, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
 import type { Dashboard, MerchantProduct, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent, StoreProfile } from '@/lib/types';
 import { useShop } from './providers';
 import { Gate } from './account';
-import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, ProductImage, ProductGallery, FlashCountdown, Status, VerifiedBadge, normalizeImageUrl } from './ui';
+import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, ProductImage, ProductGallery, FlashCountdown, Status, VerifiedBadge, normalizeImageUrl, ResponsiveMediaImage } from './ui';
 
 type MerchantOrder = {
   id: number;
@@ -31,6 +34,9 @@ type MerchantOrder = {
   delivered_at?: string | null;
   tracking_events?: TrackingEvent[];
   has_physical_items?: boolean;
+  order_status?: string;
+  customer?: { name?: string; email?: string; phone?: string };
+  shipping_address?: Record<string, unknown>;
   items: { product: number; title: string; quantity: number; is_digital?: boolean }[];
 };
 
@@ -46,20 +52,49 @@ type PreviewProduct = {
   affiliate_button_text?: string;
 };
 
+type StripeConnectStatus = {
+  connected: boolean;
+  details_submitted: boolean;
+  payouts_enabled: boolean;
+  currently_due: string[];
+};
+
+type StripeConnectResponse = {
+  connected: boolean;
+  pending: boolean;
+  url: string;
+};
+
+type MerchantPaymentDetail = {
+  title: string;
+  category: string;
+  rows: [string, string][];
+};
+
 
 export function MerchantPage({ segments }: { segments: string[] }) {
   const { user } = useShop();
+  const searchParams = useSearchParams();
+  const requestedStoreId = searchParams.get('store') || '';
   const [selection, setSelection] = useState<{ owner: number; storeId: number | null } | null>(null);
   const selectionReady = !!user && selection?.owner === user.id;
   useEffect(() => {
     if (!user) { setSelection(null); return; }
     let storeId: number | null = null;
+    const requestedId = Number(requestedStoreId);
+    if (Number.isSafeInteger(requestedId) && requestedId > 0) {
+      storeId = requestedId;
+    }
     try {
-      const saved = Number(localStorage.getItem(`proace-active-store-${user.id}`));
-      if (Number.isSafeInteger(saved) && saved > 0) storeId = saved;
+      if (storeId === null) {
+        const saved = Number(localStorage.getItem(`proace-active-store-${user.id}`));
+        if (Number.isSafeInteger(saved) && saved > 0) storeId = saved;
+      } else {
+        localStorage.setItem(`proace-active-store-${user.id}`, String(storeId));
+      }
     } catch { /* Storage may be unavailable; keep switching usable. */ }
     setSelection({ owner: user.id, storeId });
-  }, [user?.id]);
+  }, [user?.id, requestedStoreId]);
   function selectStore(storeId: number) {
     if (!user) return;
     setSelection({ owner: user.id, storeId });
@@ -68,7 +103,13 @@ export function MerchantPage({ segments }: { segments: string[] }) {
   }
   const stores = useQuery({ queryKey: ['stores', user?.id], queryFn: () => api<Page<Store>>('stores?limit=100'), enabled: !!user, refetchInterval: 30000 });
   const selectedStore = useQuery({ queryKey: ['stores', 'selected', user?.id, selection?.storeId], queryFn: () => api<Store>(`stores/${selection?.storeId}`), enabled: !!user && selectionReady && !!selection?.storeId });
-  const store = selectionReady ? (selectedStore.data?.id ? selectedStore.data : stores.data?.results.find(store => store.id === selection.storeId) || stores.data?.results[0]) : undefined;
+  const store = selectionReady
+    ? selectedStore.data?.id
+      ? selectedStore.data
+      : selection.storeId
+        ? stores.data?.results.find(item => item.id === selection.storeId)
+        : stores.data?.results[0]
+    : undefined;
   const section = segments[0] || 'overview';
   const storeLimitReached = !user?.is_superuser && !user?.is_business_admin && (stores.data?.count || 0) >= 10;
 
@@ -167,10 +208,13 @@ export function MerchantPage({ segments }: { segments: string[] }) {
             </Link>
             <div className="merchant-person">
               {user?.avatar_url ? (
-                <img
+                <ResponsiveMediaImage
                   src={user.avatar_url}
                   alt={user.first_name || 'User'}
                   style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                  sizes="32px"
+                  width={64}
+                  height={64}
                 />
               ) : (
                 <span>{user?.first_name?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}</span>
@@ -199,7 +243,7 @@ export function MerchantPage({ segments }: { segments: string[] }) {
             </Link>
           </div>
 
-          {stores.isLoading || !selectionReady ? (
+          {stores.isLoading || !selectionReady || (selectedStore.isLoading && !store) ? (
             <Loading />
           ) : stores.error ? (
             <ErrorState error={stores.error} retry={() => stores.refetch()} />
@@ -217,7 +261,7 @@ export function MerchantPage({ segments }: { segments: string[] }) {
                 label="Back to your stores"
               />
             ) : (
-              <OnboardStore />
+              <OnboardStore onCreated={selectStore} />
             )
           ) : store.status === 'blocked' ? (
             <Empty
@@ -256,12 +300,33 @@ export function MerchantPage({ segments }: { segments: string[] }) {
   );
 }
 
-function OnboardStore() {
+function OnboardStore({
+  onCreated,
+}: {
+  onCreated: (storeId: number) => void;
+}) {
   const { user, notify } = useShop();
   const client = useQueryClient();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [storeName, setStoreName] = useState<string>('');
+  const [images, setImages] = useState<Partial<Record<ImageKind, File>>>({});
+  const [imageUrls, setImageUrls] = useState<Partial<Record<ImageKind, string>>>({});
+  const createdStore = useRef<Store | null>(null);
+
+  useEffect(() => () => {
+    if (imageUrls.avatar) URL.revokeObjectURL(imageUrls.avatar);
+  }, [imageUrls.avatar]);
+
+  useEffect(() => () => {
+    if (imageUrls.banner) URL.revokeObjectURL(imageUrls.banner);
+  }, [imageUrls.banner]);
+
+  function selectImage(kind: ImageKind, file: File | null): void {
+    setImages(current => ({ ...current, [kind]: file || undefined }));
+    setImageUrls(current => ({ ...current, [kind]: file ? URL.createObjectURL(file) : undefined }));
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -270,7 +335,7 @@ function OnboardStore() {
     const data = Object.fromEntries(new FormData(event.currentTarget));
 
     try {
-      await api('stores', 'POST', {
+      const store = createdStore.current || await api<Store>('stores', 'POST', {
         name: data.name,
         profile: { email: data.email, bio: data.bio },
         address: {
@@ -281,11 +346,23 @@ function OnboardStore() {
           zip: data.zip,
         },
       });
+      createdStore.current = store;
+      for (const kind of ['avatar', 'banner'] as const) {
+        const file = images[kind];
+        if (!file) continue;
+        const upload = new FormData();
+        upload.append('image', file);
+        await api(`stores/${store.id}/profile-images/${kind}`, 'POST', upload);
+        setImages(current => ({ ...current, [kind]: undefined }));
+      }
       await client.invalidateQueries({ queryKey: ['stores'] });
+      onCreated(store.id);
       notify('Your store is ready. Time for your first product.');
       router.push('/merchant/products/new');
     } catch (error) {
-      setError((error as Error).message);
+      setError(
+        `${createdStore.current ? 'Your store was created, but an image could not be saved. Retry to finish uploading. ' : ''}${(error as Error).message}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -314,7 +391,7 @@ function OnboardStore() {
         <h2>Let’s make it official</h2>
         <div className="form-row">
           <Field label="Store name">
-            <input name="name" required maxLength={40} placeholder="Something memorable" />
+            <input name="name" required maxLength={40} placeholder="Something memorable" value={storeName} onChange={event => setStoreName(event.target.value)} />
           </Field>
           <Field label="Contact email">
             <input type="email" name="email" required defaultValue={user?.email} />
@@ -323,6 +400,13 @@ function OnboardStore() {
         <Field label="About your store">
           <textarea name="bio" placeholder="A little about what makes your store yours" />
         </Field>
+        <h3>Your store identity</h3>
+        <StoreBranding
+          store={{ name: storeName || 'Your store', username: '' }}
+          profile={{ avatar_url: imageUrls.avatar, banner_url: imageUrls.banner }}
+          onDraftChange={selectImage}
+          disabled={busy}
+        />
         <h3>Business address</h3>
         <p className="muted">
           Required for every store, including digital sellers. Physical orders use this as the pickup address.
@@ -371,8 +455,7 @@ function MerchantDashboard({ store }: { store: Store }) {
   const checklist = useQuery({ queryKey: ['onboarding', store.id], queryFn: () => api<{complete: boolean; steps: Record<string, boolean>}>(`stores/${store.id}/onboarding`) });
   const [requestingPayout, setRequestingPayout] = useState(false);
   const [payoutAmount, setPayoutAmount] = useState('');
-  const [bankName, setBankName] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
+  const [bankAccountId, setBankAccountId] = useState<number | null>(null);
   const [payoutBusy, setPayoutBusy] = useState(false);
   const data = stats.data;
   const values = data?.orders_by_day.slice(-30) || []; const max = Math.max(1, ...values.map(day => day.count));
@@ -383,7 +466,7 @@ function MerchantDashboard({ store }: { store: Store }) {
       await api(`stores/${store.id}/payouts`, 'POST', {
         amount: payoutAmount,
         payout_method: 'bank_transfer',
-        account_details: { bank_name: bankName, account_number: accountNumber },
+        bank_account_id: bankAccountId,
       });
       await client.invalidateQueries({ queryKey: ['dashboard', store.id] });
       await client.invalidateQueries({ queryKey: ['merchant-payouts', store.id] });
@@ -563,7 +646,7 @@ function MerchantDashboard({ store }: { store: Store }) {
               {[
                 {
                   label: 'Available for Payout',
-                  value: money(data.wallet?.available_balance || '0.00'),
+                  value: money(data.wallet?.withdrawable_balance ?? data.wallet?.available_balance ?? '0.00'),
                   icon: WalletCards,
                   note: 'Cleared sales past 7-day refund window',
                 },
@@ -621,12 +704,12 @@ function MerchantDashboard({ store }: { store: Store }) {
                 <form className="form-stack" onSubmit={submitPayout}>
                   <div className="form-row">
                     <Field
-                      label={`Payout amount (Max: ${money(data.wallet?.available_balance || '0.00')})`}
+                      label={`Payout amount (Max: ${money(data.wallet?.withdrawable_balance ?? data.wallet?.available_balance ?? '0.00')})`}
                     >
                       <input
                         type="number"
                         min="5.00"
-                        max={Number(data.wallet?.available_balance || '0')}
+                        max={Number(data.wallet?.withdrawable_balance ?? data.wallet?.available_balance ?? '0')}
                         step="0.01"
                         required
                         value={payoutAmount}
@@ -634,25 +717,12 @@ function MerchantDashboard({ store }: { store: Store }) {
                         placeholder="0.00"
                       />
                     </Field>
-                    <Field label="Bank Name">
-                      <input
-                        required
-                        value={bankName}
-                        onChange={(e) => setBankName(e.target.value)}
-                        placeholder="e.g. JPMorgan Chase"
-                      />
-                    </Field>
                   </div>
-                  <Field label="Account Number / IBAN">
-                    <input
-                      required
-                      value={accountNumber}
-                      onChange={(e) => setAccountNumber(e.target.value)}
-                      placeholder="e.g. 1234567890"
-                    />
-                  </Field>
+                  <div className="treasury-bank-picker">
+                    <BankAccounts compact pickerOnly selectedId={bankAccountId} onSelect={setBankAccountId} />
+                  </div>
                   <div className="form-row">
-                    <button className="button" disabled={payoutBusy}>
+                    <button className="button" disabled={payoutBusy || !bankAccountId}>
                       {payoutBusy ? 'Submitting…' : 'Submit withdrawal request'}
                     </button>
                     <button
@@ -873,17 +943,18 @@ function MerchantDashboard({ store }: { store: Store }) {
   );
 }
 
-function exportRows(products: MerchantProduct[]) {
+function exportRows(products: MerchantProduct[]): void {
   const escape = (value: unknown) =>
     `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`;
 
   const rows = [
-    ['ID', 'Product', 'Price', 'Stock', 'Published'],
+    ['ID', 'Product', 'Price', 'Stock', 'Units sold', 'Published'],
     ...products.map((product) => [
       product.id,
       product.title,
       product.price,
       product.is_digital ? 'Unlimited' : product.available,
+      product.product_type === 'affiliate_clickbank' ? 'Not tracked' : product.sales,
       product.visibility,
     ]),
   ];
@@ -1202,6 +1273,7 @@ function parseCsvRows(text: string): string[][] {
                   <th>Category</th>
                   <th>Price</th>
                   <th>Inventory</th>
+                  <th>Units sold</th>
                   <th>Status</th>
                   <th>
                     <span className="sr-only">Actions</span>
@@ -1254,6 +1326,15 @@ function parseCsvRows(text: string): string[][] {
                         <span className={product.available <= 5 ? 'low-stock' : ''}>
                           {product.available} in stock
                         </span>
+                      )}
+                    </td>
+                    <td>
+                      {product.product_type === 'affiliate_clickbank' ? (
+                        <span className="muted" title="Partner purchases are completed outside ProAce and are not tracked as sold units.">
+                          Not tracked
+                        </span>
+                      ) : (
+                        product.sales.toLocaleString()
                       )}
                     </td>
                     <td>
@@ -1920,10 +2001,10 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
             <span className="upload-preview-badge">Stored in MinIO</span>
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
-            <a href={`/api/stores/${store.id}/products/${id}/digital-file`} target="_blank" rel="noopener noreferrer" download className="button secondary" style={{ fontSize: '11px', padding: '6px 10px' }} title="Test file download">
+            <a href={`/api/stores/${store.id}/products/${id}/digital-file`} target="_blank" rel="noopener noreferrer" download className="button secondary compact" title="Test file download">
               <ArrowDownToLine size={13} /> Test
             </a>
-            <label className="button secondary" style={{ fontSize: '11px', padding: '6px 10px', cursor: 'pointer' }}>
+            <label className="button secondary compact" style={{ cursor: 'pointer' }}>
               <Upload size={13} /> Replace
               <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx,.png,.jpg,.jpeg,.webp,.svg,.avif" style={{ display: 'none' }} onChange={handleDigitalFileChange} />
             </label>
@@ -2234,7 +2315,14 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
 
   {coverPreview ? (
     <div className="upload-preview-card">
-      <img src={coverPreview} alt="Cover preview" className="upload-preview-thumb" />
+      <ResponsiveMediaImage
+        src={coverPreview}
+        alt="Cover preview"
+        className="upload-preview-thumb"
+        sizes="180px"
+        width={360}
+        height={360}
+      />
       <div className="upload-preview-meta">
         <strong>{coverFile?.name || 'Selected cover photo'}</strong>
         <span>
@@ -2282,8 +2370,8 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         </span>
       </div>
       <label
-        className="button secondary"
-        style={{ fontSize: '11px', padding: '6px 10px', cursor: 'pointer' }}
+        className="button secondary compact"
+        style={{ cursor: 'pointer' }}
       >
         <Upload size={13} /> {autoDigitalCover && !coverImage && !product.data?.image_url ? 'Upload custom cover' : 'Change'}
         <input
@@ -2587,11 +2675,11 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
             </div>
             <div className="digital-asset-card-actions">
               {product.digital_file_url && (
-                <a href={`/api/stores/${store.id}/products/${product.id}/digital-file`} target="_blank" rel="noopener noreferrer" download className="button secondary" style={{ fontSize: '11px', padding: '6px 12px' }}>
+                <a href={`/api/stores/${store.id}/products/${product.id}/digital-file`} target="_blank" rel="noopener noreferrer" download className="button secondary compact">
                   <ArrowDownToLine size={14} /> Test download
                 </a>
               )}
-              <label className="button secondary" style={{ fontSize: '11px', padding: '6px 12px', cursor: 'pointer' }}>
+              <label className="button secondary compact" style={{ cursor: 'pointer' }}>
                 <Upload size={14} /> {digitalUploading ? 'Uploading…' : product.digital_file_url ? 'Replace file' : 'Upload file'}
                 <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx,.png,.jpg,.jpeg,.webp,.svg,.avif" disabled={digitalUploading} style={{ display: 'none' }} onChange={handleDigitalUpload} />
               </label>
@@ -2644,18 +2732,24 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
 function MerchantOrderTable({
   orders,
   storeId,
+  focusOrderId,
   onUpdated,
+  onOrderDetailsClosed,
   isFiltered,
   onResetFilters,
 }: {
   orders: MerchantOrder[];
   storeId?: number;
+  focusOrderId?: string;
   onUpdated?: () => void;
+  onOrderDetailsClosed?: () => void;
   isFiltered?: boolean;
   onResetFilters?: () => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [detailsOrder, setDetailsOrder] = useState<MerchantOrder | null>(null);
   const [trackingOrder, setTrackingOrder] = useState<MerchantOrder | null>(null);
+  const detailsDialogRef = useDialogFocus(Boolean(detailsOrder), () => closeOrderDetails());
   const trackingDialogRef = useDialogFocus(!!trackingOrder, () => setTrackingOrder(null));
   const [trackingNumber, setTrackingNumber] = useState('');
   const [carrier, setCarrier] = useState('USPS');
@@ -2665,8 +2759,37 @@ function MerchantOrderTable({
   const [confirmVerified, setConfirmVerified] = useState(false);
   const { notify } = useShop();
 
+  useEffect(() => {
+    if (!focusOrderId) return;
+    const targetOrder = orders.find((order) => String(order.id) === focusOrderId);
+    if (targetOrder) setDetailsOrder(targetOrder);
+  }, [focusOrderId, orders]);
+
+  function closeOrderDetails(): void {
+    setDetailsOrder(null);
+    onOrderDetailsClosed?.();
+  }
+
   const hasExistingTracking = Boolean(trackingOrder?.tracking_number);
   const isTrackingModified = hasExistingTracking && trackingNumber.trim() !== (trackingOrder?.tracking_number || '').trim();
+  const detailItems = Array.isArray(detailsOrder?.items) ? detailsOrder.items : [];
+  const detailFields: [string, string][] = detailsOrder ? [
+    ['Order status', detailsOrder.order_status || detailsOrder.status],
+    ['Placed', activityDate(detailsOrder.created)],
+    ['Customer', detailsOrder.customer?.name || 'Guest checkout'],
+    ['Email', detailsOrder.customer?.email || ''],
+    ['Phone', detailsOrder.customer?.phone || ''],
+    ['Products', detailItems.map((item) => `${item.title} × ${item.quantity}`).join(', ')],
+    ['Units', String(detailItems.reduce((sum, item) => sum + item.quantity, 0))],
+    ['Delivery', detailsOrder.has_physical_items === false ? 'Digital delivery' : 'Physical delivery'],
+    ['Carrier', detailsOrder.carrier || ''],
+    ['Tracking number', detailsOrder.tracking_number || ''],
+    ['Shipping address', Object.values(detailsOrder.shipping_address || {})
+      .filter((value): value is string | number => typeof value === 'string' || typeof value === 'number')
+      .map(String)
+      .filter((value) => value.trim())
+      .join(', ')],
+  ] : [];
 
   async function submitTracking(event: FormEvent) {
     event.preventDefault();
@@ -2744,31 +2867,40 @@ function MerchantOrderTable({
           </thead>
           <tbody>
             {orders.map((order) => {
+              const orderItems = Array.isArray(order.items) ? order.items : [];
               const isDigital =
                 order.has_physical_items === false ||
-                (order.items.length > 0 && order.items.every((it) => Boolean(it.is_digital)));
+                (orderItems.length > 0 && orderItems.every((it) => Boolean(it.is_digital)));
 
               return (
                 <tr key={order.id}>
                   <td>
-                    <strong>{order.reference}</strong>
+                    <button
+                      type="button"
+                      className="text-link order-reference-link"
+                      title="View order details"
+                      aria-label={`View details for order ${order.reference}`}
+                      onClick={() => setDetailsOrder(order)}
+                    >
+                      #{order.reference}
+                    </button>
                   </td>
                   <td>
                     <DateStamp value={order.created} dateOnly />
                   </td>
                   <td>
                     {expanded === order.id
-                      ? order.items.map((item) => (
+                      ? orderItems.map((item) => (
                           <p key={item.product}>
                             {item.title} × {item.quantity}
                           </p>
                         ))
-                      : `${order.items[0]?.title || 'Order'}${
-                          order.items.length > 1 ? ` +${order.items.length - 1}` : ''
+                      : `${orderItems[0]?.title || 'Order'}${
+                          orderItems.length > 1 ? ` +${orderItems.length - 1}` : ''
                         }`}
                   </td>
                   <td>
-                    {order.items.reduce((sum, item) => sum + item.quantity, 0)}
+                    {orderItems.reduce((sum, item) => sum + item.quantity, 0)}
                   </td>
                   <td>
                     {isDigital ? (
@@ -2835,6 +2967,58 @@ function MerchantOrderTable({
           </tbody>
         </table>
       </div>
+
+      {detailsOrder && (
+        <div
+          className="dialog-backdrop admin-detail-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeOrderDetails();
+          }}
+        >
+          <section
+            ref={detailsDialogRef}
+            className="admin-detail-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="merchant-order-detail-title"
+          >
+            <header className="admin-detail-header">
+              <div className="admin-detail-heading">
+                <span className="admin-detail-icon" aria-hidden="true"><FileText size={22} /></span>
+                <div>
+                  <span className="eyebrow green">Order details</span>
+                  <h2 id="merchant-order-detail-title">#{detailsOrder.reference}</h2>
+                </div>
+              </div>
+              <button type="button" className="icon-button no-print" aria-label="Close details" onClick={closeOrderDetails}>
+                <X size={20} />
+              </button>
+            </header>
+            <div className="admin-detail-body">
+              <div className="admin-detail-status">
+                <span>Store fulfillment</span>
+                <Status value={detailsOrder.status.toLowerCase()} />
+              </div>
+              <dl className="admin-detail-grid">
+                {detailFields.filter(([, value]) => value.trim()).map(([label, value]) => (
+                  <div className="admin-detail-field" key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+            <footer className="admin-detail-footer no-print">
+              <button type="button" className="button secondary" onClick={() => window.print()}>
+                <Printer size={16} />
+                Print details
+              </button>
+              <button type="button" className="button" onClick={closeOrderDetails}>Done</button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {trackingOrder && (
         <div
@@ -3008,6 +3192,9 @@ function MerchantOrders({
   const [ordering, setOrdering] = useState('-created');
   const [offset, setOffset] = useState(0);
   const client = useQueryClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const focusOrderId = searchParams.get('order') || '';
 
   const hasActiveFilters = Boolean(
     search.trim() || status || timeframe || carrier || ordering !== '-created'
@@ -3022,6 +3209,7 @@ function MerchantOrders({
   if (timeframe) queryParams.set('days', timeframe);
   if (carrier) queryParams.set('carrier', carrier);
   if (ordering && ordering !== '-created') queryParams.set('ordering', ordering);
+  if (/^\d+$/.test(focusOrderId)) queryParams.set('order_id', focusOrderId);
 
   const orders = useQuery({
     queryKey: [
@@ -3033,9 +3221,13 @@ function MerchantOrders({
       carrier,
       ordering,
       offset,
+      focusOrderId,
     ],
     placeholderData: (previousData, previousQuery) =>
-      previousQuery?.queryKey[1] === store.id ? previousData : undefined,
+      previousQuery?.queryKey[1] === store.id
+        && previousQuery.queryKey.at(-1) === focusOrderId
+        ? previousData
+        : undefined,
     queryFn: () =>
       api<Page<MerchantOrder>>(
         `stores/${store.id}/orders?${queryParams.toString()}`
@@ -3049,6 +3241,15 @@ function MerchantOrders({
     setCarrier('');
     setOrdering('-created');
     setOffset(0);
+  }
+
+  function clearOrderDeepLink(): void {
+    if (!focusOrderId) return;
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete('order');
+    nextParams.delete('store');
+    const query = nextParams.toString();
+    router.replace(`/merchant/orders${query ? `?${query}` : ''}`, { scroll: false });
   }
 
   return (
@@ -3208,8 +3409,10 @@ function MerchantOrders({
           <MerchantOrderTable
             orders={orders.data?.results || []}
             storeId={store.id}
+            focusOrderId={focusOrderId}
             isFiltered={hasActiveFilters}
             onResetFilters={resetFilters}
+            onOrderDetailsClosed={clearOrderDeepLink}
             onUpdated={() => {
               client.invalidateQueries({ queryKey: ['merchant-orders', store.id] });
               client.invalidateQueries({ queryKey: ['merchant-recent', store.id] });
@@ -3250,14 +3453,24 @@ function MerchantPayments({ store }: { store: Store }) {
   const client = useQueryClient();
   const [requestingPayout, setRequestingPayout] = useState(false);
   const [payoutAmount, setPayoutAmount] = useState('');
-  const [bankName, setBankName] = useState('');
-  const [accountNumber, setAccountNumber] = useState('');
+  const [bankAccountId, setBankAccountId] = useState<number | null>(null);
   const [notes, setNotes] = useState('');
   const [payoutBusy, setPayoutBusy] = useState(false);
   const [activeTab, setActiveTab] = useState<'requests' | 'ledger'>('requests');
+  const [paymentDetail, setPaymentDetail] = useState<MerchantPaymentDetail | null>(null);
+  const clearPayoutDetail = useNotificationDetail<StorePayout>('payout', 'stores/wallet/payouts?paginated=1', showPayoutDetails);
+  const clearLedgerDetail = useNotificationDetail<StoreEarningsLedger>('ledger', `stores/wallet/ledger?store_id=${store.id}`, showLedgerDetails);
+
+  function closePaymentDetail(): void {
+    setPaymentDetail(null);
+    clearPayoutDetail();
+    clearLedgerDetail();
+  }
+
   const payoutFilters = useCollectionFilters();
   const ledgerFilters = useCollectionFilters();
   const filters = activeTab === 'requests' ? payoutFilters : ledgerFilters;
+  const paymentDetailDialogRef = useDialogFocus(Boolean(paymentDetail), () => closePaymentDetail());
 
   const stats = useQuery({
     queryKey: ['dashboard', store.id, '30'],
@@ -3277,7 +3490,49 @@ function MerchantPayments({ store }: { store: Store }) {
   const wallet = stats.data?.wallet;
   const isOfficial = Boolean(store.is_official);
   const canWithdraw = !user?.is_staff && !user?.is_superuser && !user?.is_business_admin;
-  const availableBal = Number(wallet?.available_balance || '0');
+  const availableBal = Number(wallet?.withdrawable_balance ?? wallet?.available_balance ?? '0');
+
+  function showPayoutDetails(payout: StorePayout): void {
+    const rows: [string, string][] = [
+      ['Reference', payout.reference],
+      ['Store', payout.store_name || store.name],
+      ['Amount', money(payout.amount)],
+      ['Status', payout.status],
+      ['Method', payout.payout_method.replaceAll('_', ' ')],
+      ['Requested', activityDate(payout.created)],
+    ];
+    if (payout.processed_at) rows.push(['Processed', activityDate(payout.processed_at)]);
+    if (payout.notes?.trim()) rows.push(['Notes', payout.notes.trim()]);
+    for (const [key, value] of Object.entries(payout.account_details || {})) {
+      if (value === null || value === undefined || !String(value).trim()) continue;
+      const text = String(value);
+      const label = key.replaceAll('_', ' ');
+      const masked = /last_?4$/i.test(key)
+        ? `********${text.slice(-2)}`
+        : /account_number|routing_number|iban/i.test(key)
+          ? `********${text.replace(/\s/g, '').slice(-4)}`
+          : text;
+      rows.push([label, masked]);
+    }
+    setPaymentDetail({ title: `Payout ${payout.reference}`, category: 'Payout', rows });
+  }
+
+  function showLedgerDetails(entry: StoreEarningsLedger): void {
+    const rows: [string, string][] = [
+      ['Entry type', entry.entry_type],
+      ['Description', entry.description],
+      ['Reference', entry.reference],
+      ['Order ID', entry.order ? `#${entry.order}` : ''],
+      ['Gross amount', money(entry.gross_amount)],
+      ['Fee amount', money(entry.fee_amount)],
+      ['Net amount', money(entry.net_amount)],
+      ['Status', entry.status],
+      ['Available on', entry.available_at ? activityDate(entry.available_at) : ''],
+      ['Cleared on', entry.cleared_at ? activityDate(entry.cleared_at) : ''],
+      ['Created', activityDate(entry.created)],
+    ];
+    setPaymentDetail({ title: `Ledger entry ${entry.reference || `#${entry.id}`}`, category: 'Store earnings', rows });
+  }
 
   async function submitPayout(event: FormEvent) {
     event.preventDefault();
@@ -3286,7 +3541,7 @@ function MerchantPayments({ store }: { store: Store }) {
       await api(`stores/${store.id}/payouts`, 'POST', {
         amount: payoutAmount,
         payout_method: 'bank_transfer',
-        account_details: { bank_name: bankName, account_number: accountNumber },
+        bank_account_id: bankAccountId,
         notes: notes || undefined,
       });
       await client.invalidateQueries({ queryKey: ['dashboard', store.id] });
@@ -3337,7 +3592,7 @@ function MerchantPayments({ store }: { store: Store }) {
         {[
           {
             label: isOfficial ? 'Consolidated Treasury Sales' : 'Available for Payout',
-            value: money(wallet?.available_balance || '0.00'),
+            value: money(isOfficial ? wallet?.available_balance || '0.00' : availableBal),
             icon: WalletCards,
             note: isOfficial ? 'Cleared sales consolidated into Platform Treasury (/admin/commission)' : 'Cleared sales past 7-day refund window',
             highlight: availableBal > 0,
@@ -3373,26 +3628,21 @@ function MerchantPayments({ store }: { store: Store }) {
       </div>
 
       {!isOfficial && requestingPayout && (
-        <div className="setup-notice" style={{ flexDirection: 'column', alignItems: 'stretch', marginTop: 24, padding: 24 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <section className="analytics-panel treasury-withdrawal-panel merchant-payout-panel">
+          <div className="treasury-withdrawal-heading">
             <div>
-              <h3 style={{ margin: 0, fontSize: 16 }}>Request Store Payout</h3>
-              <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>
-                Withdraw cleared funds directly to your verified bank account via direct bank transfer.
-              </p>
+              <h2>Request store payout</h2>
+              <p>Choose a saved bank account. Requests are reviewed before payment.</p>
             </div>
-            <button
-              className="icon-button"
-              onClick={() => setRequestingPayout(false)}
-              aria-label="Close payout form"
-            >
-              <X size={18} />
-            </button>
+            <div className="treasury-available-balance">
+              <span>Available to withdraw</span>
+              <strong>{money(availableBal)}</strong>
+            </div>
           </div>
-          <form className="form-stack" onSubmit={submitPayout}>
-            <div className="form-row">
-              <Field label={`Withdrawal Amount ($ USD, Max: ${money(availableBal)})`}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <form className="treasury-withdrawal-form" onSubmit={submitPayout}>
+            <div className="treasury-withdrawal-fields">
+              <Field label="Amount (USD)">
+                <div className="merchant-payout-amount">
                   <input
                     type="number"
                     min="5.00"
@@ -3400,57 +3650,45 @@ function MerchantPayments({ store }: { store: Store }) {
                     step="0.01"
                     required
                     value={payoutAmount}
-                    onChange={e => setPayoutAmount(e.target.value)}
+                    onChange={event => setPayoutAmount(event.target.value)}
                     placeholder="0.00"
-                    style={{ flex: 1 }}
                   />
                   <button
                     type="button"
-                    className="button secondary"
-                    style={{ minHeight: 42, padding: '0 12px', fontSize: 11 }}
-                    onClick={() => setPayoutAmount(String(availableBal.toFixed(2)))}
+                    className="button secondary compact"
+                    disabled={payoutBusy}
+                    onClick={() => setPayoutAmount(availableBal.toFixed(2))}
                   >
-                    Max ({money(availableBal)})
+                    Max
                   </button>
                 </div>
               </Field>
-              <Field label="Bank Name">
-                <input
-                  required
-                  value={bankName}
-                  onChange={e => setBankName(e.target.value)}
-                  placeholder="e.g. Chase, Wells Fargo, Barclays"
-                />
-              </Field>
-            </div>
-            <div className="form-row">
-              <Field label="Account Number / IBAN">
-                <input
-                  required
-                  value={accountNumber}
-                  onChange={e => setAccountNumber(e.target.value)}
-                  placeholder="e.g. 1234567890"
-                />
-              </Field>
-              <Field label="Payout Note / Memo (Optional)">
+              <Field label="Note (optional)">
                 <input
                   value={notes}
-                  onChange={e => setNotes(e.target.value)}
-                  placeholder="e.g. Monthly withdrawal"
+                  onChange={event => setNotes(event.target.value)}
+                  placeholder="Add a note for the payout reviewer…"
                 />
               </Field>
             </div>
-            <div className="form-actions" style={{ marginTop: 8 }}>
-              <button className="button" disabled={payoutBusy || availableBal < 5}>
-                {payoutBusy ? 'Submitting request…' : 'Submit withdrawal request'}
-                <ArrowRight size={16} />
+            <div className="treasury-bank-picker">
+              <BankAccounts compact pickerOnly selectedId={bankAccountId} onSelect={setBankAccountId} />
+            </div>
+            <div className="form-actions merchant-payout-actions">
+              <button className="button compact" disabled={payoutBusy || availableBal < 5 || !bankAccountId}>
+                {payoutBusy ? 'Submitting…' : 'Request withdrawal'}
               </button>
-              <button type="button" className="button secondary" onClick={() => setRequestingPayout(false)}>
+              <button
+                type="button"
+                className="button secondary compact"
+                disabled={payoutBusy}
+                onClick={() => setRequestingPayout(false)}
+              >
                 Cancel
               </button>
             </div>
           </form>
-        </div>
+        </section>
       )}
 
       <div style={{ marginTop: 32 }}>
@@ -3537,7 +3775,16 @@ function MerchantPayments({ store }: { store: Store }) {
                     {payouts.data.results.map(p => (
                       <tr key={p.id}>
                         <td><DateStamp value={p.created} dateOnly /></td>
-                        <td><strong>{p.reference}</strong></td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-link order-reference-link"
+                            aria-label={`View payout ${p.reference} details`}
+                            onClick={() => showPayoutDetails(p)}
+                          >
+                            {p.reference}
+                          </button>
+                        </td>
                         <td><strong style={{ color: 'var(--ink)' }}>{money(p.amount)}</strong></td>
                         <td style={{ textTransform: 'capitalize' }}>{p.payout_method.replace('_', ' ')}</td>
                         <td><Status value={p.status} /></td>
@@ -3587,8 +3834,15 @@ function MerchantPayments({ store }: { store: Store }) {
                           </span>
                         </td>
                         <td>
-                          <strong>{entry.description}</strong>
-                          {entry.reference && <small style={{ display: 'block', color: 'var(--muted)', fontSize: 9 }}>Ref: {entry.reference}</small>}
+                          <button
+                            type="button"
+                            className="text-link order-reference-link"
+                            aria-label={`View ledger entry ${entry.reference || entry.id} details`}
+                            onClick={() => showLedgerDetails(entry)}
+                          >
+                            <strong>{entry.description}</strong>
+                            {entry.reference && <small style={{ display: 'block', color: 'var(--muted)', fontSize: 9 }}>Ref: {entry.reference}</small>}
+                          </button>
                         </td>
                         <td>{money(entry.gross_amount)}</td>
                         <td className="muted">{money(entry.fee_amount)}</td>
@@ -3604,6 +3858,65 @@ function MerchantPayments({ store }: { store: Store }) {
           )
         )}
       </div>
+
+      {paymentDetail && (
+        <div
+          className="dialog-backdrop admin-detail-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closePaymentDetail();
+          }}
+        >
+          <section
+            ref={paymentDetailDialogRef}
+            className="admin-detail-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="merchant-payment-detail-title"
+          >
+            <header className="admin-detail-header">
+              <div className="admin-detail-heading">
+                <span className="admin-detail-icon" aria-hidden="true"><FileText size={22} /></span>
+                <div>
+                  <span className="eyebrow green">{paymentDetail.category} details</span>
+                  <h2 id="merchant-payment-detail-title">{paymentDetail.title}</h2>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="icon-button no-print"
+                aria-label="Close payment details"
+                onClick={() => closePaymentDetail()}
+              >
+                <X size={20} />
+              </button>
+            </header>
+            <div className="admin-detail-body">
+              <div className="admin-detail-status">
+                <span>Current status</span>
+                <Status value={paymentDetail.rows.find(([label]) => label === 'Status')?.[1]?.toLowerCase() || 'unknown'} />
+              </div>
+              <dl className="admin-detail-grid">
+                {paymentDetail.rows
+                  .filter(([label, value]) => label !== 'Status' && value.trim())
+                  .map(([label, value]) => (
+                    <div className={`admin-detail-field${['Notes'].includes(label) ? ' admin-detail-field-wide' : ''}`} key={label}>
+                      <dt>{label}</dt>
+                      <dd>{value}</dd>
+                    </div>
+                  ))}
+              </dl>
+            </div>
+            <footer className="admin-detail-footer no-print">
+              <button type="button" className="button secondary" onClick={() => window.print()}>
+                <Printer size={16} />
+                Print details
+              </button>
+              <button type="button" className="button" onClick={() => closePaymentDetail()}>Done</button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       <div className="dashboard-footnote" style={{ marginTop: 24 }}>
         {isOfficial
@@ -3810,8 +4123,16 @@ function MerchantNotifications({ store }: { store: Store }) {
                   </p>
                   <div className="merchant-notif-footer">
                     {isOrder && (
-                      <Link href="/merchant/orders" className="text-link" style={{ fontSize: 11 }}>
-                        Go to Orders <ArrowRight size={13} />
+                      <Link
+                        href={Number.isSafeInteger(Number(item.data?.order_id)) && Number(item.data?.order_id) > 0
+                          ? `/merchant/orders?store=${store.id}&order=${Number(item.data?.order_id)}`
+                          : '/merchant/orders'}
+                        className="text-link"
+                        style={{ fontSize: 11 }}
+                      >
+                        {Number.isSafeInteger(Number(item.data?.order_id)) && Number(item.data?.order_id) > 0
+                          ? 'Go to order'
+                          : 'Go to Orders'} <ArrowRight size={13} />
                       </Link>
                     )}
                     {isPayout && (
@@ -3864,6 +4185,35 @@ function MerchantSettings({ store }: { store: Store }) {
   const { notify } = useShop(); const client = useQueryClient(); const [busy, setBusy] = useState(false);
   const profile = useQuery({ queryKey: ['store-profile', store.id], queryFn: () => api<StoreProfile>(`stores/${store.id}/profile`) });
   const address = useQuery({ queryKey: ['store-address', store.id], queryFn: () => api<Record<string, string>>(`stores/${store.id}/pickup-address`) });
+  const stripeStatus = useQuery({
+    queryKey: ['stripe-connect-status', store.id],
+    queryFn: () => api<StripeConnectStatus>(`stores/${store.id}/stripe-status`),
+  });
+  const onboardingState = typeof window === 'undefined'
+    ? null
+    : new URLSearchParams(window.location.search).get('stripe_onboarding');
+  useEffect(() => {
+    if (!onboardingState) return;
+    let active = true;
+    void stripeStatus.refetch()
+      .then(({ data }) => {
+        if (!active || onboardingState !== 'return') return;
+        if (data?.connected) {
+          notify('Stripe payouts are connected.');
+        } else {
+          notify('Stripe saved your progress. Finish the remaining payout setup to enable payouts.');
+        }
+      })
+      .catch(() => {
+        if (active && onboardingState === 'return') {
+          notify('We could not refresh Stripe payout status. Please try again shortly.', true);
+        }
+      })
+      .finally(() => {
+        if (active) window.history.replaceState(null, '', '/merchant/settings');
+      });
+    return () => { active = false; };
+  }, [onboardingState, notify, stripeStatus.refetch]);
   async function brandingSaved(updatedProfile: StoreProfile): Promise<void> {
     client.setQueryData<StoreProfile>(['store-profile', store.id], updatedProfile);
     await client.invalidateQueries({ queryKey: ['public-store'] });
@@ -3871,7 +4221,17 @@ function MerchantSettings({ store }: { store: Store }) {
 
   async function connectStripe() {
     try {
-      const result = await api<{ url: string }>(`stores/${store.id}/connect-stripe`, 'POST');
+      const result = await api<StripeConnectResponse>(`stores/${store.id}/connect-stripe`, 'POST');
+      if (result.connected) {
+        await stripeStatus.refetch();
+        notify('Stripe payouts are already connected.');
+        return;
+      }
+      if (result.pending) {
+        await stripeStatus.refetch();
+        notify('Stripe has your payout details and is reviewing the account.');
+        return;
+      }
       if (result.url) window.location.assign(result.url);
     } catch (error) { notify((error as Error).message, true); }
   }
@@ -3918,7 +4278,15 @@ function MerchantSettings({ store }: { store: Store }) {
           <h1>Make yourself at home.</h1>
           <p>Your store, your brand identity.</p>
         </div>
-        <button type="button" className="button secondary" onClick={connectStripe}>Connect Stripe payouts</button>
+        {stripeStatus.isLoading ? null : stripeStatus.data?.connected ? (
+          <p role="status" className="success-message">Stripe payouts connected</p>
+        ) : stripeStatus.data?.details_submitted && !stripeStatus.data.currently_due.length ? (
+          <p role="status">Stripe payout setup is pending verification</p>
+        ) : (
+          <button type="button" className="button secondary" onClick={connectStripe}>
+            {stripeStatus.data?.details_submitted ? 'Complete remaining Stripe details' : 'Connect Stripe payouts'}
+          </button>
+        )}
       </div>
       {profile.isLoading || address.isLoading ? (
         <Loading />

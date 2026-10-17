@@ -1,6 +1,7 @@
 from urllib.parse import quote
 
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiTypes, extend_schema
+from django.http import HttpResponse
 from rest_framework.request import Request
 from rest_framework.exceptions import ValidationError
 from django.conf import settings
@@ -8,21 +9,25 @@ from django.shortcuts import get_object_or_404, redirect
 from django.db import transaction
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from affiliates.models import AffiliateWallet, Marketer, Referral, Url
+from core.access import IsCustomer
 from affiliates.serializers import (
     AffiliateWalletSerializer,
     MarketerSerializer,
     ReferralSerializer,
+    ReferralPageSerializer,
     AffiliateLinkRequestSerializer, UrlSerializer,
 )
+from core.listing_filters import ListingQuerySerializer, filter_records, record_page
 from product.models import Product
 
 
 class AffiliatesViewSet(viewsets.ViewSet):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCustomer]
+    serializer_class = MarketerSerializer
 
     def get_permissions(self):
         if self.action in ["redirect_url", "clickbank_outbound"]:
@@ -33,7 +38,10 @@ class AffiliatesViewSet(viewsets.ViewSet):
     @transaction.atomic
     @extend_schema(request=MarketerSerializer, responses=MarketerSerializer)
     def create_marketer(self, request: Request) -> Response:
-        marketer = Marketer.objects.filter(user=request.user).first()
+        from core.models import User
+
+        locked_user = User.objects.select_for_update().get(pk=request.user.pk)
+        marketer = Marketer.objects.filter(user=locked_user).first()
         created = marketer is None
         serializer = MarketerSerializer(
             marketer,
@@ -42,12 +50,12 @@ class AffiliatesViewSet(viewsets.ViewSet):
             context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
-        marketer = serializer.save(user=request.user)
-        AffiliateWallet.objects.get_or_create(user=request.user)
+        marketer = serializer.save(user=locked_user)
+        AffiliateWallet.objects.get_or_create(user=locked_user)
         if created:
             from notification.views import create_notification
             create_notification(
-                request.user, "Affiliate enrollment confirmed", target=marketer,
+                locked_user, "Affiliate enrollment confirmed", target=marketer,
                 data={"event": "affiliate_enrolled", "email": False},
             )
             from utils.functions import send_mail
@@ -56,9 +64,9 @@ class AffiliatesViewSet(viewsets.ViewSet):
             dashboard_url = f"{frontend_url}/account/affiliates"
             send_mail(
                 "affiliate",
-                request.user.email,
+                locked_user.email,
                 {
-                    "firstname": request.user.first_name,
+                    "firstname": locked_user.first_name,
                     "referral_code": marketer.marketer_id,
                     "referral_link": referral_link,
                     "dashboard_url": dashboard_url,
@@ -71,22 +79,33 @@ class AffiliatesViewSet(viewsets.ViewSet):
         )
 
     @action(detail=False, methods=["get"], url_path="me")
-    def get_marketer(self, request):
+    @extend_schema(responses=MarketerSerializer)
+    def get_marketer(self, request: Request) -> Response:
         marketer = get_object_or_404(Marketer, user=request.user)
         return Response(MarketerSerializer(marketer).data)
 
     @action(detail=False, methods=["get"], url_path="wallet")
-    def wallet(self, request):
+    @extend_schema(responses=AffiliateWalletSerializer)
+    def wallet(self, request: Request) -> Response:
         wallet, _ = AffiliateWallet.objects.get_or_create(user=request.user)
         return Response(AffiliateWalletSerializer(wallet).data)
 
     @action(detail=False, methods=["get"], url_path="referrals")
-    def referrals(self, request):
+    @extend_schema(
+        parameters=[ListingQuerySerializer],
+        responses=ReferralPageSerializer,
+    )
+    def referrals(self, request: Request) -> Response:
         marketer = get_object_or_404(Marketer, user=request.user)
-        referrals = Referral.objects.filter(marketer=marketer).select_related(
-            "referred_user"
-        )
-        return Response(ReferralSerializer(referrals, many=True).data)
+        referrals = Referral.objects.filter(marketer=marketer)
+        records = filter_records(
+            referrals,
+            request.query_params,
+            search_fields=("id",),
+            fields={"status": "status"},
+        ).order_by("-created", "-pk")
+        count, page = record_page(records, request.query_params)
+        return Response({"count": count, "results": ReferralSerializer(page, many=True).data})
 
     @action(detail=False, methods=["post"], url_path="links")
     @extend_schema(request=AffiliateLinkRequestSerializer, responses=UrlSerializer)
@@ -95,6 +114,12 @@ class AffiliatesViewSet(viewsets.ViewSet):
         serializer = AffiliateLinkRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         product = get_object_or_404(Product, pk=serializer.validated_data["product"])
+        if (
+            not product.visibility
+            or product.store.status != "active"
+            or not product.store.verified_at
+        ):
+            raise ValidationError({"product": "Choose an active, published product."})
         identifier = (
             serializer.validated_data.get("identifier") or f"product-{product.pk}"
         )
@@ -115,16 +140,33 @@ class AffiliatesViewSet(viewsets.ViewSet):
     @action(
         detail=False,
         methods=["get"],
-        url_path=r"r/(?P<marketer_id>[^/.]+)/(?P<product_id>[^/.]+)/(?P<identifier>[^/.]+)",
+        url_path=r"r/(?P<marketer_id>[^/.]+)/(?P<product_id>\d+)/(?P<identifier>[^/.]+)",
     )
     @transaction.atomic
-    def redirect_url(self, request, marketer_id=None, product_id=None, identifier=None):
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("marketer_id", OpenApiTypes.STR, OpenApiParameter.PATH),
+            OpenApiParameter("product_id", OpenApiTypes.INT, OpenApiParameter.PATH),
+            OpenApiParameter("identifier", OpenApiTypes.STR, OpenApiParameter.PATH),
+        ],
+        responses={302: None},
+    )
+    def redirect_url(
+        self,
+        request: Request,
+        marketer_id: str | None = None,
+        product_id: str | None = None,
+        identifier: str | None = None,
+    ) -> HttpResponse:
         url = get_object_or_404(
             Url.objects.select_for_update(),
             marketer__marketer_id=marketer_id,
             product_id=product_id,
             identifier=identifier,
             active=True,
+            product__visibility=True,
+            product__store__status="active",
+            product__store__verified_at__isnull=False,
         )
         from affiliates.models import Redirect
         from django.db.models import F
@@ -149,10 +191,15 @@ class AffiliatesViewSet(viewsets.ViewSet):
     @action(
         detail=False,
         methods=["get"],
-        url_path=r"clickbank/outbound/(?P<product_id>[^/.]+)",
+        url_path=r"clickbank/outbound/(?P<product_id>\d+)",
     )
-    def clickbank_outbound(self, request, product_id=None):
-        import os
+    @extend_schema(
+        parameters=[
+            OpenApiParameter("product_id", OpenApiTypes.INT, OpenApiParameter.PATH),
+        ],
+        responses={302: None},
+    )
+    def clickbank_outbound(self, request: Request, product_id: int | None = None) -> HttpResponse:
         from urllib.parse import urlencode, parse_qs, urlsplit, urlunsplit
         from nanoid import generate
         from affiliates.models import ClickBankOutboundClick

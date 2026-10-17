@@ -1,17 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { accessCookieMaxAge, refreshOnce } from '@/lib/auth-refresh';
+import type { RefreshResult } from '@/lib/auth-refresh';
 import { isSameOrigin } from '@/lib/request-origin';
+import { proxyDiagnosticHeaders } from '@/lib/proxy-diagnostics';
+import { proxyTarget } from '@/lib/proxy-target';
 
-function getCandidateApis(): string[] {
+function getCandidateApis(route: string): string[] {
   // Compose supplies the service URL; local development uses the published port.
   // Replaying writes against guessed hosts can duplicate account/order creation.
-  return [(process.env.API_URL || 'http://127.0.0.1:8000/api/v1').trim().replace(/\/$/, '')];
+  return [proxyTarget(route, process.env.API_URL, process.env.NOTIFICATION_STREAM_URL)];
 }
 
 async function handler(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ) {
+  const started: number = performance.now();
   const isSecure =
     request.nextUrl.protocol === 'https:' ||
     request.headers.get('x-forwarded-proto') === 'https';
@@ -22,6 +26,19 @@ async function handler(
     sameSite: 'lax' as const,
     path: '/',
   };
+
+  function clearAuthCookies(response: NextResponse): void {
+    response.cookies.set('proace_access', '', {
+      ...options,
+      expires: new Date(0),
+      maxAge: 0,
+    });
+    response.cookies.set('proace_refresh', '', {
+      ...options,
+      expires: new Date(0),
+      maxAge: 0,
+    });
+  }
 
   const { path } = await params;
   if (path.some((part) => !/^[a-zA-Z0-9_-]+$/.test(part))) {
@@ -70,7 +87,7 @@ async function handler(
     return NextResponse.json({ detail: 'Not found.' }, { status: 404 });
   }
 
-  const candidateApis = getCandidateApis();
+  const candidateApis = getCandidateApis(route);
   let upstream: Response | undefined;
   let activeApi = candidateApis[0];
   let lastError: unknown;
@@ -84,9 +101,10 @@ async function handler(
         route.includes('downloads') ||
         route.includes('digital-asset');
 
-      const timeoutSignal = isLongRunningStream
-        ? AbortSignal.any([request.signal, AbortSignal.timeout(35000)])
-        : AbortSignal.timeout(10000);
+      const timeoutSignal = AbortSignal.any([
+        request.signal,
+        AbortSignal.timeout(isLongRunningStream ? 35000 : 10000),
+      ]);
 
       try {
         upstream = await fetch(url, {
@@ -113,19 +131,30 @@ async function handler(
     let invalidRefresh = false;
 
     if (upstream.status === 401 && refresh && !route.startsWith('auth/')) {
-      const renewed = await refreshOnce(`${activeApi}:${refresh}`, async () => {
-        const result = await fetch(`${activeApi}/auth/refresh/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ refresh }),
-          cache: 'no-store',
-          signal: AbortSignal.timeout(10000),
+      const authApi: string = getCandidateApis('auth/refresh')[0];
+      let renewed: RefreshResult;
+      try {
+        renewed = await refreshOnce(`${authApi}:${refresh}`, async () => {
+          const result = await fetch(`${authApi}/auth/refresh/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh }),
+            cache: 'no-store',
+            signal: AbortSignal.any([request.signal, AbortSignal.timeout(10000)]),
+          });
+          const tokens: { access?: string; refresh?: string } = result.ok
+            ? await result.json()
+            : {};
+          return { ...tokens, status: result.status };
         });
-        const tokens: { access?: string; refresh?: string } = result.ok
-          ? await result.json()
-          : {};
-        return { ...tokens, status: result.status };
-      });
+      } catch (error: unknown) {
+        if (!publicRead || request.signal.aborted) {
+          throw error;
+        }
+        // Temporary refresh failures must not block public anonymous reads or
+        // invalidate a refresh cookie that can still work after recovery.
+        renewed = { status: 503 };
+      }
 
       invalidRefresh = renewed.status === 400 || renewed.status === 401;
       if (renewed.status >= 500 && !publicRead) {
@@ -146,7 +175,7 @@ async function handler(
           route.includes('downloads') ||
           route.includes('digital-asset')
             ? AbortSignal.any([request.signal, AbortSignal.timeout(300000)])
-            : AbortSignal.timeout(10000);
+            : AbortSignal.any([request.signal, AbortSignal.timeout(10000)]);
 
         upstream = await fetch(url, {
           method: request.method,
@@ -168,7 +197,7 @@ async function handler(
         headers,
         cache: 'no-store',
         redirect: 'manual',
-        signal: AbortSignal.timeout(10000),
+        signal: AbortSignal.any([request.signal, AbortSignal.timeout(10000)]),
       });
       if (!refresh || invalidRefresh || newAccess) {
         invalidRefresh = true;
@@ -182,6 +211,11 @@ async function handler(
       const response = NextResponse.redirect(new URL(location, request.url), {
         status: upstream.status,
       });
+      for (const [name, value] of Object.entries(
+        proxyDiagnosticHeaders(upstream.headers, performance.now() - started)
+      )) {
+        response.headers.set(name, value);
+      }
       if (newRefresh) {
         response.cookies.set('proace_refresh', newRefresh, { ...options, maxAge: 604800 });
       }
@@ -200,6 +234,7 @@ async function handler(
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache, no-transform',
           'X-Accel-Buffering': 'no',
+          ...proxyDiagnosticHeaders(upstream.headers, performance.now() - started),
         },
       });
       if (newRefresh) {
@@ -222,6 +257,7 @@ async function handler(
           'Content-Type': upstreamType || 'application/octet-stream',
           'Content-Disposition': upstream.headers.get('content-disposition') || 'inline',
           'Cache-Control': 'private, no-store',
+          ...proxyDiagnosticHeaders(upstream.headers, performance.now() - started),
         },
       });
       if (newRefresh) {
@@ -234,8 +270,13 @@ async function handler(
         });
       }
       if (invalidRefresh) {
-        response.cookies.delete('proace_access');
-        response.cookies.delete('proace_refresh');
+        clearAuthCookies(response);
+      }
+      if (
+        route === 'auth/logout' ||
+        (route === 'me' && request.method === 'DELETE' && upstream.ok)
+      ) {
+        clearAuthCookies(response);
       }
       return response;
     }
@@ -248,7 +289,7 @@ async function handler(
             .catch(() => ({ detail: 'The server could not process this request.' }));
 
     const loginTokens =
-      ['auth/login', 'password/change', 'auth/google', 'auth/apple', 'auth/social'].includes(route) && upstream.ok
+      ['auth/login', 'password/change', 'auth/password', 'auth/google', 'auth/apple', 'auth/social'].includes(route) && upstream.ok
         ? { access: data.access, refresh: data.refresh }
         : null;
 
@@ -259,7 +300,10 @@ async function handler(
 
     const response = NextResponse.json(data, {
       status: upstream.status === 204 ? 200 : upstream.status,
-      headers: { 'Cache-Control': 'no-store' },
+      headers: {
+        'Cache-Control': 'no-store',
+        ...proxyDiagnosticHeaders(upstream.headers, performance.now() - started),
+      },
     });
 
     if (newRefresh) {
@@ -287,8 +331,7 @@ async function handler(
       || (route === 'me' && request.method === 'DELETE' && upstream.ok)
       || (invalidRefresh && !route.startsWith('auth/'))
     ) {
-      response.cookies.delete('proace_access');
-      response.cookies.delete('proace_refresh');
+      clearAuthCookies(response);
     }
 
     return response;
@@ -296,8 +339,7 @@ async function handler(
     console.error(`[API Proxy Error] Failed to proxy ${request.method} /api/${route}:`, error);
     if (route === 'auth/logout') {
       const response = NextResponse.json(null);
-      response.cookies.delete('proace_access');
-      response.cookies.delete('proace_refresh');
+      clearAuthCookies(response);
       return response;
     }
     const detail = 'The server is temporarily unavailable. Please try again shortly.';

@@ -2,7 +2,7 @@ from decimal import Decimal
 from datetime import timedelta
 import json
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from django.core import mail, signing
@@ -17,7 +17,7 @@ from core.services import credit_user_wallet
 from notification.models import NotificationDelivery
 
 from notification.tasks import deliver_notification_task
-from payment.models import Coupon, CouponRedemption, Order
+from payment.models import Coupon, CouponRedemption, Order, OrderFulfillment
 from product.models import Product
 from store.models import StoreAddress, Schedule, Store
 from store.services import publish_due_products
@@ -189,6 +189,7 @@ class StorefrontTests(TestCase):
         key = str(uuid4())
         response = self.client.post('/api/v1/checkout/wallet-session/', {'address': self.address.pk, 'checkout_key': key, 'wallet_amount': '50'}, format='json')
         self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(create.call_args.kwargs['success_url'], 'http://testserver/orders/stripe-return?session_id={CHECKOUT_SESSION_ID}')
         with self.assertRaises(ValidationError):
             debit_user_wallet(self.buyer, Decimal('1'), 'Concurrent purchase')
         metadata = create.call_args.kwargs['metadata']
@@ -296,6 +297,87 @@ class StorefrontTests(TestCase):
         self.client.force_authenticate(None)
         self.assertEqual(self.client.get('/api/v1/products/').data['count'], 2)
 
+    def test_legacy_store_review_directory_supports_search_and_filters(self) -> None:
+        matching_store = Store.objects.create(
+            user=self.seller,
+            name='Pending Search Match',
+            username='pending-search-match',
+            status=Store.STATUS_PENDING,
+        )
+        other_owner = User.objects.create_user(
+            email='other-owner@test.com',
+            password='Strong-test-password-123',
+        )
+        Store.objects.create(
+            user=other_owner,
+            name='Another Pending Store',
+            username='another-pending-store',
+            status=Store.STATUS_PENDING,
+        )
+        operator = User.objects.create_user(
+            email='store-review-operator@test.com',
+            password='Strong-test-password-123',
+            is_staff=True,
+        )
+        self.client.force_authenticate(operator)
+
+        response = self.client.get(
+            '/api/v1/admin/stores/',
+            {
+                'status': 'pending',
+                'search': 'seller@test.com',
+                'is_official': 'false',
+                'ordering': '-name',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], matching_store.pk)
+
+    def test_store_suspension_routes_are_admin_only(self):
+        staff = User.objects.create_user(
+            email='store-operator@test.com',
+            password='Strong-test-password-123',
+            is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        staff_routes = (
+            f'/api/v1/admin/staff/stores/{self.store.pk}/block/',
+            f'/api/v1/admin/staff/stores/{self.store.pk}/unblock/',
+        )
+        for path in staff_routes:
+            response = self.client.post(path, {'reason': 'Unauthorized'}, format='json')
+            self.assertEqual(response.status_code, 403, response.data)
+        direct_block = self.client.post(
+            f'/api/v1/admin/stores/{self.store.pk}/block/',
+            {'reason': 'Unauthorized'},
+            format='json',
+        )
+        self.assertEqual(direct_block.status_code, 403, direct_block.data)
+
+        self.store.refresh_from_db()
+        self.assertEqual(self.store.status, Store.STATUS_ACTIVE)
+
+        admin = User.objects.create_superuser(
+            email='store-governance-admin@test.com',
+            password='Strong-test-password-123',
+        )
+        self.client.force_authenticate(admin)
+        blocked = self.client.post(
+            f'/api/v1/admin/staff/stores/{self.store.pk}/block/',
+            {'reason': 'Policy review'},
+            format='json',
+        )
+        self.assertEqual(blocked.status_code, 200, blocked.data)
+        unblocked = self.client.post(
+            f'/api/v1/admin/staff/stores/{self.store.pk}/unblock/',
+            {},
+            format='json',
+        )
+        self.assertEqual(unblocked.status_code, 200, unblocked.data)
+        self.assertEqual(unblocked.data['status'], Store.STATUS_ACTIVE)
+
     def test_scheduled_products_remain_queued_until_store_is_approved(self):
         pending_store = Store.objects.create(user=self.seller, name='Scheduled store')
         product = Product.objects.create(
@@ -323,6 +405,78 @@ class StorefrontTests(TestCase):
         self.assertEqual(self.add(6).status_code, 400)
         self.assertEqual(self.add(1.5).status_code, 400)
         self.assertEqual(CartItem.objects.count(), 0)
+
+    def test_cart_rejects_combined_base_and_variant_quantity_above_stock(self):
+        self.product.variants = [{'name': 'Large', 'available': 10, 'price_delta': '0'}]
+        self.product.save(update_fields=['variants'])
+        base = self.client.post(
+            '/api/v1/cart/',
+            {'product': self.product.pk, 'quantity': 3},
+            format='json',
+        )
+        self.assertEqual(base.status_code, 200)
+        variant = self.client.post(
+            '/api/v1/cart/',
+            {'product': self.product.pk, 'variant': 'Large', 'quantity': 3},
+            format='json',
+        )
+        self.assertEqual(variant.status_code, 400)
+        self.assertEqual(CartItem.objects.count(), 1)
+
+    @override_settings(ELASTICSEARCH_ENABLED=False)
+    def test_catalog_search_fallback_matches_terms_in_category_and_tags(self):
+        self.product.tags.add('studio-audio')
+        response = self.client.get(
+            '/api/v1/products/',
+            {'search': 'electronics studio-audio'},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], self.product.pk)
+
+    @override_settings(ELASTICSEARCH_ENABLED=True)
+    @patch('product.search.client')
+    def test_single_character_catalog_search_matches_substrings(
+        self, elasticsearch_client: Mock
+    ) -> None:
+        product = Product.objects.create(
+            store=self.store,
+            title='Black kettle',
+            description='Kitchen accessory',
+            category='home',
+            price='25.00',
+            discount=0,
+            available=3,
+        )
+
+        response = self.client.get('/api/v1/products/', {'search': 'k'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(product.pk, [item['id'] for item in response.data['results']])
+        elasticsearch_client.assert_not_called()
+
+    @override_settings(ELASTICSEARCH_ENABLED=False)
+    def test_catalog_search_fallback_ranks_exact_title_before_classification_hits(self):
+        self.product.tags.add('studio')
+        exact_title = Product.objects.create(
+            store=self.store,
+            title='Electronics Studio',
+            description='A separate match',
+            category='toys',
+            price='500.00',
+            discount=0,
+            available=2,
+        )
+        response = self.client.get('/api/v1/products/', {'search': 'electronics studio'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 2)
+        self.assertEqual(response.data['results'][0]['id'], exact_title.pk)
+
+    @override_settings(ELASTICSEARCH_ENABLED=False)
+    def test_whitespace_only_catalog_search_is_treated_as_unfiltered(self):
+        response = self.client.get('/api/v1/products/', {'search': '   '})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 1)
 
     def test_physical_checkout_rejects_non_us_delivery_address(self):
         self.address.country = 'Nigeria'
@@ -1005,6 +1159,56 @@ class StorefrontTests(TestCase):
         self.assertEqual(admin_track_resp.status_code, 200)
         self.assertEqual(admin_track_resp.data['tracking_number'], '9400100000000000000001')
 
+    def test_multi_store_tracking_returns_each_store_shipment(self) -> None:
+        self.add(1)
+        other_store = Store.objects.create(
+            user=self.seller,
+            name='Second store',
+            status=Store.STATUS_ACTIVE,
+            verified_at=timezone.now(),
+        )
+        StoreAddress.objects.create(
+            store=other_store,
+            is_default=True,
+            address='2 Main St',
+            city='Tampa',
+            state='FL',
+            country='US',
+            zip='33603',
+        )
+        other_product = Product.objects.create(
+            store=other_store,
+            title='Second shipment item',
+            price=Decimal('20.00'),
+            discount=0,
+            available=5,
+        )
+        self.client.post('/api/v1/cart/', {'product': other_product.pk, 'quantity': 1}, format='json')
+        order_response = self.checkout()
+        self.assertEqual(order_response.status_code, 201, order_response.data)
+        order = Order.objects.get(pk=order_response.data['id'])
+        OrderFulfillment.objects.filter(order=order, store=self.store).update(
+            status='shipped', carrier='USPS', tracking_number='TRACK-FIRST'
+        )
+        OrderFulfillment.objects.filter(order=order, store=other_store).update(
+            status='confirmed', carrier='UPS', tracking_number='TRACK-SECOND'
+        )
+
+        self.client.force_authenticate(self.buyer)
+        order_detail = self.client.get(f'/api/v1/orders/{order.pk}/')
+        tracking_detail = self.client.get(f'/api/v1/orders/{order.pk}/tracking/')
+
+        self.assertEqual(order_detail.status_code, 200, order_detail.data)
+        self.assertEqual(tracking_detail.status_code, 200, tracking_detail.data)
+        self.assertEqual(
+            {row['store_name'] for row in order_detail.data['fulfillments']},
+            {self.store.name, other_store.name},
+        )
+        self.assertEqual(
+            {row['tracking_number'] for row in tracking_detail.data['fulfillments']},
+            {'TRACK-FIRST', 'TRACK-SECOND'},
+        )
+
     def test_verified_buyer_product_review_lifecycle(self):
         other_user = User.objects.create(email='unverified_random@proace.com', is_active=True)
         self.client.force_authenticate(other_user)
@@ -1087,6 +1291,92 @@ class StorefrontTests(TestCase):
         }, format='json')
         self.assertEqual(too_many_resp.status_code, 400)
         self.assertIn('up to 3 photos', str(too_many_resp.data))
+
+        invalid_image_response = self.client.post(
+            f'/api/v1/products/{self.product.pk}/reviews/',
+            {
+                'rating': 5,
+                'label': 'Invalid image',
+                'comment': 'The image must use a secure URL.',
+                'images': ['http://example.com/photo.jpg'],
+            },
+            format='json',
+        )
+        self.assertEqual(invalid_image_response.status_code, 400)
+
+        blank_content_response = self.client.post(
+            f'/api/v1/products/{self.product.pk}/reviews/',
+            {'rating': 5, 'label': '   ', 'comment': '   '},
+            format='json',
+        )
+        self.assertEqual(blank_content_response.status_code, 400)
+
+    def test_store_owner_can_remove_review_and_other_users_cannot(self):
+        from core.models import Review
+
+        Order.objects.create(
+            user=self.buyer,
+            status='delivered',
+            ordered=True,
+            total=Decimal('100.00'),
+            subtotal=Decimal('100.00'),
+            items_snapshot=[{'product': self.product.pk}],
+        )
+        self.client.force_authenticate(self.buyer)
+        created = self.client.post(
+            f'/api/v1/products/{self.product.pk}/reviews/',
+            {'rating': 4, 'label': 'Good', 'comment': 'A helpful review.'},
+            format='json',
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        review = Review.objects.get(pk=created.data['id'])
+
+        outsider = User.objects.create_user(
+            email='review-outsider@test.com',
+            password='Strong-test-password-123',
+        )
+        self.client.force_authenticate(outsider)
+        denied = self.client.delete(
+            f'/api/v1/products/{self.product.pk}/reviews/?review_id={review.pk}'
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        self.client.force_authenticate(self.seller)
+        review_list = self.client.get(f'/api/v1/products/{self.product.pk}/reviews/')
+        self.assertTrue(review_list.data[0]['can_moderate'])
+        removed = self.client.delete(
+            f'/api/v1/products/{self.product.pk}/reviews/?review_id={review.pk}'
+        )
+        self.assertEqual(removed.status_code, 204)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.average_rating, Decimal('0.00'))
+
+    def test_review_admin_edits_and_bulk_deletes_refresh_rating(self):
+        from django.contrib.admin.sites import site
+        from django.test import RequestFactory
+        from core.models import Review
+
+        review = Review.objects.create(
+            user=self.buyer,
+            product=self.product,
+            label='Admin-managed',
+            comment='Review text',
+            rating=5,
+        )
+        review_admin = site._registry[Review]
+        request = RequestFactory().post('/admin/core/review/')
+        review_admin.save_model(request, review, form=None, change=False)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.average_rating, Decimal('5.00'))
+
+        review.rating = 3
+        review_admin.save_model(request, review, form=None, change=True)
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.average_rating, Decimal('3.00'))
+
+        review_admin.delete_queryset(request, Review.objects.filter(pk=review.pk))
+        self.product.refresh_from_db()
+        self.assertEqual(self.product.average_rating, Decimal('0.00'))
 
     def test_product_variants_and_flash_sale_serialization(self):
         self.product.variants = [

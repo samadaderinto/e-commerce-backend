@@ -1,18 +1,76 @@
 from io import StringIO
+from unittest.mock import patch
 
 from django.contrib.auth.hashers import make_password
 from django.test import TestCase, override_settings
+from django.core.management import call_command, CommandError
 from rest_framework.test import APIClient
 
 from core.management.commands.populate_fake_data import Command
 from core.models import User
 from product.models import Product
-from store.models import Store, StoreEarningsLedger
+from staff.models import Post
+from store.models import MerchantWallet, Store, StoreEarningsLedger
 from store.services import calculate_store_tier
 
 
 @override_settings(DEBUG=True)
 class DemoScenarioTests(TestCase):
+    def test_full_seed_includes_blog_tags_and_guaranteed_accounts(self) -> None:
+        output = StringIO()
+        call_command(
+            "populate_fake_data",
+            scale="small",
+            password="Seed-regression-password-123!",
+            stdout=output,
+        )
+
+        self.assertTrue(Post.objects.filter(tags__name="engineering").exists())
+        self.assertGreaterEqual(Product.objects.count(), 45)
+        for email in (
+            "admin@proace.local",
+            "business-admin@proace.local",
+            "staff@proace.local",
+            "seller@proace.local",
+            "merchant@proace.local",
+            "shopper@proace.local",
+            "buyer@proace.local",
+        ):
+            self.assertTrue(User.objects.filter(email=email).exists())
+        self.assertNotIn("Seed-regression-password-123!", output.getvalue())
+
+    def test_seeded_wallets_do_not_claim_stripe_is_connected(self):
+        command = Command(stdout=StringIO())
+        users = command.seed_users(12, make_password('Demo-password-123!'))
+        command.seed_stores(3, users)
+        merchant = User.objects.get(email='merchant@proace.local')
+        wallet = MerchantWallet.objects.get(user=merchant)
+        self.assertEqual(wallet.stripe_account_id, '')
+        self.assertFalse(wallet.stripe_details_submitted)
+        self.assertFalse(wallet.stripe_payouts_enabled)
+
+        wallet.stripe_account_id = 'acct_mock_00001'
+        wallet.stripe_details_submitted = True
+        wallet.stripe_payouts_enabled = True
+        wallet.save()
+        command.seed_stores(3, users)
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.stripe_account_id, '')
+        self.assertFalse(wallet.stripe_details_submitted)
+        self.assertFalse(wallet.stripe_payouts_enabled)
+
+    def test_product_seed_builds_clickbank_links_with_demo_vendor(self):
+        command = Command(stdout=StringIO())
+        users = command.seed_users(12, make_password('Demo-password-123!'))
+        stores = command.seed_stores(3, users)
+        products = command.seed_products(20, stores)
+        affiliate = next(
+            product for product in products
+            if product.product_type == Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
+        )
+        self.assertEqual(affiliate.affiliate_vendor_nickname, 'proace-demo-vendor')
+        self.assertIn('vendor=proace-demo-vendor', affiliate.affiliate_hoplink)
+
     def test_accounts_ownership_badges_and_repeated_scenarios(self):
         command = Command(stdout=StringIO())
         users = command.seed_users(12, make_password('Demo-password-123!'))
@@ -78,4 +136,45 @@ class DemoScenarioTests(TestCase):
         # Non-superusers should have the new seed password
         shopper = User.objects.get(email='shopper@proace.local')
         self.assertTrue(shopper.check_password('Overwriting-seed-password-456!'))
+
+    def test_failed_seed_rolls_back_and_never_prints_password(self):
+        output = StringIO()
+        with patch.object(Command, 'seed_stores', side_effect=RuntimeError('fixture failure')):
+            with self.assertRaisesRegex(RuntimeError, 'fixture failure'):
+                call_command(
+                    'populate_fake_data',
+                    scale='small',
+                    password='Hidden-seed-password-123!',
+                    stdout=output,
+                )
+
+        self.assertFalse(User.objects.filter(email='shopper@proace.local').exists())
+        self.assertNotIn('Hidden-seed-password-123!', output.getvalue())
+
+    def test_seed_refuses_to_promote_regular_account_to_technical_admin(self):
+        User.objects.create_user(
+            email='admin@proace.local',
+            password='Existing-user-password-123!',
+            first_name='Existing',
+            last_name='Account',
+            gender='male',
+        )
+
+        with self.assertRaisesRegex(CommandError, 'was not promoted'):
+            Command(stdout=StringIO()).seed_users(
+                12,
+                make_password('Seed-password-123!'),
+            )
+
+        admin = User.objects.get(email='admin@proace.local')
+        self.assertFalse(admin.is_superuser)
+        self.assertTrue(admin.check_password('Existing-user-password-123!'))
+
+    def test_seed_rejects_user_count_below_guaranteed_account_set(self):
+        with self.assertRaisesRegex(CommandError, 'At least 11 users'):
+            call_command('populate_fake_data', scale='small', users=10)
+
+    def test_seed_does_not_replace_zero_volume_override_with_preset(self):
+        with self.assertRaisesRegex(CommandError, 'overrides must be positive'):
+            call_command('populate_fake_data', scale='small', products=0)
 

@@ -7,26 +7,27 @@ from decimal import Decimal
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
+from urllib.parse import urlencode
 
 logger = logging.getLogger(__name__)
 
 from django.conf import settings
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
-from django.contrib.auth.tokens import default_token_generator
 from django.core import signing
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import models, transaction
-from django.db.models import Count, Q, F, Case, When, QuerySet, OuterRef, Subquery, IntegerField, Value
+from django.db import IntegrityError, models, transaction
+from django.db.models import Count, Q, F, Case, When, QuerySet, OuterRef, Subquery, IntegerField, Value, Prefetch
 from django.db.models.functions import Coalesce
 from django.http import Http404, FileResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from core.auth_tokens import credential_version_token_generator
 from notification.delivery import queue_email_delivery
 from utils.functions import send_mail
-from rest_framework import serializers
+from rest_framework import serializers, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from core.access import IsCustomer, IsBackoffice, IsBusinessAdmin as IsAdminUser
@@ -53,14 +54,15 @@ from notification.views import create_notification
 from payment.models import Coupon, CouponRedemption, DeliveryInfo, Order, OrderFulfillment, TaxJurisdiction
 from payment.serializers import TaxJurisdictionSerializer
 from payment.accounting import allocate_amount, allocate_checkout_lines, allocate_line_taxes, order_paid_lines
+from payment.refund_messages import refund_failure_reason
 from payment.services import execute_order_status_transition
 from payment.couponing import calculate_coupon_discount
 from payment.tax import calculate_tax
-from payment.usps import calculate_usps_rates
 from payment.carriers import calculate_carrier_rates, CARRIERS
 from payment.shipping_quotes import issue_quote, verify_quote, cart_rates
 from product.models import Product
 from product.search import search_product_ids
+from observability.stages import stage
 from product.policies import is_own_store, validate_purchase
 from store.views import invalidate_catalog
 from store.models import Store, StoreAddress, StoreInfo
@@ -70,7 +72,7 @@ from .serializers import (
     PasswordChangeRequestSerializer, AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
     CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
     CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
-    OrderSerializer, ProductIdRequestSerializer, PublicStoreSerializer, RefundRequestSerializer, RegisterSerializer,
+    OrderSerializer, OrderTrackingSerializer, ProductIdRequestSerializer, PublicStoreSerializer, RefundRequestSerializer, RegisterSerializer,
     ReviewSerializer, ShippingRateSerializer, UserSerializer, UserAvatarImageSerializer, WalletCheckoutSerializer, unit_price,
 )
 
@@ -106,6 +108,19 @@ def catalog() -> QuerySet[Product]:
     )
 
 
+def filter_catalog_text(products: QuerySet[Product], search: str) -> QuerySet[Product]:
+    """Match every search term across product copy, classification and tags."""
+    for term in search.split():
+        products = products.filter(
+            Q(title__icontains=term)
+            | Q(brand__icontains=term)
+            | Q(description__icontains=term)
+            | Q(category__icontains=term)
+            | Q(tags__name__icontains=term)
+        )
+    return products.distinct()
+
+
 def tokens(user):
     refresh = RefreshToken.for_user(user)
     refresh["credential_version"] = user.credential_version
@@ -125,6 +140,7 @@ class AuthView(APIView):
             200: OpenApiTypes.OBJECT,
             201: OpenApiTypes.OBJECT,
             204: OpenApiResponse(description='Logged out successfully.'),
+            409: OpenApiResponse(description='Already signed in; sign out before authenticating again.'),
             400: OpenApiTypes.OBJECT,
             401: OpenApiTypes.OBJECT,
         },
@@ -136,6 +152,22 @@ class AuthView(APIView):
         ),
     )
     def post(self, request: Request, action: str) -> Response:
+        if action in ('login', 'register', 'google', 'apple', 'social'):
+            from rest_framework.exceptions import AuthenticationFailed
+            from rest_framework_simplejwt.authentication import JWTAuthentication
+            authenticated = request.user if request.user.is_authenticated else None
+            if authenticated is None:
+                try:
+                    result = JWTAuthentication().authenticate(request)
+                except AuthenticationFailed:
+                    result = None
+                if result and result[1].get('credential_version', 0) == result[0].credential_version:
+                    authenticated = result[0]
+            if authenticated is not None:
+                return Response(
+                    {'detail': 'You are already signed in. Sign out before signing in or creating another account.'},
+                    status=409,
+                )
         data = request.data
         if action in ('google', 'apple', 'social'):
             from core.social_auth import authenticate_social_user
@@ -148,7 +180,13 @@ class AuthView(APIView):
                 raise ValidationError({'detail': 'Invalid email or password.'})
             user = authenticate(request, email=email, password=password)
             if user is None:
-                inactive_user = User.objects.filter(email=email, is_active=False).first()
+                # Older invited accounts may have been stored with mixed-case
+                # local parts. Preserve case-insensitive login during migration.
+                candidate = User.objects.filter(email__iexact=email).first()
+                if candidate and candidate.email != email:
+                    user = authenticate(request, email=candidate.email, password=password)
+            if user is None:
+                inactive_user = User.objects.filter(email__iexact=email, is_active=False).first()
                 if inactive_user and inactive_user.check_password(password):
                     return Response({'detail': 'Your account is inactive. Please verify your email before signing in.'}, status=401)
                 return Response({'detail': 'Invalid email or password.'}, status=401)
@@ -167,21 +205,25 @@ class AuthView(APIView):
             except DjangoValidationError as error:
                 raise ValidationError({'password': error.messages})
             referral_code = serializer.validated_data.pop('referral_code', '').strip()
-            user = User.objects.create_user(**serializer.validated_data, is_active=False)
-            token_payload = {'user': user.pk, 'version': user.credential_version}
-            if referral_code:
-                token_payload['ref'] = referral_code
-            token = signing.dumps(token_payload, salt='proace-verify')
-            url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
-            send_mail(
-                'onboarding-user',
-                user.email,
-                {
-                    'firstname': user.first_name,
-                    'absolute_url': url,
-                    'subject': 'Verify your ProAce account',
-                },
-            )
+            try:
+                with transaction.atomic():
+                    user = User.objects.create_user(**serializer.validated_data, is_active=False)
+                    token_payload = {'user': user.pk, 'version': user.credential_version}
+                    if referral_code:
+                        token_payload['ref'] = referral_code
+                    token = signing.dumps(token_payload, salt='proace-verify')
+                    url = f'{settings.FRONTEND_URL}/verify-email?token={token}'
+                    send_mail(
+                        'onboarding-user',
+                        user.email,
+                        {
+                            'firstname': user.first_name,
+                            'absolute_url': url,
+                            'subject': 'Verify your ProAce account',
+                        },
+                    )
+            except IntegrityError:
+                raise ValidationError({'email': 'An account with this email already exists.'}) from None
             return Response({'detail': 'Check your email to activate your account.'}, status=201)
         if action == 'verify':
             raw_token = str(data.get('token', '')).strip().split('"')[0].split("'")[0].split('<')[0].split('&')[0].split(' ')[0]
@@ -210,7 +252,7 @@ class AuthView(APIView):
             user = User.objects.filter(email__iexact=email, is_active=True).first()
             if user:
                 uid = urlsafe_base64_encode(force_bytes(user.pk))
-                token = default_token_generator.make_token(user)
+                token = credential_version_token_generator.make_token(user)
                 url = f'{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}'
                 send_mail(
                     'password-reset',
@@ -225,17 +267,29 @@ class AuthView(APIView):
             return Response({'detail': 'If an active account exists, a reset link has been sent.'})
         if action == 'reset':
             try:
-                user = User.objects.get(pk=force_str(urlsafe_base64_decode(data.get('uid', ''))))
+                decoded_uid = force_str(urlsafe_base64_decode(data.get('uid', '')))
+                if not decoded_uid.isascii() or not decoded_uid.isdecimal() or len(decoded_uid) > 19:
+                    raise ValueError()
+                user_pk = int(decoded_uid)
+                if user_pk < 1 or user_pk > 9223372036854775807:
+                    raise ValueError()
             except (ValueError, TypeError, UnicodeDecodeError, User.DoesNotExist):
                 raise ValidationError({'detail': 'Invalid reset link.'})
-            if not default_token_generator.check_token(user, data.get('token', '')):
-                raise ValidationError({'detail': 'This reset link is invalid or expired.'})
-            password = serializers.CharField(min_length=8, max_length=128).run_validation(data.get('password'))
-            try:
-                validate_password(password, user)
-            except DjangoValidationError as error:
-                raise ValidationError({'password': error.messages})
             with transaction.atomic():
+                try:
+                    user = User.objects.select_for_update().get(pk=user_pk)
+                except User.DoesNotExist:
+                    raise ValidationError({'detail': 'Invalid reset link.'}) from None
+                if (
+                    not user.is_active
+                    or not credential_version_token_generator.check_token(user, data.get('token', ''))
+                ):
+                    raise ValidationError({'detail': 'This reset link is invalid or expired.'})
+                password = serializers.CharField(min_length=8, max_length=128).run_validation(data.get('password'))
+                try:
+                    validate_password(password, user)
+                except DjangoValidationError as error:
+                    raise ValidationError({'password': error.messages})
                 user.set_password(password)
                 user.must_change_password = False
                 user.credential_version += 1
@@ -264,9 +318,18 @@ class AuthView(APIView):
             return Response(serializer.validated_data)
         if action == 'logout':
             try:
-                RefreshToken(data.get('refresh', '')).blacklist()
+                refresh = str(data.get('refresh') or '')
+                if refresh:
+                    RefreshToken(refresh).blacklist()
+            except TokenError:
+                # Expired or malformed logout tokens are already unusable.
+                return Response(status=204)
             except Exception:
-                pass
+                logger.exception('Failed to revoke refresh token during logout')
+                return Response(
+                    {'detail': 'Unable to confirm session revocation. Please try again.'},
+                    status=503,
+                )
             return Response(status=204)
         return Response(status=404)
 
@@ -338,6 +401,27 @@ class MeAvatarView(APIView):
 class ProductsView(APIView):
     permission_classes = [AllowAny]
 
+    def _page_response(
+        self, products: QuerySet[Product], request: Request, page: int
+    ) -> Response:
+        # Sort/offset narrow IDs, not the full model graph and review subqueries.
+        with stage("hydrate"):
+            count = products.count()
+            if page == 1:
+                # The ordering index can fetch the first 24 rows directly; retain
+                # the existing five-query budget on the common first page.
+                rows = list(products[:24])
+            else:
+                ids = list(products.values_list('pk', flat=True)[(page - 1) * 24:page * 24])
+                by_id = products.order_by().filter(pk__in=ids).in_bulk(ids)
+                rows = [by_id[pk] for pk in ids if pk in by_id]
+        with stage("serialize"):
+            results = CatalogSerializer(rows, many=True, context={'request': request}).data
+        return Response({
+            'count': count, 'page': page,
+            'pages': max(1, (count + 23) // 24), 'results': results,
+        })
+
     @extend_schema(
         operation_id='storefront_products_list',
         parameters=[CatalogQuerySerializer, ListingQuerySerializer],
@@ -346,10 +430,13 @@ class ProductsView(APIView):
         description='Returns a page of active-store products. Each page contains at most 24 results.',
     )
     def get(self, request: Request) -> Response:
-        from .catalog_cache import snapshot_key, read_snapshot, write_snapshot
+        from .catalog_cache import coalesced_snapshot, snapshot_key, read_snapshot, write_snapshot
 
-        key = snapshot_key(request)
-        cached = read_snapshot(key)
+        with stage("catalog_cache"):
+            key = snapshot_key(request)
+            cached = read_snapshot(key)
+            if cached is None:
+                cached = coalesced_snapshot(key)
         if cached is not None:
             response = Response(cached)
             response['X-Catalog-Cache'] = 'HIT'
@@ -392,7 +479,7 @@ class ProductsView(APIView):
         products = filter_records(
             products, params, fields={"is_digital": "is_digital", "product_type": "product_type"},
         )
-        search = params.get('search')
+        search = str(params.get('search') or '').strip()
         if params.get('category'):
             products = products.filter(category=params['category'])
         if params.get('deals') == 'true':
@@ -408,36 +495,68 @@ class ProductsView(APIView):
             else:
                 max_price = value
         ordering = params.get('ordering', '-created')
-        if ordering not in ['-created', 'price', '-price', '-average_rating', '-sales', '-discount']:
+        valid_orderings = ['-created', 'price', '-price', '-average_rating', '-sales', '-discount']
+        if ordering not in valid_orderings:
             ordering = '-created'
+        search_ordering = ordering if params.get('ordering') in valid_orderings else None
         page = serializers.IntegerField(min_value=1, default=1).run_validation(params.get('page', 1))
         page_size = 24
         offset = (page - 1) * page_size
         if search:
             if not is_store_preview and not params.get("is_digital") and not params.get("product_type"):
-                search_results = search_product_ids(
-                    search,
-                    filters={
-                        'category': params.get('category') or None,
-                        'store_id': store,
-                        'deals': params.get('deals') == 'true',
-                        'min_price': min_price,
-                        'max_price': max_price,
-                    },
-                    ordering=ordering,
-                    offset=offset,
-                    limit=page_size,
-                )
+                from django.db import connection
+
+                with stage("search"):
+                    search_results = search_product_ids(
+                        search,
+                        filters={
+                            'category': params.get('category') or None,
+                            'store_id': store,
+                            'deals': params.get('deals') == 'true',
+                            'min_price': min_price,
+                            'max_price': max_price,
+                        },
+                        ordering=search_ordering,
+                        offset=offset,
+                        limit=page_size,
+                        use_request_cache=(
+                            not request.user.is_authenticated
+                            and not connection.in_atomic_block
+                        ),
+                    )
                 if search_results is not None:
                     ids = search_results['ids']
                     count = search_results['count']
-                    products_by_id = products.filter(pk__in=ids).in_bulk(ids)
-                    products = [products_by_id[pk] for pk in ids if pk in products_by_id]
-                    return Response({'count': count, 'page': page, 'pages': max(1, (count + page_size - 1) // page_size), 'results': CatalogSerializer(products, many=True, context={'request': request}).data})
-            products = products.filter(Q(title__icontains=search) | Q(brand__icontains=search) | Q(description__icontains=search))
-        count = products.count()
-        products = products.order_by(ordering, '-pk')[offset:page * page_size]
-        return Response({'count': count, 'page': page, 'pages': max(1, (count + page_size - 1) // page_size), 'results': CatalogSerializer(products, many=True, context={'request': request}).data})
+                    with stage("hydrate"):
+                        products_by_id = products.filter(pk__in=ids).in_bulk(ids)
+                        products = [products_by_id[pk] for pk in ids if pk in products_by_id]
+                    with stage("serialize"):
+                        results = CatalogSerializer(
+                            products, many=True, context={'request': request}
+                        ).data
+                    return Response({
+                        'count': count,
+                        'page': page,
+                        'pages': max(1, (count + page_size - 1) // page_size),
+                        'results': results,
+                    })
+            products = filter_catalog_text(products, search)
+            if search_ordering is None:
+                products = products.order_by(
+                    Case(
+                        When(title__iexact=search, then=Value(0)),
+                        When(title__istartswith=search, then=Value(1)),
+                        When(title__icontains=search, then=Value(2)),
+                        When(brand__icontains=search, then=Value(3)),
+                        default=Value(4),
+                        output_field=IntegerField(),
+                    ),
+                    '-average_rating',
+                    '-created',
+                    '-pk',
+                )
+                return self._page_response(products, request, page)
+        return self._page_response(products.order_by(ordering, '-pk'), request, page)
 
 
 class ProductDetailView(APIView):
@@ -538,26 +657,49 @@ class PublicUserImageView(APIView):
             raise Http404('No image matches the given query.')
 
 
-def check_is_verified_buyer(user, product) -> bool:
+def verified_buyer_ids(product_id: int, user_ids: set[int]) -> set[int]:
+    """Return purchasers for one product with bounded database queries."""
+    if not user_ids:
+        return set()
+
+    eligible_orders = list(
+        Order.objects.filter(user_id__in=user_ids, ordered=True)
+        .exclude(status__in=['cancelled', 'refunded'])
+        .only('user_id', 'cart_id', 'items_snapshot')
+    )
+    verified_ids: set[int] = set()
+    legacy_cart_ids: list[int] = []
+    for order in eligible_orders:
+        rows = order.items_snapshot if isinstance(order.items_snapshot, list) else []
+        if any(
+            isinstance(item, dict)
+            and str(item.get('product', '')) == str(product_id)
+            for item in rows
+        ):
+            if order.user_id is not None:
+                verified_ids.add(order.user_id)
+        elif order.cart_id:
+            legacy_cart_ids.append(order.cart_id)
+
+    matching_carts = set(
+        CartItem.objects.filter(
+            cart_id__in=legacy_cart_ids,
+            product_id=product_id,
+        ).values_list('cart_id', flat=True)
+    )
+    verified_ids.update(
+        order.user_id
+        for order in eligible_orders
+        if order.user_id is not None and order.cart_id in matching_carts
+    )
+    return verified_ids
+
+
+def check_is_verified_buyer(user: User | None, product: Product | int) -> bool:
     if not user or not user.is_authenticated:
         return False
-    from payment.models import Order
-    from cart.models import CartItem
-
-    orders = Order.objects.filter(
-        user=user,
-        ordered=True,
-    ).exclude(status__in=['cancelled', 'refunded'])
-
     prod_id = product.pk if hasattr(product, 'pk') else int(product)
-    for order in orders:
-        if order.items_snapshot:
-            for item in order.items_snapshot:
-                if item.get('product') == prod_id or str(item.get('product')) == str(prod_id):
-                    return True
-        if order.cart_id and CartItem.objects.filter(cart_id=order.cart_id, product_id=prod_id).exists():
-            return True
-    return False
+    return user.pk in verified_buyer_ids(prod_id, {user.pk})
 
 
 class ReviewsView(APIView):
@@ -572,12 +714,30 @@ class ReviewsView(APIView):
     @extend_schema(responses=ReviewSerializer(many=True), auth=[])
     def get(self, request, pk):
         product = get_object_or_404(catalog(), pk=pk)
-        reviews = Review.objects.filter(product=product).select_related('user').order_by('-created')[:50]
-        return Response(ReviewSerializer(reviews, many=True, context={'request': request}).data)
+        reviews = list(
+            Review.objects.filter(product=product)
+            .select_related('user')
+            .order_by('-created', '-pk')[:50]
+        )
+        context = {
+            'request': request,
+            'verified_buyer_ids': verified_buyer_ids(
+                product.pk,
+                {review.user_id for review in reviews},
+            ),
+        }
+        context['verified_buyer_ids'].update(
+            review.user_id
+            for review in reviews
+            if review.user.is_staff or review.user.is_superuser
+        )
+        return Response(ReviewSerializer(reviews, many=True, context=context).data)
 
     @extend_schema(request=ReviewSerializer, responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT})
+    @transaction.atomic
     def post(self, request, pk):
         product = get_object_or_404(catalog(), pk=pk)
+        Product.objects.select_for_update().get(pk=product.pk)
         
         # Verify user is a verified buyer
         if not check_is_verified_buyer(request.user, product):
@@ -594,16 +754,29 @@ class ReviewsView(APIView):
         invalidate_catalog(product)
         return Response(serializer.data, status=200 if instance else 201)
 
-    @extend_schema(responses={204: None, 403: OpenApiTypes.OBJECT})
-    def delete(self, request, pk):
+    @extend_schema(
+        parameters=[OpenApiParameter(
+            'review_id', OpenApiTypes.INT, OpenApiParameter.QUERY, required=False,
+            description='Positive review ID for moderation; omit to remove your own review.',
+        )],
+        responses={204: None, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT},
+    )
+    @transaction.atomic
+    def delete(self, request: Request, pk: int) -> Response:
         product = get_object_or_404(catalog(), pk=pk)
+        Product.objects.select_for_update().get(pk=product.pk)
         review_id = request.query_params.get('review_id')
-        if review_id:
+        if review_id is not None:
+            review_id = serializers.IntegerField(min_value=1).run_validation(review_id)
             review = get_object_or_404(Review, product=product, pk=review_id)
             is_moderator = (
                 request.user.is_staff
                 or request.user.is_superuser
                 or getattr(request.user, 'is_business_admin', False)
+                or (
+                    review.product.store is not None
+                    and review.product.store.user_id == request.user.id
+                )
                 or review.user_id == request.user.id
             )
             if not is_moderator:
@@ -703,21 +876,6 @@ def active_cart(user):
     return cart if cart else Cart.objects.create(user=user)
 
 
-def calculate_shipping(subtotal, has_physical_items, origin_zip='33602', dest_zip='33602', total_weight=Decimal('1.00'), service_id=None):
-    if not has_physical_items:
-        return Decimal('0.00')
-    rates = calculate_usps_rates(origin_zip, dest_zip, total_weight, subtotal, has_physical_items)
-    if not rates:
-        return Decimal('0.00')
-    if service_id:
-        for r in rates:
-            if r['service_id'] == service_id:
-                return Decimal(r['amount'])
-    if service_id:
-        raise ValidationError({'shipping_service': 'Unknown shipping service.'})
-    return Decimal(rates[0]['amount'])
-
-
 def cart_data(cart: Cart, request: Request) -> dict[str, Any]:
     from product.policies import selected_variant
 
@@ -761,12 +919,16 @@ def cart_data(cart: Cart, request: Request) -> dict[str, Any]:
         })
     subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
     has_physical_items = any(not row['product']['is_digital'] for row in rows)
-    total_weight = sum(
-        Decimal(str(row['product'].get('weight') or '1.00')) * row['quantity']
-        for row in rows if not row['product']['is_digital']
-    )
-    shipping = calculate_shipping(subtotal, has_physical_items and bool(rows), total_weight=total_weight)
-    return {'id': cart.pk, 'updated': cart.updated.isoformat(), 'items': rows, 'subtotal': str(subtotal), 'shipping': str(shipping), 'total': str(subtotal + shipping)}
+    shipping = None if has_physical_items else Decimal('0.00')
+    total = subtotal + (shipping or Decimal('0.00'))
+    return {
+        'id': cart.pk,
+        'updated': cart.updated.isoformat(),
+        'items': rows,
+        'subtotal': str(subtotal),
+        'shipping': str(shipping) if shipping is not None else None,
+        'total': str(total),
+    }
 
 
 class CartView(APIView):
@@ -832,12 +994,38 @@ def _iso(val):
     return val.isoformat() if val and hasattr(val, 'isoformat') else (str(val) if val else None)
 
 
-def order_data(order):
+def load_order_relations(orders: QuerySet[Order]) -> QuerySet[Order]:
+    """Batch private order data for the selected page, without response caching."""
+    return orders.select_related('user').prefetch_related(
+        Prefetch(
+            'fulfillments',
+            queryset=OrderFulfillment.objects.select_related('store'),
+            to_attr='loaded_fulfillments',
+        ),
+        Prefetch(
+            'refund_set', queryset=Refund.objects.order_by('pk'),
+            to_attr='loaded_refunds',
+        ),
+    )
+
+
+def order_data(order: Order) -> dict[str, Any]:
+    refunds = getattr(order, 'loaded_refunds', None)
+    if refunds is None:
+        refunds = list(order.refund_set.order_by('pk'))
+    refund = next((row for row in refunds if row.status == Refund.STATUS_PENDING), None)
+    if refund is None:
+        refund = max(refunds, key=lambda row: (row.created, row.pk), default=None)
+    fulfillments = getattr(order, 'loaded_fulfillments', None)
+    if fulfillments is None:
+        fulfillments = list(order.fulfillments.select_related('store'))
     items = []
     for source in (order.items_snapshot or []):
         item = dict(source)
         if item.get('is_digital') and item.get('product'):
             item['download_url'] = f"/api/orders/{order.pk}/downloads/{item['product']}"
+            if item.get('variant'):
+                item['download_url'] += '?' + urlencode({'variant': item['variant']})
         items.append(item)
     return {
         'id': order.pk,
@@ -863,13 +1051,14 @@ def order_data(order):
         'fulfillments': [
             {
                 'store': fulfillment.store_id,
+                'store_name': fulfillment.store.name,
                 'status': fulfillment.status,
                 'carrier': fulfillment.carrier,
                 'tracking_number': fulfillment.tracking_number,
                 'shipped_at': _iso(fulfillment.shipped_at),
                 'delivered_at': _iso(fulfillment.delivered_at),
             }
-            for fulfillment in order.fulfillments.all()
+            for fulfillment in fulfillments
         ],
         'shipping': order.shipping_snapshot,
         'tax': str(order.tax),
@@ -891,30 +1080,23 @@ def order_data(order):
                     for item in (refund.selected_items or [])
                     if item.get('product')
                 ],
-                'failure_reason': refund.failure_reason,
+                'failure_reason': refund_failure_reason(refund),
                 'processing_reason': refund.processing_reason,
                 'created': _iso(refund.created),
                 'updated': _iso(refund.updated),
             }
-            if (
-                refund := (
-                    Refund.objects.filter(order=order, status=Refund.STATUS_PENDING).first()
-                    or Refund.objects.filter(order=order).order_by('-created').first()
-                )
-            )
+            if refund is not None
             else None
         ),
         'claimed_product_ids': sorted(list({
             item.get('product')
-            for ref in Refund.objects.filter(
-                order=order,
-                status__in=[
-                    Refund.STATUS_PENDING,
-                    Refund.STATUS_APPROVED,
-                    Refund.STATUS_DECLINED,
-                    Refund.STATUS_FAILED,
-                ],
-            )
+            for ref in refunds
+            if ref.status in [
+                Refund.STATUS_PENDING,
+                Refund.STATUS_APPROVED,
+                Refund.STATUS_DECLINED,
+                Refund.STATUS_FAILED,
+            ]
             for item in (ref.selected_items or order.items_snapshot or [])
             if item.get('product')
         })),
@@ -930,6 +1112,7 @@ class OrdersView(APIView):
             search_fields=("orderId", "tracking_number", "carrier", "cart__cart_items__product__title"),
             fields={"status": "status", "payment_type": "payment_type"}, amount_field="total",
         )
+        orders = load_order_relations(orders)
         count, page = record_page(orders, request.query_params)
         if request.query_params.get("paginated") == "1":
             return Response({"count": count, "results": [order_data(order) for order in page]})
@@ -937,13 +1120,18 @@ class OrdersView(APIView):
 
 
 class OrderDetailView(APIView):
-    @extend_schema(responses=OrderSerializer)
-    def get(self, request, pk):
+    @extend_schema(responses={200: OrderSerializer, 404: OpenApiTypes.OBJECT})
+    def get(self, request: Request, pk: int) -> Response:
         if request.user.is_staff or request.user.is_superuser:
             orders = Order.objects.all().order_by('-created')
         else:
             orders = Order.objects.filter(user=request.user).order_by('-created')
-        order = get_object_or_404(orders, pk=pk)
+        order = load_order_relations(orders).filter(pk=pk).first()
+        if order is None:
+            return Response(
+                {"detail": "This order isn’t available to your account."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         if (
             order.status in ("confirmed", "shipped")
             and order.ordered
@@ -970,7 +1158,7 @@ class OrderDetailView(APIView):
 
 class DigitalDownloadView(APIView):
     """Stream purchased files without exposing object-storage URLs."""
-    def get(self, request, pk, product_pk):
+    def get(self, request: Request, pk: int, product_pk: int) -> FileResponse | Response:
         orders = (
             Order.objects.all()
             if (
@@ -995,14 +1183,20 @@ class DigitalDownloadView(APIView):
         ):
             raise Http404
 
-        item = next(
-            (
-                row
-                for row in (order.items_snapshot or [])
-                if row.get("product") == product_pk and row.get("is_digital")
-            ),
-            None,
-        )
+        matches = [
+            row for row in (order.items_snapshot or [])
+            if row.get("product") == product_pk and row.get("is_digital")
+        ]
+        if 'variant' in request.query_params:
+            variant = serializers.CharField(
+                max_length=80, allow_blank=True, trim_whitespace=False
+            ).run_validation(
+                request.query_params['variant']
+            )
+            matches = [row for row in matches if str(row.get('variant') or '') == variant]
+        elif len(matches) > 1:
+            matches = [row for row in matches if not row.get('variant')]
+        item = matches[0] if len(matches) == 1 else None
         if not item:
             raise Http404
         product = Product.objects.filter(pk=product_pk).first()
@@ -1072,7 +1266,7 @@ class DigitalDownloadView(APIView):
 
 
 class OrderTrackingView(APIView):
-    @extend_schema(responses={200: OpenApiTypes.OBJECT}, description="Get recorded fulfillment milestones and official carrier tracking links.")
+    @extend_schema(responses={200: OrderTrackingSerializer}, description="Get recorded order and store-scoped fulfillment milestones with official carrier tracking links.")
     def get(self, request, pk):
         if request.user.is_staff or request.user.is_superuser:
             orders = Order.objects.all()
@@ -1081,6 +1275,18 @@ class OrderTrackingView(APIView):
         order = get_object_or_404(orders, pk=pk)
         from payment.usps import track_usps_shipment
         tracking_info = track_usps_shipment(order.tracking_number) if order.carrier.upper() == 'USPS' else {'events': [], 'status': 'unknown', 'tracking_url': order.tracking_url, 'summary': 'View the carrier website for current scans.'}
+        fulfillments = [
+            {
+                'store': fulfillment.store_id,
+                'store_name': fulfillment.store.name,
+                'status': fulfillment.status,
+                'carrier': fulfillment.carrier,
+                'tracking_number': fulfillment.tracking_number,
+                'shipped_at': fulfillment.shipped_at,
+                'delivered_at': fulfillment.delivered_at,
+            }
+            for fulfillment in order.fulfillments.select_related('store').all()
+        ]
         return Response({
             'order_id': order.pk,
             'reference': order.orderId,
@@ -1091,6 +1297,7 @@ class OrderTrackingView(APIView):
             'shipped_at': order.shipped_at,
             'delivered_at': order.delivered_at,
             'tracking_events': order.tracking_events or [],
+            'fulfillments': fulfillments,
             'live_tracking': tracking_info,
         })
 
@@ -1214,7 +1421,7 @@ class OrderRefundView(APIView):
                 for item in (refund.selected_items or [])
                 if item.get("product")
             ],
-            "failure_reason": refund.failure_reason,
+            "failure_reason": refund_failure_reason(refund),
             "processing_reason": refund.processing_reason,
             "created": _iso(refund.created),
             "updated": _iso(refund.updated),
@@ -2405,8 +2612,11 @@ class WalletCheckoutSessionView(CheckoutView):
             client_reference_id=str(request.user.pk),
             metadata=payment_metadata,
             payment_intent_data={"metadata": payment_metadata},
-            success_url=f"{settings.FRONTEND_URL}/checkout?wallet_session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=f"{settings.FRONTEND_URL}/checkout?wallet_cancelled=1",
+            success_url=f"{settings.FRONTEND_URL.rstrip('/')}/orders/stripe-return?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=(
+                f"{settings.FRONTEND_URL.rstrip('/')}/checkout?wallet_cancelled=1"
+                f"&checkout_key={key}"
+            ),
         )
         CheckoutAttempt.objects.create(
             user=request.user,
@@ -2581,33 +2791,78 @@ class WalletCheckoutCancelView(APIView):
 
         session_id = str(request.data.get("session_id", "")).strip()
         checkout_key_raw = request.data.get("checkout_key")
-        attempt = None
+        if not session_id and not checkout_key_raw:
+            raise ValidationError({"detail": "A checkout reference is required."})
 
+        attempts = CheckoutAttempt.objects.filter(user=request.user)
         if session_id:
-            attempt = CheckoutAttempt.objects.filter(user=request.user, session_id=session_id, status="reserved").first()
-        elif checkout_key_raw:
-            try:
-                key = serializers.UUIDField().run_validation(checkout_key_raw)
-                attempt = CheckoutAttempt.objects.filter(user=request.user, checkout_key=key, status="reserved").first()
-            except Exception:
-                pass
-
-        if not attempt:
-            attempt = CheckoutAttempt.objects.filter(user=request.user, status="reserved").order_by("-created").first()
+            attempts = attempts.filter(session_id=session_id)
+        else:
+            checkout_key = serializers.UUIDField().run_validation(checkout_key_raw)
+            attempts = attempts.filter(checkout_key=checkout_key)
+        attempt = attempts.first()
 
         if not attempt:
             return Response({"detail": "No active wallet reservation to release.", "released": False})
 
-        session = {"status": "expired"}
-        if stripe and getattr(settings, "STRIPE_SECRET", "") and attempt.session_id:
-            stripe.api_key = settings.STRIPE_SECRET
-            try:
-                retrieved = stripe.checkout.Session.retrieve(attempt.session_id)
-                session = retrieved
-                if retrieved.get("status") not in {"expired", "complete"}:
-                    stripe.checkout.Session.expire(attempt.session_id)
-            except Exception:
-                pass
+        if attempt.status != "reserved":
+            response_data = {
+                "detail": "This checkout reservation is already resolved.",
+                "released": attempt.status in {"released", "refunded"},
+                "completed": attempt.status == "completed",
+            }
+            if attempt.status == "completed":
+                response_data["session_id"] = attempt.session_id
+            return Response(response_data)
+        if not stripe or not getattr(settings, "STRIPE_SECRET", ""):
+            return Response(
+                {"detail": "Unable to verify the payment session. Your wallet reservation is still held."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        stripe.api_key = settings.STRIPE_SECRET
+        try:
+            session = stripe.checkout.Session.retrieve(attempt.session_id)
+            if session.get("payment_status") == "paid":
+                recovered = compensate_checkout(
+                    attempt, session, "Payment completed during cancellation"
+                )
+                attempt.refresh_from_db()
+                if attempt.status == "completed":
+                    return Response({
+                        "detail": "Payment was completed and the order is ready.",
+                        "released": False,
+                        "completed": True,
+                        "session_id": attempt.session_id,
+                    })
+                if recovered and attempt.status in {"released", "refunded"}:
+                    return Response({
+                        "detail": "The order could not be completed. Payment recovery has started and your wallet reservation was returned.",
+                        "released": True,
+                        "completed": False,
+                    })
+                return Response(
+                    {"detail": "Payment recovery is pending. Do not start another checkout yet.", "released": False},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+            if session.get("status") == "complete":
+                return Response(
+                    {"detail": "Payment is still processing. Your wallet reservation remains held."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if session.get("status") == "open":
+                session = stripe.checkout.Session.expire(attempt.session_id)
+            if session.get("status") != "expired":
+                return Response(
+                    {"detail": "Stripe has not confirmed checkout cancellation. Your wallet reservation is still held."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+        except Exception as exc:
+            logger.warning("Unable to cancel Stripe checkout %s (%s)", attempt.pk, type(exc).__name__)
+            return Response(
+                {"detail": "Unable to verify checkout cancellation. Your wallet reservation is still held."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         compensate_checkout(attempt, session, "Cancelled by user")
         return Response({"detail": "Checkout reservation released back to wallet.", "released": True})
@@ -2617,26 +2872,57 @@ class WalletTopupCancelView(APIView):
     permission_classes = [IsCustomer]
 
     @extend_schema(request=serializers.Serializer, responses={200: OpenApiTypes.OBJECT})
+    @transaction.atomic
     def post(self, request: Request) -> Response:
         from payment.models import WalletFundingAttempt
 
+        User.objects.select_for_update().get(pk=request.user.pk)
         session_id = str(request.data.get("session_id", "")).strip()
         query = WalletFundingAttempt.objects.filter(user=request.user, status="reserved")
         if session_id:
             query = query.filter(session_id=session_id)
-        attempt = query.order_by("-created").first()
+        else:
+            active_count = query.count()
+            if active_count == 0:
+                return Response(
+                    {"detail": "No active wallet funding reservation to release.", "released": False}
+                )
+            if active_count > 1:
+                return Response(
+                    {"detail": "A specific wallet top-up session is required when multiple checkouts are active.", "released": False},
+                    status=status.HTTP_409_CONFLICT,
+                )
+        attempt = query.select_for_update().order_by("-created").first()
 
         if not attempt:
             return Response({"detail": "No active wallet funding reservation to release.", "released": False})
 
-        if stripe and getattr(settings, "STRIPE_SECRET", "") and attempt.session_id:
-            stripe.api_key = settings.STRIPE_SECRET
-            try:
-                retrieved = stripe.checkout.Session.retrieve(attempt.session_id)
-                if retrieved.get("status") not in {"expired", "complete"}:
-                    stripe.checkout.Session.expire(attempt.session_id)
-            except Exception:
-                pass
+        if not stripe or not getattr(settings, "STRIPE_SECRET", ""):
+            return Response(
+                {"detail": "Unable to verify the payment session. Your wallet top-up remains pending."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        stripe.api_key = settings.STRIPE_SECRET
+        try:
+            session = stripe.checkout.Session.retrieve(attempt.session_id)
+            if session.get("payment_status") == "paid" or session.get("status") == "complete":
+                return Response(
+                    {"detail": "Payment was completed or is still processing. Your top-up remains pending."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if session.get("status") == "open":
+                session = stripe.checkout.Session.expire(attempt.session_id)
+            if session.get("status") != "expired":
+                return Response(
+                    {"detail": "Stripe has not confirmed top-up cancellation. Your reservation remains pending."},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                )
+        except Exception as exc:
+            logger.warning("Unable to cancel wallet top-up %s (%s)", attempt.pk, type(exc).__name__)
+            return Response(
+                {"detail": "Unable to verify top-up cancellation. Your reservation remains pending."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
         attempt.status = "released"
         attempt.save(update_fields=["status", "updated"])

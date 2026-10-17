@@ -8,6 +8,8 @@ services:
       args:
         NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${NEXT_PUBLIC_GOOGLE_CLIENT_ID:-}
         NEXT_PUBLIC_APPLE_CLIENT_ID: ${NEXT_PUBLIC_APPLE_CLIENT_ID:-}
+        MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://127.0.0.1:9000}
+        MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-commerce-images}
     restart: unless-stopped
     ports:
       - '${CLIENT_BIND_ADDRESS:-127.0.0.1}:${CLIENT_PORT:-3000}:3000'
@@ -19,6 +21,7 @@ services:
       PORT: 3000
       HOSTNAME: 0.0.0.0
       API_URL: ${CONTAINER_API_URL:-http://api:8000/api/v1}
+      NOTIFICATION_STREAM_URL: ${CONTAINER_NOTIFICATION_STREAM_URL:-http://notification-stream:8000/api/v1}
     extra_hosts:
       - host.docker.internal:host-gateway
     healthcheck:

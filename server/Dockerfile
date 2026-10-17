@@ -20,6 +20,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && pip install --upgrade pip && pip install -r requirements.txt \
     && if [ "$INSTALL_OBJECT_STORAGE" = "true" ]; then pip install -r requirements-storage.txt; fi
 
+COPY requirements-stream.txt ./
+ARG INSTALL_STREAM_POOL=false
+RUN if [ "$INSTALL_STREAM_POOL" = "true" ]; then pip install -r requirements-stream.txt; fi
+
 COPY . .
 RUN chmod +x docker-entrypoint.sh \
     && mkdir -p /app/media /data /tmp/prometheus \

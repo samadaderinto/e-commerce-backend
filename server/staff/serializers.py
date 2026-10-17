@@ -1,5 +1,6 @@
 """Canonical serializers module for the staff application."""
 from decimal import Decimal
+from typing import Any
 from utils.timezones import TimeZoneField
 from django.utils import timezone
 from django.contrib.auth.password_validation import validate_password
@@ -17,9 +18,64 @@ from taggit.serializers import TagListSerializerField, TaggitSerializer
 
 
 class TreasuryWithdrawalSerializer(serializers.Serializer):
+    bank_account_id = serializers.IntegerField(required=False, min_value=1)
+    stripe_destination_id = serializers.IntegerField(required=False, min_value=1)
     amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=Decimal('0.01'))
     payout_method = serializers.ChoiceField(choices=['stripe', 'bank'], default='stripe')
     account_details = serializers.DictField(required=False, default=dict)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        payout_method = attrs.get('payout_method', 'stripe')
+        if payout_method == 'bank' and not attrs.get('bank_account_id'):
+            raise serializers.ValidationError({'bank_account_id': 'Select a saved bank account.'})
+        if payout_method == 'stripe' and not attrs.get('stripe_destination_id'):
+            raise serializers.ValidationError({'stripe_destination_id': 'Select a saved Stripe destination.'})
+        if payout_method == 'bank' and attrs.get('stripe_destination_id'):
+            raise serializers.ValidationError({'stripe_destination_id': 'Choose a Stripe destination only for Stripe transfers.'})
+        if payout_method == 'stripe' and attrs.get('bank_account_id'):
+            raise serializers.ValidationError({'bank_account_id': 'Choose a bank account only for bank transfers.'})
+        return attrs
+
+
+class TreasuryWithdrawalDecisionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=('complete', 'fail'))
+    note = serializers.CharField(max_length=1000)
+
+    def validate_note(self, value: str) -> str:
+        note = value.strip()
+        if not note:
+            raise serializers.ValidationError(
+                'A processing note is required for every treasury decision.'
+            )
+        return note
+
+
+class PayoutDecisionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=("approve", "reject"))
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=1000)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        reason = str(attrs.get("reason", "")).strip()
+        if attrs["action"] == "reject" and not reason:
+            raise serializers.ValidationError(
+                {"reason": "A reason is required to reject a payout."}
+            )
+        attrs["reason"] = reason
+        return attrs
+
+
+class RefundDecisionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=("approve", "decline"))
+    reason = serializers.CharField(max_length=1000)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        reason = attrs["reason"].strip()
+        if not reason:
+            raise serializers.ValidationError(
+                {"reason": "A reason is required to process a refund."}
+            )
+        attrs["reason"] = reason
+        return attrs
 
 
 class PostSerializer(TaggitSerializer, serializers.ModelSerializer):
@@ -133,6 +189,12 @@ class StaffCreateSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["id", "is_staff", "is_active", "date_joined"]
 
+    def validate_email(self, value: str) -> str:
+        email = value.strip().lower()
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError("An account with this email already exists.")
+        return email
+
     def validate(self, attrs):
         if "password" in self.initial_data:
             raise serializers.ValidationError({"password": "Passwords are generated privately by the server."})
@@ -144,12 +206,21 @@ class StaffCreateSerializer(serializers.ModelSerializer):
 
 
 class StaffPermissionSerializer(serializers.Serializer):
-    is_active = serializers.BooleanField(required=False)
-    is_staff = serializers.BooleanField(required=False)
+    def to_internal_value(self, data: Any) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            raise serializers.ValidationError("Expected an object of permission fields.")
+        unsupported_fields = set(data) - {"is_active"}
+        if unsupported_fields:
+            raise serializers.ValidationError(
+                {field: "This field is not supported." for field in unsupported_fields}
+            )
+        return super().to_internal_value(data)
 
-    def validate(self, attrs):
+    is_active = serializers.BooleanField(required=False)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         if not attrs:
-            raise serializers.ValidationError("Provide is_active or is_staff.")
+            raise serializers.ValidationError("Provide is_active.")
         return attrs
 
     def update(self, user: User) -> User:
@@ -158,12 +229,12 @@ class StaffPermissionSerializer(serializers.Serializer):
             raise serializers.ValidationError("Administrator accounts cannot be changed by peers.")
         if self.validated_data.get("is_active") and user.is_staff and not user.staff_email_verified:
             raise serializers.ValidationError("Staff mailbox verification is required.")
+        if all(getattr(user, field) == value for field, value in self.validated_data.items()):
+            return user
         if "is_active" in self.validated_data:
             user.is_active = self.validated_data["is_active"]
-        if "is_staff" in self.validated_data:
-            user.is_staff = self.validated_data["is_staff"]
         user.credential_version += 1
-        user.save(update_fields=["is_active", "is_staff", "credential_version"])
+        user.save(update_fields=["is_active", "credential_version"])
         from notification.views import account_access_notification
 
         account_access_notification(user, previous_active, previous_staff)
@@ -239,13 +310,14 @@ class DashboardQuerySerializer(serializers.Serializer):
 
 class StoreAuditProductSerializer(serializers.ModelSerializer):
     price = serializers.CharField()
+    sales = serializers.IntegerField(read_only=True)
     has_digital_asset = serializers.SerializerMethodField()
     available = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
-            "id", "title", "category", "price", "visibility",
+            "id", "title", "category", "price", "sales", "visibility",
             "is_digital", "has_digital_asset", "available", "created", "updated",
             "product_type", "affiliate_hoplink", "affiliate_vendor_nickname", "affiliate_button_text",
         ]

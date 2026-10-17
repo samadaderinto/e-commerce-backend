@@ -1,5 +1,8 @@
 'use client';
 
+import { useNotificationDetail } from './notification-detail';
+
+import type { CollectionField } from './collection-filters';
 import { CollectionCount, CollectionFilters, CollectionPagination, financialFields, useCollectionFilters, useDebouncedValue } from './collection-filters';
 
 
@@ -39,9 +42,11 @@ import {
   X,
 } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
-import type { AdminCoupon, AdminDashboardData, AdminOrder, AdminRefund, AdminTaxJurisdiction, AdminTaxesResponse, AdminUserProfile, Page, StaffUser, StorePayout } from '@/lib/types';
+import type { AdminCoupon, AdminDashboardData, AdminOrder, AdminRefund, AdminTaxJurisdiction, AdminTaxesResponse, AdminUserProfile, Order, Page, StaffUser, StorePayout, StoreEarningsLedger, MerchantStoreSummary } from '@/lib/types';
 import { useShop } from './providers';
-import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, Status, VerifiedBadge } from './ui';
+import { BankAccounts } from './bank-accounts';
+import { StripePayoutDestinations } from './stripe-destinations';
+import { useDialogFocus, Pagination, Empty, ErrorState, Field, Loading, Status, VerifiedBadge, ResponsiveMediaImage } from './ui';
 
 type ActionDialogRequest = {
   title: string;
@@ -180,9 +185,7 @@ function payoutAccountField(key: string, value: unknown): [string, string] {
   }
   if (/account_number|routing_number|iban/i.test(key)) {
     const compact = text.replace(/\s/g, '');
-    return [key.replaceAll('_', ' '), compact.length > 4
-      ? `${compact.slice(0, 2)}${'*'.repeat(compact.length - 4)}${compact.slice(-2)}`
-      : '*'.repeat(compact.length)];
+    return [key.replaceAll('_', ' '), compact ? `********${compact.slice(-4)}` : ''];
   }
   return [key.replaceAll('_', ' '), text];
 }
@@ -276,6 +279,90 @@ export function AdminDashboardPage() {
       notify(`Refund ${action === 'approve' ? 'approved' : 'declined'}`);
       await refreshOperations();
     } catch (error) { notify((error as Error).message, true); }
+  }
+
+  function showOrderDetails(order: AdminDashboardData['recent_orders'][number]): void {
+    setDetail({
+      title: `Order #${order.orderId}`,
+      rows: [
+        ['Buyer', order.buyer_email || 'Guest'],
+        ['Status', order.status],
+        ['Total', money(order.total)],
+        ['Created', activityDate(order.created)],
+        ['Updated', activityDate(order.updated)],
+        ['Status changed', activityDate(order.status_updated_at)],
+        ['Cancelled', activityDate(order.cancelled_at)],
+        ['Refunded', activityDate(order.refunded_at)],
+        ['Tracking', order.tracking_number || 'Not assigned'],
+      ],
+    });
+  }
+
+  function showRefundDetails(refund: AdminRefund): void {
+    setDetail({
+      title: `Refund #${refund.id}`,
+      rows: [
+        ['Order', `#${refund.order}`],
+        ['Customer', refund.email],
+        ['Method', refund.refund_type.replaceAll('_', ' ')],
+        ['Status', refund.status],
+        ...(refund.processed_by_email ? [['Processed by', refund.processed_by_email] as [string, string]] : []),
+        ['Reason', refund.reason],
+        ...(refund.provider_reference
+          ? ([['Provider Reference', refund.provider_reference]] as [string, string][])
+          : []),
+        ...(refund.failure_reason
+          ? ([['Failure Details', refund.failure_reason]] as [string, string][])
+          : []),
+        ['Created', activityDate(refund.created)],
+      ],
+    });
+  }
+
+  function showCouponDetails(coupon: AdminCoupon): void {
+    setDetail({
+      title: `Coupon ${coupon.code}`,
+      rows: [
+        ['Status', coupon.active ? 'Active' : 'Inactive'],
+        ['Discount', `${coupon.discount}%`],
+        ['Created by', coupon.created_by || 'Not recorded'],
+        ['Valid from', activityDate(coupon.valid_from)],
+        ['Valid to', activityDate(coupon.valid_to)],
+        ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
+        ...(coupon.redemptions?.length
+          ? ([['Redemptions', `${coupon.redemptions.length} orders redeemed`]] as [string, string][])
+          : []),
+      ],
+    });
+  }
+
+  async function showRefundOrderDetails(refund: AdminRefund): Promise<void> {
+    const recentOrder = data?.recent_orders.find(order => order.id === refund.order);
+    if (recentOrder) {
+      showOrderDetails(recentOrder);
+      return;
+    }
+
+    try {
+      const order = await api<Order>(`orders/${refund.order}`);
+      setDetail({
+        title: `Order #${order.reference}`,
+        rows: [
+          ['Status', order.status],
+          ['Payment method', order.payment_type.replaceAll('_', ' ')],
+          ['Subtotal', money(order.subtotal)],
+          ['Total', money(order.total)],
+          ['Paid', money(order.paid_total)],
+          ['Refunded', money(order.refunded_total)],
+          ['Carrier', order.carrier || 'Not assigned'],
+          ['Tracking number', order.tracking_number || 'Not assigned'],
+          ['Items', `${order.items.length} items`],
+          ['Created', activityDate(order.created)],
+        ],
+      });
+    } catch (error) {
+      notify((error as Error).message, true);
+    }
   }
 
   async function overrideOrder(order: AdminDashboardData['recent_orders'][number], nextStatus: string) {
@@ -523,20 +610,24 @@ export function AdminDashboardPage() {
             ) : (
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th>Reference</th><th>Store</th><th>Amount</th><th>Status</th><th>Requested</th><th>Action</th></tr></thead>
+                  <thead><tr><th>Reference</th><th>Store</th><th>Amount</th><th>Status</th><th>Requested</th></tr></thead>
                   <tbody>
                     {payouts.data.results.map(payout => (
                       <tr key={payout.id}>
-                        <td>{payout.reference}</td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-link"
+                            aria-label={`View payout ${payout.reference} details`}
+                            onClick={() => setDetail(payoutDetail(payout))}
+                          >
+                            {payout.reference}
+                          </button>
+                        </td>
                         <td>{payout.store_name || 'Merchant wallet'}</td>
                         <td>{money(payout.amount)}</td>
                         <td><Status value={payout.status} /></td>
                         <td><DateStamp value={payout.created} dateOnly /></td>
-                        <td>
-                          <button type="button" className="button secondary" onClick={() => setDetail(payoutDetail(payout))}>
-                            Details
-                          </button>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -565,27 +656,20 @@ export function AdminDashboardPage() {
                       <th>Status</th>
                       <th>Products</th>
                       <th>Orders Completed</th>
-                      <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.top_stores.slice(0, 5).map(store => (
                       <tr key={store.id}>
-                        <td><strong>{store.name}</strong></td>
+                        <td>
+                          <Link className="text-link" href={`/admin/stores/${store.id}`}>
+                            {store.name}
+                          </Link>
+                        </td>
                         <td>@{store.username}</td>
                         <td><Status value={store.status} /></td>
                         <td>{store.products} products</td>
                         <td><strong>{store.orders} orders</strong></td>
-                        <td>
-                          <button
-                            type="button"
-                            className="button secondary"
-                            aria-label={`View details for ${store.name}`}
-                            onClick={() => setDetail({title: store.name, rows: [['Username', `@${store.username}`], ['Status', store.status], ['Products', String(store.products)], ['Completed orders', String(store.orders)]]})}
-                          >
-                            Details
-                          </button>
-                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -616,14 +700,22 @@ export function AdminDashboardPage() {
                       <th>Total</th>
                       <th>Created</th>
                       <th>Updated</th>
-                      <th>Action</th>
                       <th>Emergency action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.recent_orders.slice(0, 5).map(order => (
                       <tr key={order.orderId}>
-                        <td><strong>#{order.orderId}</strong></td>
+                        <td>
+                          <button
+                            type="button"
+                            className="text-link"
+                            aria-label={`View details for order ${order.orderId}`}
+                            onClick={() => showOrderDetails(order)}
+                          >
+                            #{order.orderId}
+                          </button>
+                        </td>
                         <td>{order.buyer_email}</td>
                         <td><Status value={order.status} /></td>
                         <td>
@@ -639,16 +731,6 @@ export function AdminDashboardPage() {
                         <td><strong>{money(order.total)}</strong></td>
                         <td><DateStamp value={order.created} /></td>
                         <td><DateStamp value={order.updated} /></td>
-                        <td>
-                          <button
-                            type="button"
-                            className="button secondary"
-                            aria-label={`View details for order ${order.orderId}`}
-                            onClick={() => setDetail({title: `Order #${order.orderId}`, rows: [['Buyer', order.buyer_email || 'Guest'], ['Status', order.status], ['Total', money(order.total)], ['Created', activityDate(order.created)], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)], ['Tracking', order.tracking_number || 'Not assigned']]})}
-                          >
-                            Details
-                          </button>
-                        </td>
                         <td>
                           {(() => {
                             const isDigital = isOrderAllDigital(order);
@@ -675,89 +757,12 @@ export function AdminDashboardPage() {
             )}
           </section>
 
-          <div className="dashboard-columns" style={{ marginTop: '2rem' }}>
-            <section className="analytics-panel">
-              <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div><h2>Coupon operations</h2><p>Deactivate immediately, or delete coupons with no redemption history.</p></div>
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                  {coupons.data?.count !== undefined && <small className="muted">{coupons.data.count} total</small>}
-                  <Link href="/admin/coupons" className="button secondary">View all coupons &rarr;</Link>
-                </div>
-              </div>
-              {coupons.isFetching && !coupons.isLoading && <Loading compact />}
-              {coupons.isLoading ? (
-                <Loading />
-              ) : coupons.error ? (
-                <ErrorState error={coupons.error} retry={() => coupons.refetch()} />
-              ) : !coupons.data?.results.length ? (
-                <p className="muted">No coupons configured.</p>
-              ) : (
-                coupons.data.results.map((coupon) => (
-                  <div className="stock-row" key={coupon.id}>
-                    <div>
-                      <strong>{coupon.code}</strong>
-                      <small>
-                        {coupon.discount}% off · {coupon.num_used}/{coupon.num_available} used ·{' '}
-                        {coupon.active ? 'Active' : 'Inactive'}
-                      </small>
-                    </div>
-                    <div className="form-actions">
-                      <button
-                        type="button"
-                        className="button secondary"
-                        aria-label={`View details for coupon ${coupon.code}`}
-                        onClick={() =>
-                          setDetail({
-                            title: `Coupon ${coupon.code}`,
-                            rows: [
-                              ['Status', coupon.active ? 'Active' : 'Inactive'],
-                              ['Discount', `${coupon.discount}%`],
-                              ['Created by', coupon.created_by || 'Not recorded'],
-                              ['Valid from', activityDate(coupon.valid_from)],
-                              ['Valid to', activityDate(coupon.valid_to)],
-                              ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
-                              ...(coupon.redemptions?.length
-                                ? ([['Redemptions', `${coupon.redemptions.length} orders redeemed`]] as [string, string][])
-                                : []),
-                            ],
-                          })
-                        }
-                      >
-                        Details
-                      </button>
-                      <button
-                        className="button secondary"
-                        onClick={() => void setCoupon(coupon, 'toggle')}
-                      >
-                        {coupon.active ? 'Deactivate' : 'Reactivate'}
-                      </button>
-                      <button
-                        type="button"
-                        className="icon-button"
-                        aria-label={
-                          coupon.num_used > 0
-                            ? `Used coupon ${coupon.code} cannot be deleted (click to see reason)`
-                            : `Delete unused coupon ${coupon.code}`
-                        }
-                        title={
-                          coupon.num_used > 0
-                            ? 'Used coupons cannot be deleted to preserve order records. Click for details.'
-                            : 'Delete unused coupon'
-                        }
-                        onClick={() => void setCoupon(coupon, 'delete')}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </section>
+          <div className="dashboard-columns dashboard-operations" style={{ marginTop: '2rem' }}>
             <section className="analytics-panel">
               <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <h2>Refund operations</h2>
-                  <p>Review requests and apply the selected refund method.</p>
+                  <p>Latest requests. Open all refunds for search, filters, and full history.</p>
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
                   {refunds.data?.count !== undefined && <small className="muted">{refunds.data.count} total</small>}
@@ -774,61 +779,167 @@ export function AdminDashboardPage() {
               ) : !refunds.data?.results.length ? (
                 <p className="muted">No refund requests.</p>
               ) : (
-                refunds.data.results.map((refund) => (
-                  <div className="stock-row" key={refund.id}>
-                    <div>
-                      <strong>Refund #{refund.id} · Order #{refund.order}</strong>
-                      <small>
-                        {refund.email} · {refund.refund_type.replaceAll('_', ' ')} · {refund.status}
-                      </small>
-                      <small title={refund.reason}>{refund.reason}</small>
-                    </div>
-                    <div className="form-actions">
-                      <button
-                        type="button"
-                        className="button secondary"
-                        aria-label={`View details for refund ${refund.id}`}
-                        onClick={() =>
-                          setDetail({
-                            title: `Refund #${refund.id}`,
-                            rows: [
-                              ['Order', `#${refund.order}`],
-                              ['Customer', refund.email],
-                              ['Method', refund.refund_type.replaceAll('_', ' ')],
-                              ['Status', refund.status],
-                              ['Reason', refund.reason],
-                              ...(refund.provider_reference
-                                ? ([['Provider Reference', refund.provider_reference]] as [string, string][])
-                                : []),
-                              ...(refund.failure_reason
-                                ? ([['Failure Details', refund.failure_reason]] as [string, string][])
-                                : []),
-                              ['Created', activityDate(refund.created)],
-                            ],
-                          })
-                        }
-                      >
-                        Details
-                      </button>
-                      {(refund.status === 'pending' || refund.status === 'failed') && (
-                        <>
-                          <button
-                            className="button"
-                            onClick={() => void processRefund(refund, 'approve')}
-                          >
-                            {refund.status === 'failed' ? 'Retry Approve' : 'Approve'}
-                          </button>
-                          <button
-                            className="button secondary"
-                            onClick={() => void processRefund(refund, 'decline')}
-                          >
-                            Decline
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))
+                <div className="table-scroll dashboard-refund-table">
+                  <table>
+                    <caption className="sr-only">Latest refund requests</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Refund</th>
+                        <th scope="col">Order</th>
+                        <th scope="col">Customer</th>
+                        <th scope="col">Amount</th>
+                        <th scope="col">Method</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Processed by</th>
+                        <th scope="col">Reason</th>
+                        <th scope="col">Created</th>
+                        <th scope="col">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {refunds.data.results.map(refund => (
+                        <tr key={refund.id}>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-link"
+                              aria-label={`View details for refund ${refund.id}`}
+                              onClick={() => showRefundDetails(refund)}
+                            >
+                              #{refund.id}
+                            </button>
+                          </td>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-link"
+                              aria-label={`View order ${refund.order} details`}
+                              onClick={() => void showRefundOrderDetails(refund)}
+                            >
+                              #{refund.order}
+                            </button>
+                          </td>
+                          <td>{refund.email}</td>
+                          <td>{money(refund.refund_amount)}</td>
+                          <td>{refund.refund_type.replaceAll('_', ' ')}</td>
+                          <td><Status value={refund.status} /></td>
+                          <td>{refund.processed_by_email || '—'}</td>
+                          <td className="refund-reason">{refund.reason}</td>
+                          <td><DateStamp value={refund.created} /></td>
+                          <td>
+                            {(refund.status === 'pending' || refund.status === 'failed') ? (
+                              <div className="form-actions">
+                                <button
+                                  type="button"
+                                  className="button compact"
+                                  onClick={() => void processRefund(refund, 'approve')}
+                                >
+                                  {refund.status === 'failed' ? 'Retry approve' : 'Approve'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="button secondary compact"
+                                  onClick={() => void processRefund(refund, 'decline')}
+                                >
+                                  Decline
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                className="button secondary compact"
+                                onClick={() => showRefundDetails(refund)}
+                              >
+                                Details
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+            <section className="analytics-panel">
+              <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div><h2>Coupon operations</h2><p>Deactivate immediately, or delete coupons with no redemption history.</p></div>
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                  {coupons.data?.count !== undefined && <small className="muted">{coupons.data.count} total</small>}
+                  <Link href="/admin/coupons" className="button secondary">View all coupons &rarr;</Link>
+                </div>
+              </div>
+              {coupons.isFetching && !coupons.isLoading && <Loading compact />}
+              {coupons.isLoading ? (
+                <Loading />
+              ) : coupons.error ? (
+                <ErrorState error={coupons.error} retry={() => coupons.refetch()} />
+              ) : !coupons.data?.results.length ? (
+                <p className="muted">No coupons configured.</p>
+              ) : (
+                <div className="table-scroll dashboard-coupon-table">
+                  <table>
+                    <caption className="sr-only">Latest coupons</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Code</th>
+                        <th scope="col">Discount</th>
+                        <th scope="col">Usage</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Valid from</th>
+                        <th scope="col">Valid to</th>
+                        <th scope="col">Created by</th>
+                        <th scope="col">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {coupons.data.results.map(coupon => (
+                        <tr key={coupon.id}>
+                          <td>
+                            <button
+                              type="button"
+                              className="text-link"
+                              aria-label={`View details for coupon ${coupon.code}`}
+                              onClick={() => showCouponDetails(coupon)}
+                            >
+                              {coupon.code}
+                            </button>
+                          </td>
+                          <td>{coupon.discount}% off</td>
+                          <td>{coupon.num_used} / {coupon.num_available}</td>
+                          <td><Status value={coupon.active ? 'active' : 'inactive'} /></td>
+                          <td><DateStamp value={coupon.valid_from} dateOnly /></td>
+                          <td><DateStamp value={coupon.valid_to} dateOnly /></td>
+                          <td>{coupon.created_by || 'Not recorded'}</td>
+                          <td>
+                            <div className="form-actions">
+                              <button
+                                type="button"
+                                className="button secondary compact"
+                                onClick={() => void setCoupon(coupon, 'toggle')}
+                              >
+                                {coupon.active ? 'Deactivate' : 'Reactivate'}
+                              </button>
+                              <button
+                                type="button"
+                                className="icon-button"
+                                aria-label={coupon.num_used > 0
+                                  ? `Used coupon ${coupon.code} cannot be deleted (click to see reason)`
+                                  : `Delete unused coupon ${coupon.code}`}
+                                title={coupon.num_used > 0
+                                  ? 'Used coupons cannot be deleted to preserve order records. Click for details.'
+                                  : 'Delete unused coupon'}
+                                onClick={() => void setCoupon(coupon, 'delete')}
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </section>
           </div>
@@ -950,8 +1061,8 @@ export function AdminUsersPage() {
         <Link className="button secondary" href="/admin">Platform Dashboard</Link>
       </div>
 
-      <CollectionFilters filters={filters} label="users" fields={[
-        { key: 'role', label: 'Role', options: [{ value: 'customer', label: 'Customer' }, { value: 'staff', label: 'Staff' }, { value: 'admin', label: 'Admin' }] },
+      <CollectionFilters filters={filters} label="users" reserveStatusSpace fields={[
+        { key: 'role', label: 'Role', options: [{ value: 'customer', label: 'Customer' }, ...(user.is_superuser || user.is_business_admin ? [{ value: 'staff', label: 'Staff' }, { value: 'admin', label: 'Admin' }] : [])] },
         { key: 'is_active', label: 'Account state', options: [{ value: 'true', label: 'Active' }, { value: 'false', label: 'Blocked' }] },
       ]} />
       {typeof users.data?.count === 'number' && (
@@ -983,12 +1094,20 @@ export function AdminUsersPage() {
                 {results.map(member => (
                   <tr key={member.id}>
                     <td>
-                      <div className="admin-staff-person">
+                      <Link
+                        className="admin-staff-person admin-staff-person-link"
+                        href={`/admin/users/${member.id}`}
+                        aria-label={`View profile of ${`${member.first_name} ${member.last_name}`.trim() || member.email}`}
+                      >
                         {member.avatar_url ? (
-                          <img
+                          <ResponsiveMediaImage
                             src={member.avatar_url}
                             alt={member.first_name || member.email}
+                            fallback={<span>{member.first_name?.[0] || member.email[0]}</span>}
                             style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                            sizes="36px"
+                            width={72}
+                            height={72}
                           />
                         ) : (
                           <span>{member.first_name?.[0] || member.email[0]}</span>
@@ -997,7 +1116,7 @@ export function AdminUsersPage() {
                           <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Unnamed user'}</strong>
                           <small>{member.email}</small>
                         </div>
-                      </div>
+                      </Link>
                     </td>
                     <td>{member.phone1 || '—'}</td>
                     <td><span className="status">{member.role.replace('_', ' ')}</span></td>
@@ -1005,10 +1124,7 @@ export function AdminUsersPage() {
                     <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
                     <td>
                       <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
-                        <Link className="button secondary" style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }} href={`/admin/users/${member.id}`}>
-                          View profile
-                        </Link>
-                        {(user.is_superuser || user.is_business_admin) && (
+                        {(user.is_superuser || user.is_business_admin || (!member.is_staff && !member.is_superuser && !member.is_business_admin)) && (
                           <button
                             className="button secondary"
                             style={{
@@ -1136,10 +1252,18 @@ export function AdminUserDetailPage({ id }: { id: string }) {
       <section className="admin-profile-card">
         <div className="admin-profile-identity">
           {data.user.avatar_url ? (
-            <img
+            <ResponsiveMediaImage
               src={data.user.avatar_url}
               alt={data.user.first_name || data.user.email}
+              fallback={(
+                <div className="admin-user-profile-avatar-fallback">
+                  {data.user.first_name?.[0]?.toUpperCase() || data.user.email[0]?.toUpperCase()}
+                </div>
+              )}
               className="admin-user-profile-avatar"
+              sizes="120px"
+              width={240}
+              height={240}
             />
           ) : (
             <div className="admin-user-profile-avatar-fallback">
@@ -1154,7 +1278,7 @@ export function AdminUserDetailPage({ id }: { id: string }) {
         </div>
         <div className="admin-profile-actions">
           <Status value={data.user.is_active ? 'active' : 'blocked'} />
-          {(user.is_superuser || user.is_business_admin) && (
+          {(user.is_superuser || user.is_business_admin || (!data.user.is_staff && !data.user.is_superuser && !data.user.is_business_admin)) && (
             <button
               className="button secondary"
               style={{ color: data.user.is_active ? 'var(--red, #e11d48)' : 'var(--green, #10b981)' }}
@@ -1454,6 +1578,10 @@ export function AdminPayoutsPage() {
   const [selectedPayout, setSelectedPayout] = useState<StorePayout | null>(null);
   const [processing, setProcessing] = useState<boolean>(false);
   const client = useQueryClient();
+  const clearNotificationDetail = useNotificationDetail<StorePayout>('payout', 'admin/staff/payouts', payout => {
+    setSelectedPayout(payout);
+    setDetail(payoutDetail(payout));
+  });
 
   const payouts = useQuery({
     queryKey: ['admin', 'payouts', filters.query, user?.id],
@@ -1540,7 +1668,9 @@ export function AdminPayoutsPage() {
                   <th>Store</th>
                   <th>Amount</th>
                   <th>Method</th>
-                  <th>Account Details</th>
+                  <th>Bank</th>
+                  <th>Bank account</th>
+                  <th>Routing</th>
                   <th>Requested</th>
                   <th>Processed</th>
                   <th>Status</th>
@@ -1550,46 +1680,41 @@ export function AdminPayoutsPage() {
               <tbody>
                 {items.map(payout => (
                   <tr key={payout.id}>
-                    <td><strong>{payout.reference}</strong></td>
-                    <td>{payout.store_name || (payout.store ? `Store #${payout.store}` : 'Merchant Wallet')}</td>
-                    <td><strong>{money(payout.amount)}</strong></td>
-                    <td><span className="status">{payout.payout_method.replace('_', ' ')}</span></td>
-                    <td>
-                      <small style={{ fontFamily: 'monospace', fontSize: '11px' }}>
-                        {Object.keys(payout.account_details || {}).length > 0
-                          ? Object.entries(payout.account_details).map(([key, value]) => payoutAccountField(key, value).join(': ')).join(', ')
-                          : 'Default account'}
-                      </small>
-                    </td>
-                    <td><DateStamp value={payout.created} dateOnly /></td>
-                    <td><DateStamp value={payout.processed_at} dateOnly /></td>
-                    <td><Status value={payout.status} /></td>
                     <td>
                       <button
                         type="button"
-                        className="button secondary"
+                        className="text-link"
                         aria-label={`View payout ${payout.reference} details`}
                         onClick={() => {
                           setSelectedPayout(payout);
                           setDetail(payoutDetail(payout));
                         }}
                       >
-                        Details
+                        {payout.reference}
                       </button>
+                    </td>
+                    <td>{payout.store_name || (payout.store ? `Store #${payout.store}` : 'Merchant Wallet')}</td>
+                    <td><strong>{money(payout.amount)}</strong></td>
+                    <td><span className="status">{payout.payout_method.replace('_', ' ')}</span></td>
+                    <td>{String(payout.account_details?.bank_name || '—')}</td>
+                    <td>{payoutAccountField('account_number', payout.account_details?.account_number || payout.account_details?.account_last4 || '').at(1) || '—'}</td>
+                    <td>{payoutAccountField('routing_number', payout.account_details?.routing_number || payout.account_details?.routing_last4 || '').at(1) || '—'}</td>
+                    <td><DateStamp value={payout.created} dateOnly /></td>
+                    <td><DateStamp value={payout.processed_at} dateOnly /></td>
+                    <td><Status value={payout.status} /></td>
+                    <td>
                       {payout.status === 'pending' && (
                         Boolean(user && (user.is_staff || user.is_superuser || user.is_business_admin)) ? (
-                          <div className="form-actions" style={{ display: 'flex', gap: '0.35rem' }}>
+                          <div className="form-actions admin-payout-actions">
                             <button
-                              className="button"
-                              style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem' }}
+                              className="button compact"
                               disabled={processing}
                               onClick={() => void handleProcess(payout, 'approve')}
                             >
                               {payout.payout_method === 'stripe_connect' ? 'Pay out' : 'Mark paid'}
                             </button>
                             <button
-                              className="button secondary"
-                              style={{ padding: '0.3rem 0.65rem', fontSize: '0.8rem', color: 'var(--red, #e11d48)' }}
+                              className="button secondary compact danger"
                               disabled={processing}
                               onClick={() => void handleProcess(payout, 'reject')}
                             >
@@ -1612,7 +1737,10 @@ export function AdminPayoutsPage() {
 
       <DashboardDetailDialog
         detail={detail}
-        onClose={() => setDetail(null)}
+        onClose={() => {
+          setDetail(null);
+          clearNotificationDetail();
+        }}
         actions={selectedPayout?.status === 'pending' ? (
           <>
             <button type="button" className="button" disabled={processing} onClick={() => {
@@ -1710,12 +1838,20 @@ export function AdminStaffPage() {
                 {rows.map(member => (
                   <tr key={member.id}>
                     <td>
-                      <div className="admin-staff-person">
+                      <Link
+                        className="admin-staff-person admin-staff-person-link"
+                        href={`/admin/users/${member.id}`}
+                        aria-label={`View profile of ${`${member.first_name} ${member.last_name}`.trim() || member.email}`}
+                      >
                         {member.avatar_url ? (
-                          <img
+                          <ResponsiveMediaImage
                             src={member.avatar_url}
                             alt={member.first_name || member.email}
+                            fallback={<span>{member.first_name?.[0] || member.email[0]}</span>}
                             style={{ width: 32, height: 32, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                            sizes="32px"
+                            width={64}
+                            height={64}
                           />
                         ) : (
                           <span>{member.first_name?.[0] || member.email[0]}</span>
@@ -1724,7 +1860,7 @@ export function AdminStaffPage() {
                           <strong>{`${member.first_name} ${member.last_name}`.trim() || 'Staff member'}</strong>
                           <small>{member.email}</small>
                         </div>
-                      </div>
+                      </Link>
                     </td>
                     <td><DateStamp value={member.date_joined} dateOnly /></td><td><DateStamp value={member.last_active_at} /></td><td><DateStamp value={member.last_login} /></td>
                     <td><Status value={member.is_active ? 'active' : 'blocked'} /></td>
@@ -1886,6 +2022,7 @@ function StaffDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (
 
 export function AdminStoresPage() {
   const { user, notify } = useShop();
+  const canManageStoreStatus = Boolean(user?.is_superuser || user?.is_business_admin);
   const client = useQueryClient();
   const [offset, setOffset] = useState(0);
   const extraFilters = useCollectionFilters();
@@ -2112,14 +2249,16 @@ export function AdminStoresPage() {
                             )
                           ) : (
                             store.status === 'blocked' ? (
-                              <button
-                                className="button secondary"
-                                onClick={() => void action(`admin/staff/stores/${store.id}/unblock`, 'POST')}
-                              >
-                                <Check size={14} /> Reactivate
-                              </button>
+                              canManageStoreStatus && (
+                                <button
+                                  className="button secondary"
+                                  onClick={() => void action(`admin/staff/stores/${store.id}/unblock`, 'POST')}
+                                >
+                                  <Check size={14} /> Reactivate
+                                </button>
+                              )
                             ) : store.status === 'pending' ? (
-                              (user.is_superuser || user.is_business_admin) && (
+                              canManageStoreStatus && (
                                 <button
                                   className="button secondary"
                                   onClick={() => void action(`admin/stores/${store.id}/approve`, 'POST')}
@@ -2128,24 +2267,26 @@ export function AdminStoresPage() {
                                 </button>
                               )
                             ) : (
-                              <button
-                                className="button secondary danger"
-                                onClick={async () => {
-                                  const reason = await actionDialog.ask({
-                                    title: `Suspend ${store.name}`,
-                                    message: `Are you sure you want to suspend @${store.username}? Products will be hidden from shoppers.`,
-                                    confirmLabel: 'Suspend store',
-                                    reasonLabel: 'Reason for suspension',
-                                  });
-                                  if (reason !== null) {
-                                    void action(`admin/staff/stores/${store.id}/block`, 'POST', {
-                                      reason: reason || 'Suspended by staff',
+                              canManageStoreStatus && (
+                                <button
+                                  className="button secondary danger"
+                                  onClick={async () => {
+                                    const reason = await actionDialog.ask({
+                                      title: `Suspend ${store.name}`,
+                                      message: `Are you sure you want to suspend @${store.username}? Products will be hidden from shoppers.`,
+                                      confirmLabel: 'Suspend store',
+                                      reasonLabel: 'Reason for suspension',
                                     });
-                                  }
-                                }}
-                              >
-                                <Ban size={14} /> Suspend
-                              </button>
+                                    if (reason !== null) {
+                                      void action(`admin/staff/stores/${store.id}/block`, 'POST', {
+                                        reason: reason || 'Suspended by staff',
+                                      });
+                                    }
+                                  }}
+                                >
+                                  <Ban size={14} /> Suspend
+                                </button>
+                              )
                             )
                           )}
                         </div>
@@ -2170,9 +2311,237 @@ export function AdminStoresPage() {
   );
 }
 
+function AdminStorePayments({ storeId }: { storeId: string }): React.JSX.Element {
+  const { user } = useShop();
+  const [tab, setTab] = useState<'payouts' | 'ledger'>('payouts');
+  const [detail, setDetail] = useState<DashboardDetail | null>(null);
+  const payoutFilters = useCollectionFilters();
+  const ledgerFilters = useCollectionFilters();
+  const filters = tab === 'payouts' ? payoutFilters : ledgerFilters;
+  const base = `admin/staff/stores/${storeId}`;
+  const summary = useQuery({
+    queryKey: ['admin', 'store-financials', storeId, user?.id],
+    queryFn: () => api<MerchantStoreSummary>(`${base}/financials`),
+    enabled: Boolean(user),
+  });
+  const payouts = useQuery({
+    queryKey: ['admin', 'store-payouts', storeId, payoutFilters.query, user?.id],
+    queryFn: () => api<Page<StorePayout>>(`admin/staff/payouts?store_id=${storeId}&${payoutFilters.query}`),
+    enabled: Boolean(user && tab === 'payouts'),
+  });
+  const ledger = useQuery({
+    queryKey: ['admin', 'store-ledger', storeId, ledgerFilters.query, user?.id],
+    queryFn: () => api<Page<StoreEarningsLedger>>(`${base}/ledger?${ledgerFilters.query}`),
+    enabled: Boolean(user && tab === 'ledger'),
+  });
+  const clearPayout = useNotificationDetail<StorePayout>(
+    'payout', `admin/staff/payouts?store_id=${storeId}`, payout => setDetail(payoutDetail(payout)),
+  );
+  const clearLedger = useNotificationDetail<StoreEarningsLedger>('ledger', `${base}/ledger`, showLedger);
+
+  function closeDetail(): void {
+    setDetail(null);
+    clearPayout();
+    clearLedger();
+  }
+
+  function showLedger(entry: StoreEarningsLedger): void {
+    const rows: [string, string][] = [
+      ['Reference', entry.reference],
+      ['Entry type', entry.entry_type],
+      ['Description', entry.description],
+      ['Status', entry.status],
+      ['Gross amount', money(entry.gross_amount)],
+      ['Platform fee', money(entry.fee_amount)],
+      ['Net amount', money(entry.net_amount)],
+      ['Created', activityDate(entry.created)],
+    ];
+    if (entry.order) rows.push(['Order', `#${entry.order}`]);
+    if (entry.available_at) rows.push(['Available on', activityDate(entry.available_at)]);
+    if (entry.cleared_at) rows.push(['Cleared on', activityDate(entry.cleared_at)]);
+    setDetail({ title: `Ledger entry ${entry.reference || `#${entry.id}`}`, category: 'Store payment', rows });
+  }
+
+  const statusOptions: string[] = tab === 'payouts'
+    ? ['pending', 'completed', 'rejected']
+    : ['pending', 'available', 'completed', 'reversed'];
+  const fields: CollectionField[] = [
+    {
+      key: 'status', label: 'Status',
+      options: statusOptions.map(value => ({ value, label: value })),
+    },
+    tab === 'payouts' ? {
+      key: 'payout_method', label: 'Payment method',
+      options: [
+        { value: 'bank_transfer', label: 'Bank transfer' },
+        { value: 'stripe_connect', label: 'Stripe Connect' },
+      ],
+    } : {
+      key: 'entry_type', label: 'Entry type',
+      options: ['sale', 'fee', 'payout', 'refund', 'adjustment'].map(value => ({ value, label: value })),
+    },
+    ...financialFields,
+  ];
+  const result = tab === 'payouts' ? payouts : ledger;
+  const count = result.data?.count ?? 0;
+  const summaryFields: [string, string][] = summary.data ? [
+    ['Gross sales', summary.data.gross_sales],
+    ['Platform fees', summary.data.platform_fee_deducted],
+    ['Net sales', summary.data.net_sales],
+    ['In review', summary.data.in_review],
+    ['Cleared total', summary.data.cleared_total],
+    ['Available balance', summary.data.available_balance],
+    ['Pending payouts', summary.data.payouts_pending],
+    ['Completed payouts', summary.data.payouts_completed],
+  ] : [];
+
+  return (
+    <section className="section" aria-label="Store payments">
+      <div className="merchant-heading">
+        <div>
+          <h2>Store payments</h2>
+          <p>Store earnings, platform fees, escrow, and payout requests.</p>
+          <p className="muted">Balances cover this store’s full history. Filters apply to the tables below.</p>
+        </div>
+      </div>
+      {summary.isLoading ? <Loading compact /> : summary.error ? (
+        <ErrorState error={summary.error} retry={() => void summary.refetch()} />
+      ) : (
+        <div className="stats-grid">
+          {summaryFields.map(([label, amount]) => (
+            <div className="stat-item" key={label}>
+              <div>
+                <span>{label}</span>
+                <DollarSign size={18} />
+              </div>
+              <strong>{money(amount)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="tabs" aria-label="Store payment history">
+        <button
+          type="button"
+          className={tab === 'payouts' ? 'active' : ''}
+          aria-pressed={tab === 'payouts'}
+          onClick={() => setTab('payouts')}
+        >
+          Payout requests
+        </button>
+        <button
+          type="button"
+          className={tab === 'ledger' ? 'active' : ''}
+          aria-pressed={tab === 'ledger'}
+          onClick={() => setTab('ledger')}
+        >
+          Earnings ledger
+        </button>
+      </div>
+      <CollectionFilters
+        filters={filters}
+        label={tab === 'payouts' ? 'store payouts' : 'store earnings'}
+        fields={fields}
+      />
+      <CollectionCount count={count} />
+      {result.isFetching && !result.isLoading && <Loading compact />}
+      {result.isLoading ? <Loading /> : result.error ? (
+        <ErrorState error={result.error} retry={() => void result.refetch()} />
+      ) : count === 0 ? (
+        <Empty
+          title={filters.active ? 'No payments match your filters' : tab === 'payouts' ? 'No store payout requests yet' : 'No store earnings yet'}
+          text={filters.active ? 'Reset filters to see all records for this store.' : 'Payment records assigned to this store will appear here.'}
+          onAction={filters.reset}
+          label="Reset filters"
+        />
+      ) : (
+        <>
+          <div className="table-scroll">
+            {tab === 'payouts' ? (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Reference</th>
+                    <th>Amount</th>
+                    <th>Method</th>
+                    <th>Status</th>
+                    <th>Requested</th>
+                    <th>Processed</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {payouts.data?.results.map(payout => (
+                    <tr key={payout.id}>
+                      <td>
+                        <button
+                          type="button"
+                          className="text-link"
+                          onClick={() => setDetail(payoutDetail(payout))}
+                        >
+                          {payout.reference}
+                        </button>
+                      </td>
+                      <td>{money(payout.amount)}</td>
+                      <td>{payout.payout_method.replaceAll('_', ' ')}</td>
+                      <td><Status value={payout.status} /></td>
+                      <td><DateStamp value={payout.created} /></td>
+                      <td>{payout.processed_at ? <DateStamp value={payout.processed_at} /> : 'Not processed'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <th>Reference</th>
+                    <th>Type</th>
+                    <th>Description</th>
+                    <th>Gross</th>
+                    <th>Fee</th>
+                    <th>Net</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.data?.results.map(entry => (
+                    <tr key={entry.id}>
+                      <td>
+                        <button
+                          type="button"
+                          className="text-link"
+                          onClick={() => showLedger(entry)}
+                        >
+                          {entry.reference || `#${entry.id}`}
+                        </button>
+                      </td>
+                      <td>{entry.entry_type}</td>
+                      <td>{entry.description}</td>
+                      <td>{money(entry.gross_amount)}</td>
+                      <td>{money(entry.fee_amount)}</td>
+                      <td>{money(entry.net_amount)}</td>
+                      <td><Status value={entry.status} /></td>
+                      <td><DateStamp value={entry.created} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+          <CollectionPagination filters={filters} count={count} />
+        </>
+      )}
+      <DashboardDetailDialog detail={detail} onClose={closeDetail} />
+    </section>
+  );
+}
+
 export function AdminStoreDetailPage({ id }: { id: string }) {
   const { user, notify } = useShop();
   const client = useQueryClient();
+  const actionDialog = useActionDialog();
+  const [storeActionError, setStoreActionError] = useState('');
+  const canManageStoreStatus = Boolean(user?.is_superuser || user?.is_business_admin);
   const store = useQuery({ queryKey: ['admin', 'store', id], queryFn: () => api<import('@/lib/types').Store & { owner_email?: string; owner_name?: string }>(`admin/staff/stores/${id}`), enabled: !!user });
 
   const extraFilters = useCollectionFilters();
@@ -2213,9 +2582,24 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
   });
 
   if (!user?.is_staff && !user?.is_superuser && !user?.is_business_admin) return <Empty title="Staff access required" text="This store record is available to backoffice users." />;
-  if (store.isLoading) return <Loading />;
+  if (store.isLoading) return <Loading fullPage />;
   if (store.error || !store.data) return <ErrorState error={store.error || new Error('Store not found')} retry={() => store.refetch()} />;
   const data = store.data;
+
+  async function updateStoreStatus(action: 'block' | 'unblock', reason?: string): Promise<void> {
+    setStoreActionError('');
+    try {
+      await api(`admin/staff/stores/${id}/${action}`, 'POST', reason ? { reason } : {});
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ['admin', 'store', id] }),
+        client.invalidateQueries({ queryKey: ['admin', 'stores'] }),
+        client.invalidateQueries({ queryKey: ['stores'] }),
+      ]);
+      notify(action === 'block' ? 'Store suspended' : 'Store reactivated');
+    } catch (caught) {
+      setStoreActionError((caught as Error).message);
+    }
+  }
 
   const productList: import('@/lib/types').StoreAuditProduct[] = Array.isArray(products.data)
     ? products.data
@@ -2232,10 +2616,37 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
           <h1>{data.name}</h1>
           <p>@{data.username} · {data.owner_email || 'No owner email'} · <Status value={data.status} /></p>
         </div>
-        <Link className="button" href={`/shop?store=${data.id}&preview=1`}>
-          <Eye size={16} /> Read-only storefront preview
-        </Link>
+        <div className="form-actions">
+          {!data.is_official && canManageStoreStatus && (data.status === 'blocked' ? (
+            <button className="button secondary" type="button" onClick={() => void updateStoreStatus('unblock')}>
+              <Check size={16} /> Reactivate store
+            </button>
+          ) : (
+            <button
+              className="button secondary danger"
+              type="button"
+              onClick={async () => {
+                const reason = await actionDialog.ask({
+                  title: `Suspend ${data.name}`,
+                  message: `Are you sure you want to suspend @${data.username}? Products will be hidden from shoppers.`,
+                  confirmLabel: 'Suspend store',
+                  reasonLabel: 'Reason for suspension',
+                });
+                if (reason !== null) {
+                  void updateStoreStatus('block', reason || 'Suspended by staff');
+                }
+              }}
+            >
+              <Ban size={16} /> Suspend store
+            </button>
+          ))}
+          <Link className="button" href={`/shop?store=${data.id}&preview=1`}>
+            <Eye size={16} /> Read-only storefront preview
+          </Link>
+        </div>
       </div>
+
+      {storeActionError && <p role="alert" className="form-error">{storeActionError}</p>}
 
       <section className="analytics-panel">
         <h2>Core store settings</h2>
@@ -2315,7 +2726,7 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
         setSearch('');
         setTypeFilter('all'); setStatusFilter('all'); setAssetFilter('all'); setOrdering('-created'); setOffset(0);
       }}>Reset all filters</button>
-      {products.isFetching && !products.isLoading && <Loading compact />}
+      {products.isFetching && !products.isLoading && <Loading />}
 
         {products.isLoading ? (
           <Loading />
@@ -2333,6 +2744,7 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
                     <th>Type</th>
                     <th>Category</th>
                     <th>Inventory</th>
+                    <th>Units sold</th>
                     <th>Status</th>
                     <th>Audit asset</th>
                   </tr>
@@ -2340,7 +2752,11 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
                 <tbody>
                   {productList.map(product => (
                     <tr key={product.id}>
-                      <td><strong>{product.title}</strong></td>
+                      <td>
+                        <Link className="text-link" href={`/products/${product.id}?preview=1`}>
+                          <strong>{product.title}</strong>
+                        </Link>
+                      </td>
                       <td>
                         {product.product_type === 'affiliate_clickbank' ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(234, 88, 12, 0.1)', color: '#ea580c', padding: '2px 6px', borderRadius: '4px', fontSize: '11px', fontWeight: 600 }}>
@@ -2359,6 +2775,15 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
                           : product.is_digital
                             ? 'Unlimited'
                             : (product.available ?? '—')}
+                      </td>
+                      <td>
+                        {product.product_type === 'affiliate_clickbank' ? (
+                          <span className="muted" title="Sales are completed and tracked by the external partner.">
+                            Not tracked
+                          </span>
+                        ) : (
+                          product.sales.toLocaleString()
+                        )}
                       </td>
                       <td>{product.visibility ? 'Published' : 'Draft'}</td>
                       <td>
@@ -2403,11 +2828,14 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
           </>
         )}
       </section>
+      <AdminOrdersPage key={id} storeId={id} />
+      <AdminStorePayments key={`payments-${id}`} storeId={id} />
+      {actionDialog.dialog}
     </div>
   );
 }
 
-export function AdminOrdersPage() {
+export function AdminOrdersPage({ storeId }: { storeId?: string } = {}) {
   const { user, notify } = useShop();
   const client = useQueryClient();
   const [page, setPage] = useState(1);
@@ -2420,20 +2848,47 @@ export function AdminOrdersPage() {
   const [detail, setDetail] = useState<{ title: string; rows: [string, string][] } | null>(null);
   const actionDialog = useActionDialog();
 
+  function showNotificationRecord(order: AdminOrder): void {
+    setDetail({
+      title: `Order #${order.orderId}`,
+      rows: [
+        ['Buyer', order.buyer_email || 'Guest'],
+        ['Status', order.status],
+        ['Payment Method', order.payment_type?.replaceAll('_', ' ') || 'card'],
+        ['Subtotal', money(order.subtotal || order.total)],
+        ['Total', money(order.total)],
+        ['Created', activityDate(order.created)],
+        ['Updated', activityDate(order.updated)],
+        ['Status changed', activityDate(order.status_updated_at)],
+        ['Cancelled', activityDate(order.cancelled_at)],
+        ['Refunded', activityDate(order.refunded_at)],
+        ['Carrier', order.carrier || 'USPS'],
+        ['Tracking Number', order.tracking_number || 'Not assigned'],
+        ...(order.shipped_at ? [['Shipped At', activityDate(order.shipped_at)] as [string, string]] : []),
+        ...(order.delivered_at ? [['Delivered At', activityDate(order.delivered_at)] as [string, string]] : []),
+        ...(order.items_snapshot?.length ? [['Items Count', `${order.items_snapshot.length} items recorded`] as [string, string]] : []),
+      ],
+    });
+  }
+
+  const clearNotificationDetail = useNotificationDetail<AdminOrder>('order', `admin/staff/orders${storeId ? `?store_id=${storeId}` : ''}`, showNotificationRecord);
+
   const queryParams = new URLSearchParams({
     limit: '15',
     offset: String((page - 1) * 15),
     ordering,
   });
+  if (storeId) queryParams.set('store_id', storeId);
   if (debouncedSearch.trim()) queryParams.set('search', debouncedSearch.trim());
   if (statusFilter) queryParams.set('status', statusFilter);
   if (courierFilter) queryParams.set('carrier', courierFilter);
   if (paymentFilter) queryParams.set('payment_type', paymentFilter);
 
   const orders = useQuery({
-    queryKey: ['admin', 'all_orders', page, debouncedSearch, statusFilter, courierFilter, paymentFilter, ordering, user?.id],
+    queryKey: ['admin', 'all_orders', page, debouncedSearch, statusFilter, courierFilter, paymentFilter, ordering, storeId, user?.id],
     placeholderData: (previousData, previousQuery) =>
-      previousQuery?.queryKey.at(-1) === user?.id ? previousData : undefined,
+      previousQuery?.queryKey.at(-1) === user?.id
+        && previousQuery?.queryKey.at(-2) === storeId ? previousData : undefined,
     queryFn: () => api<Page<AdminOrder>>(`admin/staff/orders?${queryParams.toString()}`),
     enabled: !!user && (user.is_staff || user.is_superuser || user.is_business_admin),
   });
@@ -2464,11 +2919,11 @@ export function AdminOrdersPage() {
   }
 
   return (
-    <div className="container section">
+    <section className={storeId ? "section admin-store-orders" : "container section"} aria-label={storeId ? "Store orders" : "Customer orders"}>
       <div className="merchant-heading">
         <div>
-          <h1>Customer orders</h1>
-          <p>Comprehensive order history, customer lookup, carrier tracking, and emergency status overrides.</p>
+          {storeId ? <h2>Store orders</h2> : <h1>Customer orders</h1>}
+          <p>{storeId ? "Orders containing items from this store. Totals and status actions apply to the full customer order." : "Comprehensive order history, customer lookup, carrier tracking, and emergency status overrides."}</p>
         </div>
         {orders.data?.count !== undefined && (
           <div>
@@ -2556,7 +3011,7 @@ export function AdminOrdersPage() {
       ) : !orders.data?.results.length ? (
         <Empty
           title="No orders found"
-          text={search || statusFilter || courierFilter || paymentFilter ? "No orders matched your search or filters." : "No customer orders have been placed yet."}
+          text={search || statusFilter || courierFilter || paymentFilter ? "No orders matched your search or filters." : (storeId ? "This store has no orders yet." : "No customer orders have been placed yet.")}
           onAction={() => {
             setSearch('');
             setStatusFilter('');
@@ -2564,6 +3019,7 @@ export function AdminOrdersPage() {
             setPaymentFilter('');
             setOrdering('-created');
             setPage(1);
+            void orders.refetch();
           }}
           label={search || statusFilter || courierFilter || paymentFilter ? "Reset filters" : "Refresh orders"}
         />
@@ -2581,14 +3037,22 @@ export function AdminOrdersPage() {
                   <th>Total</th>
                   <th>Created</th>
                   <th>Updated</th>
-                  <th>Action</th>
                   <th>Emergency action</th>
                 </tr>
               </thead>
               <tbody>
                 {orders.data.results.map(order => (
                   <tr key={order.orderId}>
-                    <td><strong>#{order.orderId}</strong></td>
+                    <td>
+                      <button
+                        type="button"
+                        className="text-link"
+                        aria-label={`View details for order ${order.orderId}`}
+                        onClick={() => showNotificationRecord(order)}
+                      >
+                        #{order.orderId}
+                      </button>
+                    </td>
                     <td>{order.buyer_email || <span className="muted">Guest</span>}</td>
                     <td><Status value={order.status} /></td>
                     <td><span style={{ textTransform: 'capitalize' }}>{order.payment_type?.replaceAll('_', ' ') || 'card'}</span></td>
@@ -2605,31 +3069,6 @@ export function AdminOrdersPage() {
                     <td><strong>{money(order.total)}</strong></td>
                     <td><DateStamp value={order.created} /></td>
                     <td><DateStamp value={order.updated} /></td>
-                    <td>
-                      <button
-                        type="button"
-                        className="button secondary"
-                        aria-label={`View details for order ${order.orderId}`}
-                        onClick={() => setDetail({
-                          title: `Order #${order.orderId}`,
-                          rows: [
-                            ['Buyer', order.buyer_email || 'Guest'],
-                            ['Status', order.status],
-                            ['Payment Method', order.payment_type?.replaceAll('_', ' ') || 'card'],
-                            ['Subtotal', money(order.subtotal || order.total)],
-                            ['Total', money(order.total)],
-                            ['Created', activityDate(order.created)], ['Updated', activityDate(order.updated)], ['Status changed', activityDate(order.status_updated_at)], ['Cancelled', activityDate(order.cancelled_at)], ['Refunded', activityDate(order.refunded_at)],
-                            ['Carrier', order.carrier || 'USPS'],
-                            ['Tracking Number', order.tracking_number || 'Not assigned'],
-                            ...(order.shipped_at ? [['Shipped At', activityDate(order.shipped_at)] as [string, string]] : []),
-                            ...(order.delivered_at ? [['Delivered At', activityDate(order.delivered_at)] as [string, string]] : []),
-                            ...(order.items_snapshot?.length ? [['Items Count', `${order.items_snapshot.length} items recorded`] as [string, string]] : []),
-                          ]
-                        })}
-                      >
-                        Details
-                      </button>
-                    </td>
                     <td>
                       {(() => {
                         const isDigital = isOrderAllDigital(order);
@@ -2657,9 +3096,12 @@ export function AdminOrdersPage() {
         </>
       )}
 
-      <DashboardDetailDialog detail={detail} onClose={() => setDetail(null)} />
+      <DashboardDetailDialog detail={detail} onClose={() => {
+          setDetail(null);
+          clearNotificationDetail();
+        }} />
       {actionDialog.dialog}
-    </div>
+    </section>
   );
 }
 
@@ -2869,7 +3311,27 @@ export function AdminCouponsPage() {
               <tbody>
                 {coupons.data.results.map(coupon => (
                   <tr key={coupon.id}>
-                    <td><strong>{coupon.code}</strong></td>
+                    <td>
+                      <button
+                        type="button"
+                        className="text-link"
+                        aria-label={`View details for coupon ${coupon.code}`}
+                        onClick={() => setDetail({
+                          title: `Coupon ${coupon.code}`,
+                          rows: [
+                            ['Status', coupon.active ? 'Active' : 'Inactive'],
+                            ['Discount', `${coupon.discount}%`],
+                            ['Created by', coupon.created_by || 'Not recorded'],
+                            ['Valid from', activityDate(coupon.valid_from)],
+                            ['Valid to', activityDate(coupon.valid_to)],
+                            ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
+                            ...(coupon.redemptions?.length ? [['Redemptions', `${coupon.redemptions.length} orders redeemed`] as [string, string]] : []),
+                          ],
+                        })}
+                      >
+                        {coupon.code}
+                      </button>
+                    </td>
                     <td>{coupon.discount}% off</td>
                     <td><Status value={coupon.active ? 'active' : 'inactive'} /></td>
                     <td>{coupon.num_used} / {coupon.num_available}</td>
@@ -2879,25 +3341,6 @@ export function AdminCouponsPage() {
                     <td>{coupon.redemptions?.length || 0} orders</td>
                     <td>
                       <div className="form-actions" style={{ justifyContent: 'flex-start' }}>
-                        <button
-                          type="button"
-                          className="button secondary"
-                          aria-label={`View details for coupon ${coupon.code}`}
-                          onClick={() => setDetail({
-                            title: `Coupon ${coupon.code}`,
-                            rows: [
-                              ['Status', coupon.active ? 'Active' : 'Inactive'],
-                              ['Discount', `${coupon.discount}%`],
-                              ['Created by', coupon.created_by || 'Not recorded'],
-                              ['Valid from', activityDate(coupon.valid_from)],
-                              ['Valid to', activityDate(coupon.valid_to)],
-                              ['Usage', `${coupon.num_used} of ${coupon.num_available}`],
-                              ...(coupon.redemptions?.length ? [['Redemptions', `${coupon.redemptions.length} orders redeemed`] as [string, string]] : []),
-                            ]
-                          })}
-                        >
-                          Details
-                        </button>
                         <button
                           type="button"
                           className="button secondary"
@@ -3017,6 +3460,25 @@ export function AdminRefundsPage() {
   const [ordering, setOrdering] = useState('-created');
   const [detail, setDetail] = useState<{ title: string; rows: [string, string][] } | null>(null);
   const actionDialog = useActionDialog();
+
+  function showNotificationRecord(refund: AdminRefund): void {
+    setDetail({
+      title: `Refund #${refund.id}`,
+      rows: [
+        ['Order', `#${refund.order}`],
+        ['Customer', refund.email],
+        ['Method', refund.refund_type.replaceAll('_', ' ')],
+        ['Status', refund.status],
+        ...(refund.processed_by_email ? [['Processed by', refund.processed_by_email] as [string, string]] : []),
+        ['Reason', refund.reason],
+        ...(refund.provider_reference ? [['Provider Reference', refund.provider_reference] as [string, string]] : []),
+        ...(refund.failure_reason ? [['Failure Details', refund.failure_reason] as [string, string]] : []),
+        ['Created', activityDate(refund.created)],
+      ],
+    });
+  }
+
+  const clearNotificationDetail = useNotificationDetail<AdminRefund>('refund', 'admin/staff/refunds', showNotificationRecord);
 
   const queryParams = new URLSearchParams({
     limit: '15',
@@ -3155,6 +3617,7 @@ export function AdminRefundsPage() {
                   <th>Customer</th>
                   <th>Method</th>
                   <th>Status</th>
+                  <th>Processed by</th>
                   <th>Reason</th>
                   <th>Reference / Details</th>
                   <th>Created</th>
@@ -3164,11 +3627,51 @@ export function AdminRefundsPage() {
               <tbody>
                 {refunds.data.results.map(refund => (
                   <tr key={refund.id}>
-                    <td><strong>#{refund.id}</strong></td>
-                    <td><strong>#{refund.order}</strong></td>
+                    <td>
+                      <button
+                        type="button"
+                        className="text-link"
+                        aria-label={`View details for refund ${refund.id}`}
+                        onClick={() => showNotificationRecord(refund)}
+                      >
+                        #{refund.id}
+                      </button>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="text-link"
+                        aria-label={`View order ${refund.order} details`}
+                        onClick={async () => {
+                          try {
+                            const order = await api<Order>(`orders/${refund.order}`);
+                            setDetail({
+                              title: `Order #${order.reference}`,
+                              rows: [
+                                ['Status', order.status],
+                                ['Payment method', order.payment_type.replaceAll('_', ' ')],
+                                ['Subtotal', money(order.subtotal)],
+                                ['Total', money(order.total)],
+                                ['Paid', money(order.paid_total)],
+                                ['Refunded', money(order.refunded_total)],
+                                ['Carrier', order.carrier || 'Not assigned'],
+                                ['Tracking number', order.tracking_number || 'Not assigned'],
+                                ['Items', `${order.items.length} items`],
+                                ['Created', activityDate(order.created)],
+                              ],
+                            });
+                          } catch (error) {
+                            notify((error as Error).message, true);
+                          }
+                        }}
+                      >
+                        Order #{refund.order}
+                      </button>
+                    </td>
                     <td>{refund.email}</td>
                     <td><span style={{ textTransform: 'capitalize' }}>{refund.refund_type.replaceAll('_', ' ')}</span></td>
                     <td><Status value={refund.status} /></td>
+                    <td>{refund.processed_by_email || '—'}</td>
                     <td title={refund.reason} style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {refund.reason}
                     </td>
@@ -3184,26 +3687,6 @@ export function AdminRefundsPage() {
                     <td><DateStamp value={refund.created} dateOnly /></td>
                     <td>
                       <div className="form-actions" style={{ justifyContent: 'flex-start' }}>
-                        <button
-                          type="button"
-                          className="button secondary"
-                          aria-label={`View details for refund ${refund.id}`}
-                          onClick={() => setDetail({
-                            title: `Refund #${refund.id}`,
-                            rows: [
-                              ['Order', `#${refund.order}`],
-                              ['Customer', refund.email],
-                              ['Method', refund.refund_type.replaceAll('_', ' ')],
-                              ['Status', refund.status],
-                              ['Reason', refund.reason],
-                              ...(refund.provider_reference ? [['Provider Reference', refund.provider_reference] as [string, string]] : []),
-                              ...(refund.failure_reason ? [['Failure Details', refund.failure_reason] as [string, string]] : []),
-                              ['Created', activityDate(refund.created)],
-                            ]
-                          })}
-                        >
-                          Details
-                        </button>
                         {(refund.status === 'pending' || refund.status === 'failed') && (
                           <>
                             <button
@@ -3233,7 +3716,10 @@ export function AdminRefundsPage() {
         </>
       )}
 
-      <DashboardDetailDialog detail={detail} onClose={() => setDetail(null)} />
+      <DashboardDetailDialog detail={detail} onClose={() => {
+          setDetail(null);
+          clearNotificationDetail();
+        }} />
       {actionDialog.dialog}
     </div>
   );
@@ -3242,6 +3728,9 @@ export function AdminRefundsPage() {
 export function AdminCommissionPage() {
   const { user, notify } = useShop();
   const client = useQueryClient();
+  const actionDialog = useActionDialog();
+  const [detail, setDetail] = useState<DashboardDetail | null>(null);
+  const [preview, setPreview] = useState<{reference: string; amount: string; method: string; status: string; left: number; top: number} | null>(null);
   const filters = useCollectionFilters();
   const wallet = useQuery({
     queryKey: ['admin', 'commission-wallet', filters.query, user?.id],
@@ -3260,22 +3749,63 @@ export function AdminCommissionPage() {
           status: string;
           reference: string;
           created: string;
+            processed_at: string | null;
+            processing_note: string;
         }>;
       }>(`admin/staff/commission-wallet?${filters.query}`),
     enabled: Boolean(user?.is_superuser || user?.is_business_admin),
   });
   const [busy, setBusy] = useState(false);
+  const [bankAccountId, setBankAccountId] = useState<number | null>(null);
+  const [stripeDestinationId, setStripeDestinationId] = useState<number | null>(null);
+  const [payoutMethod, setPayoutMethod] = useState<'stripe' | 'bank'>('stripe');
+  async function processWithdrawal(
+    withdrawal: NonNullable<typeof wallet.data>['withdrawals'][number],
+    action: 'complete' | 'fail',
+  ): Promise<void> {
+    const note = await actionDialog.ask({
+      title: `${action === 'complete' ? 'Complete' : 'Fail'} treasury withdrawal ${withdrawal.reference}`,
+      message: action === 'complete'
+        ? 'Confirm the external transfer has already been sent. Record its provider or bank reference.'
+        : 'Record why this withdrawal failed. The reserved amount will return to available treasury funds.',
+      confirmLabel: action === 'complete' ? 'Confirm transfer sent' : 'Mark withdrawal failed',
+      reasonLabel: action === 'complete' ? 'Transfer confirmation note' : 'Failure reason',
+    });
+    if (note === null) return;
+
+    setBusy(true);
+    try {
+      await api(
+        `admin/staff/commission-wallet/withdrawals/${withdrawal.id}/process`,
+        'POST',
+        { action, note },
+      );
+      await client.invalidateQueries({ queryKey: ['admin', 'commission-wallet'] });
+      notify(`Treasury withdrawal ${withdrawal.reference} marked ${action === 'complete' ? 'completed' : 'failed'}.`);
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function withdraw(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setBusy(true);
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(formElement);
     try {
       await api('admin/staff/commission-wallet/withdraw', 'POST', {
         amount: form.get('amount'),
         payout_method: form.get('payout_method'),
-        account_details: { destination: form.get('destination') },
+        ...(form.get('payout_method') === 'bank'
+          ? { bank_account_id: bankAccountId }
+          : { stripe_destination_id: stripeDestinationId }),
       });
-      event.currentTarget.reset();
+      formElement.reset();
+      setPayoutMethod('stripe');
+      setBankAccountId(null);
+      setStripeDestinationId(null);
       await client.invalidateQueries({ queryKey: ['admin', 'commission-wallet'] });
       notify('Platform treasury withdrawal request created');
     } catch (error) {
@@ -3303,7 +3833,7 @@ export function AdminCommissionPage() {
         <ErrorState error={wallet.error} />
       ) : wallet.data && (
         <>
-          <div className="stats-grid">
+          <div className="stats-grid treasury-stats-grid">
             <div className="stat-item stat-0">
               <span>Total Treasury Earned</span>
               <strong>{money(wallet.data.earned)}</strong>
@@ -3330,27 +3860,48 @@ export function AdminCommissionPage() {
               <small>Audited platform withdrawals</small>
             </div>
           </div>
-          <section className="analytics-panel" style={{ marginTop: '2rem' }}>
-            <h2>Request treasury withdrawal</h2>
-            <form className="form-stack" onSubmit={withdraw}>
-              <Field label="Amount">
-                <input name="amount" type="number" min="0.01" step="0.01" max={wallet.data.available} required />
-              </Field>
-              <Field label="Payout method">
-                <select name="payout_method" defaultValue="stripe">
-                  <option value="stripe">Stripe Payout (Official Corporate Vault)</option>
-                  <option value="bank">Bank Wire Transfer</option>
-                </select>
-              </Field>
-              <Field label="Destination account">
-                <input
-                  name="destination"
-                  required
-                  defaultValue="Stripe Corporate Balance"
-                  placeholder="e.g. Stripe Account ID (acct_...) or Connected Stripe Bank"
-                />
-              </Field>
-              <button className="button" disabled={busy || Number(wallet.data.available) <= 0}>
+          <section className="analytics-panel treasury-withdrawal-panel" style={{ marginTop: '1.5rem' }}>
+            <div className="treasury-withdrawal-heading">
+              <div>
+                <h2>Request treasury withdrawal</h2>
+                <p>Choose an amount and destination for this withdrawal.</p>
+              </div>
+              <div className="treasury-available-balance">
+                <span>Available to withdraw</span>
+                <strong>{money(wallet.data.available)}</strong>
+              </div>
+            </div>
+            <form className="treasury-withdrawal-form" onSubmit={withdraw}>
+              <div className="treasury-withdrawal-fields">
+                <Field label="Amount">
+                  <input name="amount" type="number" min="0.01" step="0.01" max={wallet.data.available} required />
+                </Field>
+                <Field label="Payout method">
+                  <select name="payout_method" value={payoutMethod} onChange={event => setPayoutMethod(event.target.value as 'stripe' | 'bank')}>
+                    <option value="stripe">Stripe transfer</option>
+                    <option value="bank">Bank transfer</option>
+                  </select>
+                </Field>
+              </div>
+              {payoutMethod === 'stripe' ? (
+                <div className="treasury-bank-picker">
+                  <StripePayoutDestinations
+                    pickerOnly
+                    selectedId={stripeDestinationId}
+                    onSelect={setStripeDestinationId}
+                  />
+                </div>
+              ) : (
+                <div className="treasury-bank-picker">
+                  <BankAccounts
+                    compact
+                    pickerOnly
+                    selectedId={bankAccountId}
+                    onSelect={setBankAccountId}
+                  />
+                </div>
+              )}
+              <button className="button compact treasury-withdrawal-submit" disabled={busy || Number(wallet.data.available) <= 0 || (payoutMethod === 'bank' ? !bankAccountId : !stripeDestinationId)}>
                 {busy ? 'Submitting…' : 'Request withdrawal'}
               </button>
             </form>
@@ -3377,16 +3928,73 @@ export function AdminCommissionPage() {
                     <th>Method</th>
                     <th>Status</th>
                     <th>Created</th>
+                    <th><span className="sr-only">Actions</span>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {wallet.data.withdrawals.map(row => (
                     <tr key={row.id}>
-                      <td>{row.reference}</td>
+                      <td>
+                        <div className="treasury-reference-preview">
+                          <button
+                            type="button"
+                            className="text-link"
+                            onMouseEnter={event => {
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              setPreview({reference: row.reference, amount: row.amount, method: row.payout_method, status: row.status, left: Math.min(rect.left, window.innerWidth - 240), top: Math.min(rect.bottom + 8, window.innerHeight - 110)});
+                            }}
+                            onFocus={event => {
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              setPreview({reference: row.reference, amount: row.amount, method: row.payout_method, status: row.status, left: Math.min(rect.left, window.innerWidth - 240), top: Math.min(rect.bottom + 8, window.innerHeight - 110)});
+                            }}
+                            onBlur={() => setPreview(null)}
+                            onMouseLeave={() => setPreview(null)}
+                            onClick={() => setDetail({
+                              title: `Withdrawal ${row.reference}`,
+                              category: 'Treasury withdrawal',
+                              rows: [
+                                ['Reference', row.reference],
+                                ['Amount', money(row.amount)],
+                                ['Method', row.payout_method],
+                                ['Status', row.status],
+                                ['Created', new Date(row.created).toLocaleString()],
+                                ...(row.processed_at ? [['Processed', new Date(row.processed_at).toLocaleString()] as [string, string]] : []),
+                                ...(row.processing_note ? [['Processing note', row.processing_note] as [string, string]] : []),
+                              ],
+                            })}
+                          >
+                            {row.reference}
+                          </button>
+
+                        </div>
+                      </td>
                       <td>{money(row.amount)}</td>
                       <td>{row.payout_method}</td>
                       <td><Status value={row.status} /></td>
                       <td><DateStamp value={row.created} /></td>
+                      <td>
+                        {row.status === 'pending' && (
+                          <div className="table-actions admin-withdrawal-actions">
+                            <button
+                              type="button"
+                              className="button compact"
+                              disabled={busy}
+                              onClick={() => void processWithdrawal(row, 'complete')}
+                            >
+                              Confirm
+                            </button>
+                            <button
+                              type="button"
+                              className="button secondary compact danger"
+                              disabled={busy}
+                              onClick={() => void processWithdrawal(row, 'fail')}
+                            >
+                              Fail
+                            </button>
+                          </div>
+                        )}
+                        {row.processing_note && <small>{row.processing_note}</small>}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -3396,6 +4004,15 @@ export function AdminCommissionPage() {
           </section>
         </>
       )}
+      {preview && !detail && (
+        <div className="treasury-reference-tooltip" role="tooltip" style={{left: preview.left, top: preview.top}}>
+          <strong>{money(preview.amount)}</strong>
+          <span>{preview.method} · {preview.status}</span>
+          <span>Click to view and print details</span>
+        </div>
+      )}
+      <DashboardDetailDialog detail={detail} onClose={() => { setDetail(null); setPreview(null); }} />
+      {actionDialog.dialog}
     </div>
   );
 }

@@ -43,6 +43,24 @@ input, select, textarea {
   color: var(--button-text);
   transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
+.button.compact {
+  min-height: 36px;
+  padding: 7px 12px;
+  gap: 8px;
+  font-size: 12px;
+}
+.button.compact.pill { border-radius: 999px; }
+.admin-staff-table .button.compact { min-height: 36px; }
+.merchant-heading .button.compact { min-height: 36px; }
+.account-content .section-heading .button.compact { min-height: 36px; }
+.merchant-heading .button:not(.compact),
+.account-content .section-heading .button:not(.compact),
+.admin-staff-table .button:not(.compact) {
+  min-height: 36px;
+  padding: 7px 12px;
+  gap: 8px;
+  font-size: 12px;
+}
 .button:hover:not(:disabled) { background: var(--button-hover); }
 .button.secondary {
   background: var(--paper);
@@ -430,6 +448,118 @@ td { line-height: 1.6; }
   }
 }
 
+/* Keep the notification menu anchored to its trigger without clipping the viewport. */
+.notification-panel {
+  right: 0;
+  width: min(380px, calc(100vw - 24px));
+  background: var(--paper);
+  color: var(--ink);
+  border-radius: 12px;
+}
+.notification-panel:before {
+  right: 12px;
+  background: var(--paper);
+}
+.notification-push {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--ink);
+  text-align: left;
+}
+.notification-push > svg {
+  flex: 0 0 auto;
+  color: var(--green);
+}
+.notification-push-copy {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+.notification-push-copy strong {
+  font-size: 12px;
+  font-weight: 650;
+}
+.notification-push-copy small {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+.notification-push-action {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 650;
+}
+.notification-push:hover:not(:disabled) .notification-push-action {
+  border-color: var(--green);
+  background: var(--green-light);
+}
+.notification-push:disabled {
+  cursor: wait;
+  opacity: .7;
+}
+.notification-push-status {
+  margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.browser-alert-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+  color: var(--muted);
+}
+.browser-alert-status > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+.browser-alert-status p {
+  margin: 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.browser-alert-status.enabled {
+  border-color: var(--green);
+  color: var(--green);
+}
+.browser-alert-status.blocked,
+.browser-alert-status.unavailable {
+  border-color: var(--red);
+  color: var(--red);
+}
+.browser-alert-toggle {
+  margin-top: 12px;
+}
+@media (max-width: 640px) {
+  .notification-panel {
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-width: none;
+  }
+  .notification-panel:before {
+    display: none;
+  }
+}
+
 /* Partner pricing is supporting information beside the purchase action. */
 .detail-price .partner-price-note {
   width: auto;
@@ -469,6 +599,26 @@ td { line-height: 1.6; }
   border-radius: 8px;
   background: var(--paper);
   color: var(--ink);
+}
+
+.collection-filters-stable-status {
+  position: relative;
+  padding-bottom: 38px;
+}
+
+.collection-filter-status {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.collection-filter-status .button {
+  min-height: 34px;
+  padding: 7px 12px;
 }
 
 .order-state-notice {
@@ -534,14 +684,50 @@ td { line-height: 1.6; }
 .affiliate-workspace input { width: 100%; min-width: 0; }
 
 .loading.compact {
-  min-height: 36px;
-  justify-content: flex-start;
-  margin: 0 0 12px;
+  position: relative;
+  z-index: 2;
+  width: 100%;
+  min-height: 40px;
+  justify-content: center;
+  margin: 0;
 }
 
 .loading.compact .spinner {
   height: 16px;
   width: 16px;
+}
+
+.loading.full-page {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 100dvh;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper);
+}
+
+.order-reference-link {
+  padding: 0;
+  color: var(--ink);
+  font-size: inherit;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+}
+
+.order-reference-link:hover,
+.order-reference-link:focus-visible {
+  color: var(--green);
+  text-decoration-color: currentColor;
+}
+
+.notification-order-link {
+  margin-top: 6px;
+  font-size: 10px;
 }
 
 /* Social Authentication Buttons (Google & Apple) */
@@ -550,6 +736,8 @@ td { line-height: 1.6; }
   flex-direction: column;
   gap: 10px;
   width: 100%;
+  max-width: 400px;
+  margin-inline: auto;
   margin-top: 16px;
   margin-bottom: 8px;
 }
@@ -601,7 +789,9 @@ td { line-height: 1.6; }
   display: flex;
   justify-content: center;
   width: 100%;
+  height: 44px;
   min-height: 44px;
+  border-radius: var(--radius, 8px);
   overflow: hidden;
 }
 
@@ -678,3 +868,233 @@ td { line-height: 1.6; }
   border-color: var(--green);
 }
 
+
+/* Compact settings and email-first authentication, shared by both themes. */
+.app-settings {
+  max-width: 960px;
+}
+.app-settings-stack {
+  display: grid;
+  gap: 12px;
+}
+.settings-section {
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  padding: 14px 18px;
+}
+.settings-section summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 600;
+}
+.settings-section summary span {
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.settings-section[open] > section {
+  margin-top: 16px;
+}
+.settings-section .appearance-settings {
+  max-width: none;
+  margin-bottom: 0;
+}
+.settings-section h2 {
+  font-size: 18px;
+  margin: 0 0 8px;
+}
+.settings-section p {
+  margin: 6px 0;
+  font-size: 14px;
+}
+.settings-section .appearance-settings fieldset {
+  margin: 12px 0;
+  gap: 8px;
+}
+.settings-section .appearance-option {
+  padding: 10px 12px;
+  gap: 10px;
+}
+.settings-section .appearance-option small {
+  font-size: 12px;
+}
+.settings-section .appearance-settings:not(.email-preferences-settings) fieldset {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.settings-accounts .button {
+  min-height: 36px;
+  padding: 7px 12px;
+  width: fit-content;
+}
+.social-auth-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: none;
+  margin-top: 10px;
+}
+.social-auth-group > * {
+  min-width: 0;
+}
+.auth-fields {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.auth-fields:disabled {
+  opacity: 0.65;
+}
+.signed-in-notice {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--ink);
+  padding: 14px;
+  margin: 16px 0;
+}
+@media (max-width: 480px) {
+  .settings-section {
+    padding: 12px;
+  }
+  .settings-section summary span {
+    display: block;
+    margin: 4px 0 0;
+  }
+  .settings-section .appearance-option {
+    align-items: flex-start;
+    padding: 8px;
+    gap: 6px;
+  }
+}
+
+
+/* Dashboard previews keep refund columns readable across both themes. */
+.dashboard-columns.dashboard-operations {
+  grid-template-columns: minmax(0, 1fr);
+}
+.dashboard-refund-table table,
+.dashboard-coupon-table table {
+  min-width: 1000px;
+}
+.dashboard-refund-table .refund-reason {
+  min-width: 180px;
+  max-width: 320px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+
+.address-form.address-form-embedded {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.address-form-street-row,
+.address-form-grid {
+  align-items: start;
+  row-gap: 7px;
+  grid-template-rows: auto auto auto;
+}
+.address-form-street-row > .field,
+.address-form-grid > .field {
+  display: grid;
+  grid-template-rows: subgrid;
+  grid-row: span 3;
+}
+@media (max-width: 650px) {
+  .address-form-street-row,
+  .address-form-grid {
+    row-gap: 14px;
+  }
+  .address-form-street-row > .field,
+  .address-form-grid > .field {
+    display: flex;
+    grid-template-rows: none;
+    grid-row: auto;
+  }
+}
+
+.order-success .order-status-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.order-summary .order-refund-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.order-summary .order-refund-form h4 {
+  margin: 0;
+  font-size: 16px;
+}
+.order-refund-items {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.order-refund-items legend {
+  margin-bottom: 10px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.order-summary .order-refund-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+}
+.order-refund-item input[type='checkbox'] {
+  margin: 3px 0 0;
+}
+.order-refund-item-copy {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.order-refund-item-copy strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.order-refund-item-copy small {
+  color: var(--muted);
+}
+.order-refund-item:has(input:checked) {
+  border-bottom-color: var(--green);
+}
+.order-refund-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.order-summary .order-refund-actions .button {
+  flex: 1 0 auto;
+  width: auto;
+  min-height: 44px;
+  padding: 10px 14px;
+  white-space: nowrap;
+}

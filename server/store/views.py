@@ -2,12 +2,15 @@ from core.listing_filters import ListingQuerySerializer, filter_records, record_
 from zoneinfo import ZoneInfo
 from core.access import IsBusinessAdmin, is_admin, is_backoffice
 from datetime import datetime, timedelta
+import logging
+from typing import Any
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.utils.dateparse import parse_date, parse_datetime
 from django.db import transaction
-from django.db.models import Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, Sum
+from django.db.models import prefetch_related_objects
+from django.db.models import Count, DecimalField, ExpressionWrapper, F, Prefetch, Q, QuerySet, Sum
 from django.db.models.functions import TruncDate
 from django.http import Http404
 from django.shortcuts import get_object_or_404
@@ -18,10 +21,10 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import LimitOffsetPagination
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.permissions import BasePermission, IsAdminUser, IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
-from drf_spectacular.utils import extend_schema, extend_schema_view
+from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 
 from cart.models import CartItem
 from payment.models import Order
@@ -44,6 +47,8 @@ from store.services import (
 from utils.functions import normalize_media_url
 from utils.digital_previews import is_image_digital_asset
 
+logger = logging.getLogger(__name__)
+
 
 class MerchantPagination(LimitOffsetPagination):
     default_limit = 20
@@ -59,22 +64,42 @@ def is_protected_digital_preview_url(value: object) -> bool:
     return isinstance(value, str) and 'digital-previews/' in value
 
 
+@extend_schema_view(
+    list=extend_schema(parameters=[ListingQuerySerializer]),
+)
 class StoreReviewViewSet(mixins.ListModelMixin, viewsets.GenericViewSet):
     queryset = Store.objects.none()
     serializer_class = StoreSerializer
     pagination_class = MerchantPagination
 
-    def get_permissions(self):
-        if self.action in ("approve",):
+    def get_permissions(self) -> list[BasePermission]:
+        if self.action in ("approve", "block"):
             return [IsBusinessAdmin()]
         return [IsAdminUser()]
 
-    def get_queryset(self):
+    def get_queryset(self) -> QuerySet[Store]:
         stores = Store.objects.select_related('user', 'verified_by', 'blocked_by')
         status_filter = self.request.query_params.get('status', Store.STATUS_PENDING)
         if status_filter not in dict(Store.STATUS_CHOICES):
             raise ValidationError({'status': 'Choose pending, active or blocked.'})
-        return stores.filter(status=status_filter).order_by('created', 'pk')
+        stores = stores.filter(status=status_filter)
+        stores = filter_records(
+            stores,
+            self.request.query_params,
+            search_fields=(
+                'name',
+                'username',
+                'user__email',
+                'user__first_name',
+                'user__last_name',
+            ),
+            fields={'is_official': 'is_official'},
+        )
+        ordering = self.request.query_params.get('ordering', 'created')
+        allowed_ordering = {'created', '-created', 'name', '-name', 'status', '-status'}
+        if ordering not in allowed_ordering:
+            raise ValidationError({'ordering': 'Order by created, name, or status.'})
+        return stores.order_by(ordering, 'pk')
 
     @transaction.atomic
     def approve(self, request: Request, pk: str | None = None) -> Response:
@@ -213,6 +238,9 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                 if Store.objects.filter(user=user).count() >= 10:
                     raise ValidationError({'detail': 'You can create a maximum of 10 stores.'})
                 serializer.save(user=user)
+                # Create the merchant's unified wallet with their first store so
+                # the account exists before its first sale or payout setup.
+                get_or_create_merchant_wallet(user)
 
     @action(detail=False, methods=['post'], url_path='create')
     def create_store(self, request):
@@ -263,7 +291,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         return Response(StoreInfoSerializer(profile, context={'request': request}).data)
 
     @action(detail=True, methods=['post'], url_path='connect-stripe')
-    def connect_stripe(self, request, pk=None):
+    def connect_stripe(self, request: Request, pk: str | None = None) -> Response:
         """Create/reuse a Stripe Express account and return its onboarding URL."""
         store = self.get_object()
         if store.user_id != request.user.id:
@@ -274,18 +302,130 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         try:
             import stripe
             stripe.api_key = secret
-            wallet, _ = MerchantWallet.objects.get_or_create(user=request.user)
-            if not wallet.stripe_account_id:
-                account = stripe.Account.create(type='express', email=request.user.email, metadata={'store_id': str(store.pk), 'user_id': str(request.user.pk)})
-                wallet.stripe_account_id = account.id
-                wallet.save(update_fields=['stripe_account_id', 'updated'])
+            with transaction.atomic():
+                type(request.user).objects.select_for_update().get(pk=request.user.pk)
+                wallet, _ = MerchantWallet.objects.get_or_create(user=request.user)
+                if wallet.stripe_account_id.startswith('acct_mock_'):
+                    # Demo placeholders do not identify a real Stripe account.
+                    wallet.stripe_account_id = ''
+                    wallet.stripe_details_submitted = False
+                    wallet.stripe_payouts_enabled = False
+                    wallet.save(update_fields=[
+                        'stripe_account_id',
+                        'stripe_details_submitted',
+                        'stripe_payouts_enabled',
+                        'updated',
+                    ])
+                if wallet.stripe_account_id:
+                    try:
+                        account = stripe.Account.retrieve(wallet.stripe_account_id)
+                        wallet.stripe_details_submitted = bool(account.get('details_submitted', False))
+                        wallet.stripe_payouts_enabled = bool(account.get('payouts_enabled', False))
+                        wallet.save(update_fields=[
+                            'stripe_details_submitted',
+                            'stripe_payouts_enabled',
+                            'updated',
+                        ])
+                        if wallet.stripe_payouts_enabled:
+                            return Response({
+                                'connected': True,
+                                'pending': False,
+                                'url': '',
+                                'stripe_account_id': wallet.stripe_account_id,
+                            })
+                        requirements = account.get('requirements') or {}
+                        currently_due = requirements.get('currently_due') or []
+                        if wallet.stripe_details_submitted and not currently_due:
+                            return Response({
+                                'connected': False,
+                                'pending': True,
+                                'url': '',
+                                'stripe_account_id': wallet.stripe_account_id,
+                            })
+                    except stripe.InvalidRequestError as exc:
+                        if exc.code != 'resource_missing' and 'No such account' not in str(exc):
+                            raise
+                        wallet.stripe_account_id = ''
+                        wallet.stripe_details_submitted = False
+                        wallet.stripe_payouts_enabled = False
+                        wallet.save(update_fields=[
+                            'stripe_account_id',
+                            'stripe_details_submitted',
+                            'stripe_payouts_enabled',
+                            'updated',
+                        ])
+                if not wallet.stripe_account_id:
+                    account = stripe.Account.create(
+                        type='express',
+                        email=request.user.email,
+                        metadata={
+                            'store_id': str(store.pk),
+                            'user_id': str(request.user.pk),
+                        },
+                        idempotency_key=f'merchant-connect-user-{request.user.pk}',
+                    )
+                    wallet.stripe_account_id = account.id
+                    wallet.save(update_fields=['stripe_account_id', 'updated'])
+                stripe_account_id = wallet.stripe_account_id
+
             # Stripe must return to the customer-facing Next.js app, not the API
             # process (which has no /merchant/settings route).
             base = f"{settings.FRONTEND_URL.rstrip('/')}/merchant/settings"
-            link = stripe.AccountLink.create(account=wallet.stripe_account_id, refresh_url=base, return_url=base, type='account_onboarding')
-            return Response({'url': link.url, 'stripe_account_id': wallet.stripe_account_id})
+            link = stripe.AccountLink.create(
+                account=stripe_account_id,
+                refresh_url=f'{base}?stripe_onboarding=refresh',
+                return_url=f'{base}?stripe_onboarding=return',
+                type='account_onboarding',
+            )
+            return Response({
+                'connected': False,
+                'pending': False,
+                'url': link.url,
+                'stripe_account_id': stripe_account_id,
+            })
         except Exception as exc:
-            raise ValidationError({'detail': f'Unable to start Stripe onboarding: {exc}'})
+            logging.getLogger(__name__).exception('Stripe Connect onboarding failed for store %s', store.pk)
+            raise ValidationError({'detail': 'Unable to start Stripe onboarding. Please try again shortly.'}) from exc
+
+    @transaction.atomic
+    @action(detail=True, methods=['get'], url_path='stripe-status')
+    def stripe_status(self, request: Request, pk: str | None = None) -> Response:
+        """Refresh Stripe onboarding flags and return safe payout setup state."""
+        store = self.get_object()
+        if store.user_id != request.user.id:
+            raise PermissionDenied('Only the store owner can view Stripe payout status.')
+        wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=request.user)
+        if not wallet.stripe_account_id or wallet.stripe_account_id.startswith('acct_mock_'):
+            wallet.stripe_details_submitted = False
+            wallet.stripe_payouts_enabled = False
+            wallet.save(update_fields=['stripe_details_submitted', 'stripe_payouts_enabled', 'updated'])
+            return Response({
+                'connected': False,
+                'details_submitted': False,
+                'payouts_enabled': False,
+                'currently_due': [],
+            })
+        try:
+            import stripe
+            stripe.api_key = getattr(settings, 'STRIPE_SECRET', '')
+            if not stripe.api_key:
+                raise ValidationError({'detail': 'Stripe Connect is not configured yet.'})
+            account = stripe.Account.retrieve(wallet.stripe_account_id)
+            wallet.stripe_details_submitted = bool(account.get('details_submitted', False))
+            wallet.stripe_payouts_enabled = bool(account.get('payouts_enabled', False))
+            wallet.save(update_fields=['stripe_details_submitted', 'stripe_payouts_enabled', 'updated'])
+            requirements = account.get('requirements') or {}
+            return Response({
+                'connected': wallet.stripe_payouts_enabled,
+                'details_submitted': wallet.stripe_details_submitted,
+                'payouts_enabled': wallet.stripe_payouts_enabled,
+                'currently_due': requirements.get('currently_due') or [],
+            })
+        except ValidationError:
+            raise
+        except Exception as exc:
+            logging.getLogger(__name__).exception('Stripe Connect status refresh failed for store %s', store.pk)
+            raise ValidationError({'detail': 'Unable to refresh Stripe payout status. Please try again shortly.'}) from exc
 
     @action(detail=True, methods=['get', 'put'], url_path='pickup-address')
     def pickup_address(self, request, pk=None):
@@ -315,20 +455,100 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
 
     @staticmethod
     def fulfillment_value(order: Order, store: Store, field: str, fallback: object) -> object:
-        fulfillment = order.fulfillments.filter(store=store).first()
-        if order.status in {'cancelled', 'refunded'}:
-            return order.status if field == 'status' else fallback
-        return getattr(fulfillment, field) if fulfillment else fallback
+        fulfillments = getattr(order, 'loaded_fulfillments', None)
+        if fulfillments is None:
+            fulfillments = list(order.fulfillments.all())
+            order.loaded_fulfillments = fulfillments
+        fulfillment = next((row for row in fulfillments if row.store_id == store.pk), None)
+        if field == 'status' and order.status in {'cancelled', 'refunded'}:
+            return order.status
+        if fulfillment:
+            return getattr(fulfillment, field)
+        if field == 'status':
+            return fallback
+        store_ids = StoreViewSet.order_store_ids(order)
+        if store_ids == {str(store.pk)}:
+            return fallback
+        return None if field in {'shipped_at', 'delivered_at'} else ''
 
-    def store_orders(self, store):
-        return Order.objects.filter(
-            cart__cart_items__product__store=store,
-        ).distinct().order_by('-created', '-pk')
+    def store_tracking_url(self, order: Order, store: Store) -> str:
+        number = self.fulfillment_value(order, store, 'tracking_number', order.tracking_number)
+        if not number:
+            return ''
+        carrier = self.fulfillment_value(order, store, 'carrier', order.carrier)
+        return Order(carrier=str(carrier or ''), tracking_number=str(number)).tracking_url
 
+    def store_orders(self, store: Store) -> QuerySet[Order]:
+        from payment.order_filters import orders_for_store
+
+        return orders_for_store(Order.objects.all(), store.pk).order_by('-created', '-pk')
+
+    @staticmethod
+    def legacy_order_items(order: Order) -> list[CartItem]:
+        if not order.cart_id:
+            return []
+        items = getattr(order.cart, 'loaded_order_items', None)
+        if items is None:
+            items = list(order.cart.cart_items.select_related('product'))
+            order.cart.loaded_order_items = items
+        return items
+
+    @staticmethod
+    def order_store_ids(order: Order) -> set[str]:
+        if order.items_snapshot:
+            return {str(row['store']) for row in order.items_snapshot if row.get('store')}
+        return {
+            str(item.product.store_id)
+            for item in StoreViewSet.legacy_order_items(order)
+        }
+
+    def store_order_items(self, order: Order, store: Store) -> list[dict[str, Any]]:
+        if order.items_snapshot:
+            return [
+                row for row in order.items_snapshot
+                if str(row.get('store')) == str(store.pk)
+            ]
+        return [
+            {
+                'product': item.product_id,
+                'title': item.product.title,
+                'quantity': item.quantity,
+                'is_digital': item.product.is_digital,
+            }
+            for item in self.legacy_order_items(order)
+            if item.product.store_id == store.pk
+        ]
+
+    def store_tracking_events(self, order: Order, store: Store) -> list[dict[str, Any]]:
+        store_ids = self.order_store_ids(order)
+        return [
+            event for event in (order.tracking_events or [])
+            if str(event.get('store_id')) == str(store.pk)
+            or (not event.get('store_id') and store_ids == {str(store.pk)})
+        ]
+
+    @extend_schema(parameters=[
+        OpenApiParameter(
+            name="order_id",
+            type=int,
+            location=OpenApiParameter.QUERY,
+            description="Return the requested order when it contains items from this store.",
+        ),
+    ])
     @action(detail=True, methods=['get'])
-    def orders(self, request, pk=None):
+    def orders(self, request: Request, pk: str | None = None) -> Response:
         store = self.get_object()
         orders = self.store_orders(store)
+        order_id: str = str(request.query_params.get("order_id") or "").strip()
+        if order_id:
+            try:
+                requested_order_id: int = int(order_id)
+            except (TypeError, ValueError) as error:
+                raise ValidationError({"order_id": "Enter a valid order ID."}) from error
+            if requested_order_id < 1:
+                raise ValidationError({"order_id": "Enter a valid order ID."})
+            orders = orders.filter(pk=requested_order_id)
+
         order_status = request.query_params.get('status')
         if order_status:
             if order_status not in dict(Order.ORDER_STATUS_CHOICE):
@@ -405,11 +625,17 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         order_by_fields = allowed_orderings.get(ordering, ('-created', '-pk'))
         orders = orders.distinct().order_by(*order_by_fields)
 
-        orders = orders.select_related('user', 'delivery').prefetch_related(Prefetch(
-            'cart__cart_items', queryset=CartItem.objects.filter(product__store=store)
-            .select_related('product'), to_attr='merchant_items',
-        ))
+        orders = orders.select_related('user', 'delivery', 'cart').prefetch_related(
+            Prefetch('fulfillments', to_attr='loaded_fulfillments'),
+        )
         page = self.paginate_queryset(orders)
+        prefetch_related_objects(
+            [order for order in page if not order.items_snapshot],
+            Prefetch(
+                'cart__cart_items', queryset=CartItem.objects.select_related('product'),
+                to_attr='loaded_order_items',
+            ),
+        )
         data = [
             {
                 "id": order.pk,
@@ -424,17 +650,17 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                     order, store, "tracking_number", order.tracking_number
                 )
                 or "",
-                "tracking_url": order.tracking_url
-                if order.fulfillments.count() <= 1
-                else "",
+                "tracking_url": self.store_tracking_url(order, store),
                 "shipped_at": self.fulfillment_value(
                     order, store, "shipped_at", order.shipped_at
                 ),
                 "delivered_at": self.fulfillment_value(
                     order, store, "delivered_at", order.delivered_at
                 ),
-                "tracking_events": order.tracking_events or [],
-                "shipping_address": order.address_snapshot or {},
+                "tracking_events": self.store_tracking_events(order, store),
+                "shipping_address": (order.address_snapshot or {}) if any(
+                    not row.get('is_digital') for row in self.store_order_items(order, store)
+                ) else {},
                 "customer": {
                     "name": f"{order.user.first_name} {order.user.last_name}".strip()
                     if order.user
@@ -452,36 +678,17 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                 },
                 "created": order.created,
                 "ordered": order.ordered,
-                "has_physical_items": (
-                    any(
-                        not bool(it.get("is_digital"))
-                        for it in (order.items_snapshot or [])
-                        if not it.get("store") or str(it.get("store")) == str(store.pk)
-                    )
-                    if order.items_snapshot
-                    else any(
-                        not getattr(item.product, "is_digital", False)
-                        for item in getattr(order.cart, "merchant_items", [])
-                    )
+                "has_physical_items": any(
+                    not row.get('is_digital') for row in self.store_order_items(order, store)
                 ),
                 "items": [
-                    {
-                        "product": item.product_id,
-                        "title": item.product.title,
-                        "quantity": item.quantity,
-                        "is_digital": getattr(item.product, "is_digital", False),
-                    }
-                    for item in getattr(order.cart, "merchant_items", [])
-                ]
-                or [
                     {
                         "product": it.get("product", 0),
                         "title": it.get("title", "Item"),
                         "quantity": it.get("quantity", 1),
                         "is_digital": bool(it.get("is_digital")),
                     }
-                    for it in (order.items_snapshot or [])
-                    if not it.get("store") or str(it.get("store")) == str(store.pk)
+                    for it in self.store_order_items(order, store)
                 ],
             }
             for order in page
@@ -507,13 +714,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             raise Http404("Order not found.")
         from payment.fulfillment import update_fulfillment
 
-        belongs_to_store = any(
-            row.get("store") == store.pk for row in order.items_snapshot or []
-        )
-        if not belongs_to_store and order.cart_id:
-            belongs_to_store = order.cart.cart_items.filter(
-                product__store=store
-            ).exists()
+        belongs_to_store = self.store_orders(store).filter(pk=order.pk).exists()
         if not belongs_to_store:
             raise Http404("Order does not belong to this store.")
         serializer = MerchantTrackingSerializer(data=request.data)
@@ -650,14 +851,14 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                 "status": fulfillment.status,
                 "carrier": fulfillment.carrier,
                 "tracking_number": fulfillment.tracking_number,
-                "tracking_url": order.tracking_url,
+                "tracking_url": self.store_tracking_url(order, store),
                 "shipped_at": fulfillment.shipped_at.isoformat()
                 if fulfillment.shipped_at
                 else None,
                 "delivered_at": fulfillment.delivered_at.isoformat()
                 if fulfillment.delivered_at
                 else None,
-                "tracking_events": order.tracking_events,
+                "tracking_events": self.store_tracking_events(order, store),
             }
         )
 
@@ -691,6 +892,14 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             )
             totals = items.aggregate(units=Sum("quantity"), value=Sum(line_value))
             financials = calculate_store_financials(store)
+            if not store.is_official:
+                merchant_financials = calculate_merchant_financials(store.user)
+                financials['withdrawable_balance'] = format(max(
+                    Decimal('0.00'), min(
+                        Decimal(financials['available_balance']),
+                        Decimal(merchant_financials['available_balance']),
+                    ),
+                ), '.2f')
 
             inventory = products.aggregate(
                 total=Count("id"),
@@ -761,7 +970,8 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
 
     @action(detail=False, methods=['get', 'post'], url_path='wallet/payouts')
     @transaction.atomic
-    def merchant_payouts(self, request):
+    @extend_schema(methods=['GET'], parameters=[ListingQuerySerializer], responses=StorePayoutSerializer(many=True))
+    def merchant_payouts(self, request: Request) -> Response:
         """
         Unified payout requests and listing across all stores for the merchant.
         """
@@ -771,7 +981,13 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         if request.method == 'GET':
             payouts = StorePayout.objects.filter(
                 Q(wallet=wallet) | Q(store__in=user_stores)
-            ).select_related('store').distinct().order_by('-created')
+            ).select_related('store').distinct().order_by('-created', '-pk')
+            payouts = filter_records(
+                payouts, request.query_params,
+                search_fields=('reference', 'notes', 'payout_method', 'store__name'),
+                fields={'status': 'status', 'payout_method': 'payout_method'},
+                amount_field='amount',
+            )
             page = self.paginate_queryset(payouts)
             serializer = StorePayoutSerializer(page, many=True)
             return self.get_paginated_response(serializer.data)
@@ -783,14 +999,15 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         amount = serializer.validated_data['amount']
         payout_method = serializer.validated_data['payout_method']
         account_details = serializer.validated_data.get('account_details', {})
+        if serializer.validated_data.get('bank_account_id'):
+            from core.bank_accounts import payout_account_details
+            account_details = payout_account_details(request.user, serializer.validated_data['bank_account_id'])
         notes = serializer.validated_data.get('notes', '')
 
         store = None
         store_id = serializer.validated_data.get('store_id')
         if store_id:
             store = get_object_or_404(user_stores, pk=store_id)
-        else:
-            store = user_stores.first()
 
         if store and store.is_official:
             raise ValidationError({
@@ -853,6 +1070,9 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         amount = serializer.validated_data['amount']
         payout_method = serializer.validated_data['payout_method']
         account_details = serializer.validated_data.get('account_details', {})
+        if serializer.validated_data.get('bank_account_id'):
+            from core.bank_accounts import payout_account_details
+            account_details = payout_account_details(request.user, serializer.validated_data['bank_account_id'])
         notes = serializer.validated_data.get('notes', '')
 
         # Validate store-specific balance
@@ -1076,7 +1296,12 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         url_path='variant-file',
         parser_classes=[MultiPartParser, FormParser],
     )
-    def variant_file(self, request, store_pk=None, pk=None):
+    def variant_file(
+        self,
+        request: Request,
+        store_pk: str | None = None,
+        pk: str | None = None,
+    ) -> Response:
         """Store a private downloadable asset for one digital product option."""
         product = self.get_object()
         if not product.is_digital:
@@ -1104,15 +1329,26 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
                 'file': f'Upload a {asset_type} file for this variant.'
             })
 
-        safe_name = f'digital_products/{product.store_id}/{product.pk}/variants/{uuid4().hex[:12]}_{file_obj.name}'
-        digital_file_url = default_storage.save(safe_name, file_obj)
-        response_data = {'digital_file_url': digital_file_url}
+        response_data = {}
+        preview_path = None
         if is_image_digital_asset(file_obj.name):
             preview_path = create_digital_preview(file_obj, product.store_id, product.pk)
             if not preview_path:
                 raise ValidationError({'file': 'Unable to create a protected preview from this image.'})
             preview_url = normalize_media_url(request.build_absolute_uri(default_storage.url(preview_path)))
             response_data['image_url'] = preview_url
+        safe_name = f'digital_products/{product.store_id}/{product.pk}/variants/{uuid4().hex[:12]}_{file_obj.name}'
+        try:
+            digital_file_url = default_storage.save(safe_name, file_obj)
+        except Exception as error:
+            if preview_path:
+                try:
+                    default_storage.delete(preview_path)
+                except Exception:
+                    logger.exception('Failed to remove preview after variant file upload failed for product %s', product.pk)
+            logger.exception('Variant digital upload failed for product %s', product.pk)
+            raise ValidationError({'file': 'Unable to store this variant file. Please try again.'}) from error
+        response_data['digital_file_url'] = digital_file_url
         return Response(response_data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['patch'], url_path=r'images/(?P<image_pk>\d+)/cover')

@@ -40,6 +40,10 @@ class NotificationAuditRegressions(TestCase):
             self.assertEqual(Notification.objects.filter(recipient=recipient, data__event="order_placed", data__order_id=self.order.pk).count(), 1)
         own = Notification.objects.get(recipient=self.owner, data__event="order_placed")
         self.assertEqual(set(own.stores.values_list("pk", flat=True)), {self.store.pk})
+        self.assertEqual(
+            own.data["url"],
+            f"/merchant/orders?store={self.store.pk}&order={self.order.pk}",
+        )
         response = self.client.get("/notifications/", {"store": self.store.pk, "search": self.order.orderId})
         self.assertEqual(response.data["count"], 1)
         self.assertIn(self.store.pk, [row["id"] for row in self.client.get("/notifications/filters/").data["stores"]])
@@ -104,3 +108,47 @@ class NotificationAuditRegressions(TestCase):
                 self.assertTrue(Notification.objects.filter(data__event="inventory_low", data__product_id=product.pk).exists())
                 dispatch.assert_not_called()
             self.assertTrue(dispatch.called)
+
+    def test_saved_notification_resolves_current_admin_order_popup(self) -> None:
+        from notification.serializers import NotificationSerializer
+
+        notice = Notification.objects.get(recipient=self.admin, data__event="order_placed")
+        notice.data["url"] = "/admin/orders"
+        self.assertEqual(
+            NotificationSerializer(notice).data["data"]["url"],
+            f"/admin/orders?order={self.order.pk}",
+        )
+
+    def test_payout_destination_resolves_authorized_store_and_record(self) -> None:
+        from notification.policy import destination_for
+        from store.models import StorePayout
+
+        payout = StorePayout.objects.create(store=self.store, amount="20.00", reference="LINK-TEST")
+        data = {"payout_id": payout.pk}
+        self.assertEqual(destination_for(self.admin, "payout", data), f"/admin/payouts?payout={payout.pk}")
+        self.assertEqual(
+            destination_for(self.owner, "payout", data),
+            f"/merchant/payments?payout={payout.pk}&store={self.store.pk}",
+        )
+        self.assertEqual(destination_for(self.other, "payout", data), "/merchant/payments")
+
+    def test_refund_target_enriches_legacy_notification_url(self) -> None:
+        from notification.serializers import NotificationSerializer
+
+        refund = Refund.objects.create(order=self.order, email=self.buyer.email, reason="Test")
+        notice = create_notification(self.admin, "Refund requested", target=refund, data={"category": "refund"})
+        self.assertEqual(
+            NotificationSerializer(notice).data["data"]["url"],
+            f"/admin/refunds?refund={refund.pk}",
+        )
+
+
+    def test_legacy_merchant_notification_recovers_store_and_order(self) -> None:
+        from notification.serializers import NotificationSerializer
+
+        notice = Notification.objects.get(recipient=self.owner, data__event="order_placed")
+        notice.data = {"url": "/merchant/orders", "order_id": self.order.pk}
+        self.assertEqual(
+            NotificationSerializer(notice).data["data"]["url"],
+            f"/merchant/orders?store={self.store.pk}&order={self.order.pk}",
+        )

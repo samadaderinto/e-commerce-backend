@@ -1,32 +1,21 @@
-import { Suspense } from 'react';
-import { notFound } from 'next/navigation';
+import { Suspense, type ReactNode } from 'react';
+import { notFound, redirect } from 'next/navigation';
 import { MandatoryPasswordChange } from '@/components/shell';
 import {
+  ConnectedAccountSettings,
   HomePage,
   ProductPage,
   SavedPage,
   ShopPage,
-} from '@/components/storefront';
-import {
   AccountPage,
   AuthPage,
   OrderPage,
-} from '@/components/account';
-import {
   CartPage,
   CheckoutPage,
-} from '@/components/cart';
-import {
   MerchantPage,
   ProductPreviewPage,
-} from '@/components/merchant';
-import {
   HelpPage,
   PolicyPage,
-} from '@/components/help';
-import { AppSettings } from '@/components/theme';
-import { Loading } from '@/components/ui';
-import {
   AdminStoresPage,
   AdminStoreDetailPage,
   AdminDashboardPage,
@@ -39,9 +28,12 @@ import {
   AdminRefundsPage,
   AdminCommissionPage,
   AdminPayoutsPage,
-} from '@/components/admin';
-import { AffiliatePage } from '@/components/affiliates';
-import { NotificationsPage } from '@/components/notifications';
+  AffiliatePage,
+  PaymentReturnPage,
+  NotificationsPage,
+} from '@/components/route-components';
+import { AppSettings } from '@/components/theme';
+import { Loading } from '@/components/ui';
 
 export default async function Page({
   params,
@@ -49,9 +41,13 @@ export default async function Page({
   params: Promise<{ slug?: string[] }>;
 }) {
   const { slug = [] } = await params;
-  let content;
+  let content: ReactNode;
 
-  if (slug[0] === 'change-password' && slug.length === 1) {
+  if (slug.join('/') === 'settings/bank-accounts') {
+    redirect('/account/payout-accounts');
+  } else if (slug.join('/') === 'orders/stripe-return') {
+    content = <PaymentReturnPage />;
+  } else if (slug[0] === 'change-password' && slug.length === 1) {
     content = <MandatoryPasswordChange />;
   } else if (!slug.length) {
     content = <HomePage />;
@@ -66,6 +62,7 @@ export default async function Page({
       <div className="container section app-settings">
         <h1>Settings</h1>
         <AppSettings />
+        <ConnectedAccountSettings />
       </div>
     );
   } else if (slug[0] === 'cart' && slug.length === 1) {
@@ -84,7 +81,7 @@ export default async function Page({
   } else if (
     slug[0] === 'account' &&
     slug.length <= 2 &&
-    (!slug[1] || ['orders', 'wallet', 'addresses', 'profile'].includes(slug[1]))
+    (!slug[1] || ['orders', 'wallet', 'addresses', 'profile', 'payout-accounts'].includes(slug[1]))
   ) {
     content = <AccountPage section={slug[1]} />;
   } else if (slug[0] === 'account' && slug[1] === 'affiliates' && slug.length === 2) {

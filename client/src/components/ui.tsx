@@ -1,6 +1,8 @@
 "use client";
 import Link from "next/link";
-import { useState, useEffect, useRef, ReactNode } from "react";
+import Image from "next/image";
+import { useState, useEffect, useRef } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import {
   AlertCircle,
   Check,
@@ -145,14 +147,127 @@ export function normalizeImageUrl(url?: string | null): string {
   return clean;
 }
 
+const IMAGE_BLUR_PLACEHOLDER =
+  "data:image/svg+xml;charset=utf-8," +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><filter id="b"><feGaussianBlur stdDeviation="2"/></filter><rect width="8" height="8" fill="#71877a" filter="url(#b)"/></svg>',
+  );
+
+function getOptimizedImageSource(source: string): string {
+  const mediaOrigin = process.env.NEXT_PUBLIC_MEDIA_ORIGIN;
+  const optimizerMediaOrigin = process.env.NEXT_PUBLIC_IMAGE_OPTIMIZER_MINIO_URL;
+  if (!mediaOrigin || !optimizerMediaOrigin) return source;
+
+  try {
+    const sourceUrl = new URL(source);
+    const configuredMediaUrl = new URL(mediaOrigin);
+    if (sourceUrl.origin === configuredMediaUrl.origin) {
+      return `${optimizerMediaOrigin}${sourceUrl.pathname}${sourceUrl.search}`;
+    }
+  } catch {
+    return source;
+  }
+
+  return source;
+}
+
+function canOptimizeImage(source: string): boolean {
+  if (source.startsWith('/')) return true;
+
+  try {
+    const hostname = new URL(source).hostname;
+    const configuredHosts: string[] = JSON.parse(
+      process.env.NEXT_PUBLIC_OPTIMIZED_IMAGE_HOSTS || '[]',
+    ) as string[];
+    return configuredHosts.some((host) =>
+      host.startsWith('*.')
+        ? hostname.endsWith(host.slice(1))
+        : hostname === host,
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function ResponsiveMediaImage({
+  src,
+  alt,
+  fallback,
+  className,
+  style,
+  sizes = '(max-width: 720px) 100vw, 50vw',
+  width = 1200,
+  height = 1200,
+  detail = false,
+  priority = false,
+  quality = 70,
+}: {
+  src: string;
+  alt: string;
+  fallback?: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+  sizes?: string;
+  width?: number;
+  height?: number;
+  detail?: boolean;
+  priority?: boolean;
+  quality?: 60 | 65 | 70 | 75;
+}) {
+  const [failed, setFailed] = useState(false);
+  const normalizedSource = normalizeImageUrl(src);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [normalizedSource]);
+
+  if (failed) return fallback ?? null;
+
+  const imageProps = {
+    className,
+    alt,
+    width,
+    height,
+    sizes,
+    style,
+    loading: priority ? 'eager' as const : 'lazy' as const,
+    decoding: 'async' as const,
+    fetchPriority: priority ? 'high' as const : 'auto' as const,
+    onError: () => setFailed(true),
+  };
+
+  // Same-origin API media must be fetched by the browser through the API proxy.
+  // Next's server-side optimizer cannot forward the caller's HTTP-only session cookies.
+  const isApiMedia = normalizedSource.startsWith('/api/');
+
+  return canOptimizeImage(normalizedSource) ? (
+    <Image
+      {...imageProps}
+      src={detail ? normalizedSource : getOptimizedImageSource(normalizedSource)}
+      quality={quality}
+      unoptimized={detail || isApiMedia}
+      placeholder="blur"
+      blurDataURL={IMAGE_BLUR_PLACEHOLDER}
+    />
+  ) : (
+    <img {...imageProps} src={normalizedSource} />
+  );
+}
+
 export function ProductImage({
   src,
   alt,
   className = "",
+  detail = false,
+  sizes = '(max-width: 720px) 100vw, 50vw',
+  quality = 65,
 }: {
   src?: string;
   alt: string;
   className?: string;
+  detail?: boolean;
+  sizes?: string;
+  quality?: 60 | 65 | 70 | 75;
 }) {
   const resolvedSrc = normalizeImageUrl(src);
   const [failed, setFailed] = useState(false);
@@ -162,13 +277,31 @@ export function ProductImage({
   }, [resolvedSrc]);
 
   return resolvedSrc && !failed ? (
-    <img
-      className={className}
-      src={resolvedSrc}
-      alt={alt}
-      loading="lazy"
-      onError={() => setFailed(true)}
-    />
+    canOptimizeImage(resolvedSrc) ? (
+      <Image
+        className={className}
+        src={detail ? resolvedSrc : getOptimizedImageSource(resolvedSrc)}
+        alt={alt}
+        width={detail ? 1800 : 640}
+        height={detail ? 1800 : 640}
+        sizes={sizes}
+        quality={quality}
+        loading="lazy"
+        unoptimized={detail}
+        placeholder="blur"
+        blurDataURL={IMAGE_BLUR_PLACEHOLDER}
+        onError={() => setFailed(true)}
+      />
+    ) : (
+      <img
+        className={className}
+        src={resolvedSrc}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+      />
+    )
   ) : (
     <div className={`image-placeholder ${className}`}>
       <ImageOff size={32} />
@@ -256,6 +389,7 @@ export function ProductGallery({
           key={photos[current] || 'placeholder'}
           src={photos[current]}
           alt={`${title} — photo ${current + 1}`}
+          detail
         />
         {discount > 0 && <span className="discount">Save {discount}%</span>}
         {photos.length > 1 && (
@@ -293,7 +427,11 @@ export function ProductGallery({
               className={current === index ? 'active' : ''}
               onClick={() => selectPhoto(index)}
             >
-              <ProductImage src={src} alt={`${title} view ${index + 1}`} />
+              <ProductImage
+                src={src}
+                alt={`${title} view ${index + 1}`}
+                sizes="80px"
+              />
             </button>
           ))}
         </div>
@@ -361,7 +499,11 @@ export function ProductCard({ product }: { product: Product }) {
           href={productHref}
           aria-label={`View ${product.title}`}
         >
-          <ProductImage src={product.image} alt={product.title} />
+          <ProductImage
+            src={product.image}
+            alt={product.title}
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
+          />
         </Link>
         {(isAffiliate || isSoldOut || (!isAffiliate && (product.flash_sale_end || product.discount > 0))) && (
           <div className="product-badges">
@@ -445,9 +587,11 @@ export function ProductGrid({ products }: { products: Product[] }) {
 export function Loading({
   cards = false,
   compact = false,
+  fullPage = false,
 }: {
   cards?: boolean;
   compact?: boolean;
+  fullPage?: boolean;
 }): React.JSX.Element {
   return cards ? (
     <div className="product-grid" aria-label="Loading products">
@@ -460,7 +604,7 @@ export function Loading({
       ))}
     </div>
   ) : (
-    <div className={compact ? 'loading compact' : 'loading'} role="status">
+    <div className={`loading${compact ? ' compact' : ''}${fullPage ? ' full-page' : ''}`} role="status">
       <span className="spinner" />
       {compact ? <span className="sr-only">Updating results</span> : 'Loading…'}
     </div>
@@ -639,13 +783,15 @@ export function Pagination({
 export function AddToBagButton({
   product,
   quantity = 1,
+  mode = "increment",
   className = "button",
 }: {
   product: Product;
   quantity?: number;
+  mode?: "increment" | "target";
   className?: string;
 }) {
-  const { cart, add, notify, cartLoading, cartError, user } = useShop();
+  const { cart, add, setQuantity, notify, cartLoading, cartError, user } = useShop();
   const params = useSearchParams();
   const preview =
     params.get("preview") === "1" &&
@@ -702,8 +848,13 @@ export function AddToBagButton({
         (row.product.selected_variant || "") ===
           (product.selected_variant || "")
     )?.quantity || 0;
-  const committed = current >= quantity;
-  const capped = !product.is_digital && current >= product.available;
+  const targetMode = mode === "target";
+  const digitalAlreadyAdded = product.is_digital && current > 0;
+  const unchanged = targetMode && current === quantity;
+  const capped =
+    !product.is_digital &&
+    current >= product.available &&
+    (!targetMode || quantity >= current);
 
   useEffect(() => {
     if (!added) return;
@@ -712,11 +863,27 @@ export function AddToBagButton({
   }, [added]);
 
   async function submit() {
-    if (locked.current || committed) return;
+    if (
+      locked.current ||
+      (targetMode && current === quantity) ||
+      digitalAlreadyAdded ||
+      quantity < 1 ||
+      (!product.is_digital &&
+        (targetMode
+          ? quantity > product.available
+          : current + quantity > product.available))
+    ) return;
     locked.current = true;
     setBusy(true);
     try {
-      await add(product, quantity - current);
+      if (targetMode && quantity < current) {
+        await setQuantity(product, quantity);
+      } else {
+        await add(
+          product,
+          product.is_digital ? 1 : targetMode ? quantity - current : quantity,
+        );
+      }
       setAdded(true);
     } catch (error) {
       notify((error as Error).message, true);
@@ -740,13 +907,18 @@ export function AddToBagButton({
           ? "Out of stock"
           : busy
             ? "Adding…"
-            : capped
-              ? "Max quantity in bag"
-              : added
-                ? "Added!"
-                : committed
+          : digitalAlreadyAdded
+            ? "Already in bag"
+            : current > quantity
+              && targetMode
+              ? "Update bag"
+              : capped
+                ? "Max quantity in bag"
+                : unchanged && current > 0
                   ? `${current} in bag`
-                  : "Add to bag";
+                  : added
+                    ? "Added!"
+                    : "Add to bag";
 
   const isDisabled =
     preview ||
@@ -754,9 +926,14 @@ export function AddToBagButton({
     cartLoading ||
     !!cartError ||
     backoffice ||
-    committed ||
+    unchanged ||
+    digitalAlreadyAdded ||
+    quantity < 1 ||
     isSoldOut ||
-    (!product.is_digital && quantity > product.available) ||
+    (!product.is_digital &&
+      (targetMode
+        ? quantity > product.available
+        : current + quantity > product.available)) ||
     product.is_own_store ||
     product.store_verified === false;
 
@@ -770,7 +947,7 @@ export function AddToBagButton({
     >
       {busy ? (
         <LoaderCircle className="bag-spinner" size={16} />
-      ) : added || committed ? (
+      ) : added ? (
         <Check size={16} />
       ) : (
         <Plus size={16} />

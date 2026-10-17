@@ -63,6 +63,29 @@ class RealtimeTests(TestCase):
                     pass
             broker.assert_not_called()
 
+    def test_open_stream_closes_when_account_access_is_revoked(self) -> None:
+        client = APIClient()
+        client.force_authenticate(self.owner)
+        fake = MagicMock()
+        fake.pubsub.return_value.get_message.return_value = None
+        with patch('notification.realtime.broker', return_value=fake):
+            response = client.get('/notifications/stream/')
+            iterator = iter(response.streaming_content)
+            self.assertIn(b'event: ready', next(iterator))
+            self.assertIn(b'heartbeat', next(iterator))
+            User.objects.filter(pk=self.owner.pk).update(is_active=False)
+            with self.assertRaises(StopIteration):
+                next(iterator)
+            fake.pubsub.return_value.close.assert_called_once()
+
+    @override_settings(NOTIFICATION_STREAM_PROCESS=True)
+    def test_stream_cleanup_never_closes_an_enclosing_transaction(self) -> None:
+        from notification.realtime import _release_stream_connection
+
+        with patch('notification.realtime.close_old_connections') as close:
+            _release_stream_connection()
+            close.assert_not_called()
+
     def test_new_store_reaches_both_administrator_roles_and_staff(self):
         with patch('notification.realtime.broker'), patch('notification.views._send_external_notification'), patch('notification.search.schedule_index_notification'):
             with self.captureOnCommitCallbacks(execute=True):

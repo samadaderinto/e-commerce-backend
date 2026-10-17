@@ -38,7 +38,7 @@ class JsonFormatter(logging.Formatter):
             'message': record.getMessage(),
             **request_context.get(),
         }
-        for field in ('route', 'method', 'status_code', 'duration_ms', 'db_queries', 'db_duration_ms'):
+        for field in ('route', 'method', 'status_code', 'duration_ms', 'db_queries', 'db_duration_ms', 'stage_durations_ms'):
             if hasattr(record, field):
                 event[field] = getattr(record, field)
         if record.exc_info:

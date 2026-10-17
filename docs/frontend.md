@@ -1,5 +1,27 @@
 # Frontend documentation
 
+## Optional storage and public-read recovery
+
+Guest cart/saved-item storage writes tolerate `SecurityError` and quota failures;
+the active in-memory session remains usable, but reload persistence cannot be
+guaranteed when browser storage is unavailable. `ui-stability.spec.ts` exercises
+both errors on desktop/mobile while adding an item and navigating to the bag.
+
+For explicitly public GET routes only, a failed refresh transport, timeout, or
+malformed refresh response allows an anonymous retry using Django's normal
+visibility rules. Temporary failures do not clear refresh cookies. Private reads,
+writes, and cancelled requests never gain anonymous recovery. The existing
+main-API refresh target and deduplication remain unchanged. Route-level unit
+tests in `proxy-refresh.test.mjs` cover these failure and isolation cases.
+
+Route loading uses a client-side `next/dynamic` registry in
+`client/src/components/route-components.tsx`, retaining SSR and server-side route
+selection while loading only the selected feature group. Firebase SDK imports are
+deferred until browser push is configured. See [performance](performance.md) for
+bundle measurements, caveats and the browser regression command.
+
+`/account/payout-accounts` is a dedicated My Account page for bank and Stripe payout destinations, with encrypted identifiers, masked account suffixes, modal creation/editing, deletion and default selection. Account overview links to this page rather than embedding account management. Treasury withdrawals show the selected destination in a compact checkout-style summary; changing it opens a modal where operators can select, add, edit, delete, or set a default destination, with a link to the full payout accounts page in the modal. Only the selected destination ID is submitted for server-side resolution. Stripe destinations identify the intended target for an audited transfer request; saving one does not execute a transfer. `/settings/bank-accounts` redirects to the My Account page. Treasury withdrawals group amount and method in a compact responsive row, show available funds in the section header, and keep the selected destination and content-sized submit action together within a 620px form. Successful async submission resets the captured form element safely. Google and Apple controls share a 400px-wide, 44px-high reserved area; Google retains its provider-rendered credential button. Background loading indicators are positioned without adding/removing table height, and the staff directory reserves a status area so active-filter controls do not shift mobile results. Merchant startup waits for the saved store rather than briefly mounting the first store. Staff directory role filters omit privileged roles. Payout approvals separate Bank, Bank account and Routing and use compact row actions. `/orders/stripe-return` confirms the server-side Stripe session and replaces the URL with the resulting order details page.
+
 `client/tests/filter-stability.spec.ts` exercises delayed filter responses for guests, shoppers, buyers, sellers, merchants, staff, business administrators, and technical administrators on desktop and mobile. It verifies retained results, typing focus, mounted controls, same-document shop history, and customer profile stability.
 
 Notification search, tabs, and category filters retain results within the same account and store. Backoffice filter caches and private product previews include the viewer identity; login cancels outstanding queries and clears the prior query cache before activating the new account. External payment and onboarding redirects remain full navigations.
@@ -8,7 +30,9 @@ Shop filters update browser history without route navigation. Filtered catalog, 
 
 Catalog responses expose the backend `visibility` flag. The product page shows the draft preview banner only for explicit `visibility: false`; missing metadata is not evidence of a draft. Hidden products return 404, and unverified-store previews require the store owner or an authorized operator, even with `?preview=1`.
 
-Shared frontend styling in `client/src/app/design-system.css` standardizes form controls, buttons, cards, dialogs, catalog typography, and ClickBank partner badges across light and dark themes. Mobile controls use readable input sizes, touch devices expose quick product actions, and reduced-motion preferences are respected.
+On a product detail page, the rating summary's review count selects the Reviews tab and scrolls the tab panel into view.
+
+Shared frontend styling in `client/src/app/design-system.css` standardizes form controls, buttons, cards, dialogs, catalog typography, and ClickBank partner badges across light and dark themes. Use the shared `.button.compact` variant for dense actions (12px text, 36px minimum height) and `.button.compact.pill` for rounded contact actions instead of inline sizing. Backoffice and merchant heading actions use the same compact metrics at every breakpoint. Mobile controls use readable input sizes, touch devices expose quick product actions, and reduced-motion preferences are respected.
 
 User management and account details display last login, last activity, and profile revision times. Store governance/public store pages display recorded activity/catalog revisions. Merchant listings show creation/revision dates and support sorting by recent revisions. Backoffice order details expose status/cancellation/refund timestamps; edited reviews display their revision date. Missing historical metadata is shown as “Not recorded”. All metadata comes from the server and is read-only.
 
@@ -26,10 +50,10 @@ TypeScript, React 19, React Query and shared UI components.
 - `client/src/components/shell.tsx`: shared navigation, search bar, and layout shell.
 - `client/src/components/storefront.tsx`: catalog, product detail with selectable variant chips,
   technical specifications and dimensions table, photo review gallery with lightbox, verified buyer review submission,
-  review moderation/deletion, flash deal countdowns, store profiles with marquee announcements,
+  secure HTTPS review-photo URL attachments, author/store-owner/backoffice review removal, flash deal countdowns, store profiles with marquee announcements,
   and quick "Message Store" customer action.
 - `client/src/components/cart.tsx`: cart sheet with live coupon code validation, real-time discount line-item display,
-  split-tender payments (combining ProAce Wallet with Stripe), multi-carrier rating (USPS, UPS, FedEx, DHL Express with APO/FPO/DPO military guardrails),
+  split-tender payments (combining ProAce Wallet with Stripe), reference-scoped Stripe cancellation recovery, multi-carrier rating (USPS, UPS, FedEx, DHL Express with APO/FPO/DPO military guardrails),
   and destination sales tax calculation.
 - `client/src/components/account.tsx`: auth, profile, addresses, ProAce Wallet ledger,
   `WalletTopupModal` with quick preset chips (+$25 to +$500), in-app `PasswordChangeModal`,
@@ -41,10 +65,11 @@ TypeScript, React 19, React Query and shared UI components.
   product editor with variant option configuration, RFC 4180-compliant bulk CSV catalog importer (handling quoted fields and multiline data),
   7-day escrow financial breakdown, 4% platform fee calculation, payout requests, inventory health, order fulfillment modal,
   and searchable, multi-filtered merchant orders view with store switcher, search bar, status, timeframe, carrier, and sorting controls.
+  Stripe payout settings refresh Connect status after returning from onboarding, show connected or pending-review states, and allow merchants to resume only when Stripe reports required details still due.
 - `client/src/components/admin.tsx`: `AdminDashboardPage` (platform-wide business insights,
   order fulfillment distribution bar chart, store leaderboards), `AdminPayoutsPage` (merchant withdrawal review, approval,
-  and rejection with audit notes), `AdminUsersPage` (customer and staff directory with role/status filters and activation toggles),
-  and `AdminStaffPage` (staff account creation, permission controls, and blocking).
+  and rejection with audit notes), and `AdminCommissionPage` (treasury withdrawal requests with note-required external completion/failure actions), `AdminUsersPage` (customer and staff directory with role/status filters and activation toggles),
+  and `AdminStaffPage` (staff account creation, permission controls, and blocking; photo/name links open the full staff profile, with a separate quick-details dialog). In the customer and user directory, the avatar/name link opens the profile; row actions are reserved for block/activate controls. Staff directory names and avatars also link to `/admin/users/:id`; staff actions remain separate. In admin listings, store names link to the dedicated store profile; payout references, order IDs, coupon codes, refund IDs, and refund order IDs open their detail dialogs, with redundant Details buttons removed.
 - `client/src/components/ui.tsx`: reusable controls, product cards, `VerifiedBadge` (seller rank tier icons),
   `FlashCountdown` (real-time sale expiration timer), loading spinners, and small primitives.
 - `client/src/lib/api.ts`: browser API helper, error normalization, money
@@ -64,7 +89,8 @@ The proxy is responsible for:
 
 - forwarding authenticated requests to the Django API;
 - refreshing expired access tokens;
-- clearing auth cookies during sign-out;
+- expiring root-path auth cookies with the same attributes used at sign-in during sign-out and invalid-session cleanup, including the backend's empty HTTP 204 logout response;
+- aborting pending browser API requests when sign-out starts and propagating browser cancellation through the proxy, preventing an in-flight token refresh from restoring the signed-in session;
 - retrying public catalog, product-detail, and public-store GET requests anonymously after rejected authentication, clearing invalid cookies while preserving sessions during temporary refresh outages;
 - hiding raw token values from browser-visible JSON responses;
 - enforcing same-origin behavior for browser mutations;
@@ -93,6 +119,7 @@ Customers can sign in or register with one click using Google or Apple:
 - **Provider SDKs**: Google Identity Services renders its official sign-in button so users can explicitly choose a Google account even when One Tap is skipped. Sign in with Apple JS is loaded on demand. The frontend sends only provider identity tokens through the same-origin `/api/auth/google` or `/api/auth/apple` proxy.
 - **Dual-Theme Contrast**: Buttons support Light and Dark themes (`data-theme='light'` / `data-theme='dark'`) via semantic CSS variables (`var(--paper)`, `var(--ink)`, `var(--line)`, `var(--soft)`). The Google icon uses official 4-color SVG paths; the Apple icon uses `fill: currentColor` ensuring maximum WCAG AA/AAA visual contrast.
 - **Security Guardrail**: Administrative and staff members are blocked with an explicit error alert if they attempt social sign-in.
+- **Session recovery**: A logout clears the current device's signed-in UI state even when the backend cannot confirm refresh-token revocation; the user is told when that revocation needs attention.
 - **Affiliate Referral Preservation**: Referral codes (`?ref=CODE`) are captured on arrival, preserved in `sessionStorage` across auth page transitions, and forwarded to the backend on social signup, immediately rewarding the referring marketer.
 - **Proxy Token Management**: Next.js proxy intercepts `auth/google`, `auth/apple`, and `auth/social` responses, securely persisting JWT tokens in SameSite HTTP-only cookies (`proace_access`, `proace_refresh`) without exposing tokens to client-side scripts.
 
@@ -100,7 +127,7 @@ Customers can sign in or register with one click using Google or Apple:
 
 Shoppers, merchants, and operators can share and copy links to product listings:
 - **Share Controls**: Rendered in `purchase-actions` next to the Wishlist Save button, in the product header rating line, and within the `storefront-preview-banner`.
-- **Cross-Platform API**: Uses the native Web Share API (`navigator.share`) on supporting mobile/desktop browsers with automatic clipboard copy fallback (`navigator.clipboard.writeText`).
+- **Product Detail Copy Controls**: The product page copy controls write the current product URL to the clipboard on the first click and show confirmation; they do not open the operating system share sheet. If the Clipboard API is unavailable or rejects the write, a selection-based copy fallback is used.
 - **Visual Feedback**: Buttons toggle to a green checkmark icon with a "Link copied" / "Copied!" state for 2.5 seconds and trigger a toast notification (`notify('Product link copied to clipboard!')`).
 - **Preview Mode Synchronization**: Fully synchronized across live public product pages (`/products/:id`), private operator preview mode (`?preview=1`), and merchant product draft preview (`/merchant/products/preview`), ensuring link sharing works identically in all viewing contexts.
 
@@ -114,6 +141,23 @@ The browser opt-in control registers/removes the device through the authenticate
 `/api/v1/notifications/devices/` endpoint. The service worker checks the current
 session before showing a push notification, so a shared browser does not display
 an alert addressed to a different account.
+
+Signed-in users can enable or disable browser alerts in the expandable Browser
+alerts section of `/settings`; it reports unsupported browsers and blocked
+permissions with recovery guidance. The backoffice notification menu provides
+the same device control, stays within the viewport, and synchronizes its state
+with App Settings when either control changes the device registration.
+Registration waits for the root-scope Firebase service worker to activate before
+requesting an FCM token. Store suspension and restoration notifications target
+the store owner; the backend sends browser registration tokens through Firebase
+Messaging and removes tokens that Firebase reports as not found.
+
+Merchant order references open a detail dialog with store fulfillment, customer,
+item and delivery information. Order notifications include a store-scoped link
+that opens the matching order dialog, including when the order is outside the
+current list page. Merchant order, payout and earnings-ledger detail dialogs
+include a print action that formats the detail panel for printing; payout
+account and routing numbers are masked in the merchant view.
 
 Frontend tools:
 
@@ -222,13 +266,21 @@ See [role matrix, staff activation, and operator setup](access-control.md) and
 
 ## Product editor preview
 
+### Product media delivery
+
+Product cards, storefront imagery, review photos, avatars and other listing surfaces use Next.js image optimization for configured MinIO media, Unsplash and Google profile images. The optimizer serves responsive AVIF/WebP variants and a compact blurred loading placeholder; catalog cards and gallery thumbnails request display-sized derivatives at lower quality than the main detail image. Optimized images are cached for at least seven days; uploaded media uses non-overwriting storage paths, and replaced profile images receive versioned URLs. The main image in the product detail gallery and the opened media viewer keep the original source, so full-resolution bytes are requested only when the user opens the product or media itself. For Docker, `MINIO_PUBLIC_URL` is used to allow the media host at build time, while the optimizer reads MinIO through the internal `minio:9000` service name. Unconfigured third-party hosts fall back to the browser image path and are not resized by Next.js.
+
 Preview opens `/merchant/products/preview` in a separate tab using tab-scoped draft storage. It mirrors the buyer product-detail layout with product gallery, prices, options, seller card, and digital-download label while disabling checkout, save, and seller navigation. The original editor keeps unsaved inputs and uploads. Allow pop-ups for this action; a blocked pop-up produces a visible editor error.
 
 Product saves remember the returned product ID before uploading assets. If an upload fails, Save changes retries against that listing with PATCH. Successful uploads are cleared from the pending queue, and submissions are guarded while a save is running.
 
 Order-status override confirmation requires a nonempty audit reason before enabling Update status. Browser tests cover this requirement and the current wallet checkout flow.
 
-The unsaved product preview displays variant options with selectable prices and images, plus the configured flash deal countdown in the product price block. Expired draft deals show an explanation instead of disappearing.
+The unsaved product preview displays variant options with selectable prices and images, plus the configured flash deal countdown in the product price block. Countdown badges stay content-sized beside price details on both the preview and product detail page. Expired draft deals show an explanation instead of disappearing.
+
+The merchant product list and CSV export include a per-product units-sold count from the owner-scoped product API. Affiliate partner products display “Not tracked” because checkout and sales happen on the external partner site.
+
+The storefront header search submits to `/shop?search=...`; catalog search covers product title, brand, category, tags, and description through Elasticsearch with a database fallback. Queries shorter than three characters use database substring matching so partial input such as `k` can match inside product words.
 
 Admin user profiles use a dedicated responsive two-column layout for the wallet ledger and activity timeline; the panels stack on narrow screens so profile sections do not overlap.
 
@@ -242,14 +294,17 @@ Time handling: Django stores timezone-aware UTC instants (`TIME_ZONE=UTC`, `USE_
 
 Military postal delivery: APO/FPO/DPO destinations use USPS only with the currently supported integrations. Checkout disables other carrier options and the server rejects unsupported carriers in both demo and live rating and payment flows. Address city/state/ZIP must agree: AA uses 340xx, AE uses 090xx–098xx, AP uses 962xx–966xx, with country United States. This is a supported-service policy, not a claim that all commercial postal handoff services are prohibited: UPS Ground Saver and Mail Innovations have military-address support but are not integrated here. See [USPS military addressing standards](https://pe.usps.com/text/dmm300/703.htm) and [UPS supported services](https://www.ups.com/us/en/support/shipping-support/print-shipping-labels/how-to-write-address). ZIP blocks alone do not guarantee an active destination or eligibility for every USPS service; live carrier availability and military mail content/customs requirements still apply.
 
-Cart mutations submit an optional `variant` option name alongside product and quantity, and rendered cart products expose `selected_variant`. Every product with options also shows a selectable **Original edition** choice that uses the main price, stock, image, and digital asset; distinct options have separate cart rows. CSV imports limit files to 2 MB / 500 rows, reject ambiguous numeric price formats and show failed row numbers. The same-origin proxy deduplicates refresh calls, preserves sessions during upstream outages and sets access-cookie lifetime from the upstream JWT expiry. See [audit remediation](security-audit-remediation.md) for verification and operational boundaries.
+Cart mutations submit an optional `variant` option name alongside product and quantity, and rendered cart products expose `selected_variant`. Every product with options also shows a selectable **Original edition** choice that uses the main price, stock, image, and digital asset; distinct options have separate cart rows. Guest cart and saved-item entries that fail to merge at sign-in remain persisted for review and retry. CSV imports limit files to 2 MB / 500 rows, reject ambiguous numeric price formats and show failed row numbers. The same-origin proxy deduplicates refresh calls, preserves sessions during upstream outages and sets access-cookie lifetime from the upstream JWT expiry. See [audit remediation](security-audit-remediation.md) for verification and operational boundaries.
+
+On product detail pages, the quantity selector is the desired total for that product and variant in the bag. The action stays disabled when that total already matches the bag, adds the difference when it increases, and updates the bag when it decreases. Its maximum is the available stock. Digital products remain limited to one cart entitlement.
 
 ## ClickBank Partner Storefront & Editor Experience
 
 - **Catalog & Cards**: Products configured as `affiliate_clickbank` render distinctive orange "Partner Offer" and "ClickBank" badges on product cards. The "Add to bag" action is replaced by a direct outbound tracking anchor (`/api/affiliates/clickbank/outbound/${product.id}`) opening in a secure new tab (`target="_blank"`, `rel="noopener noreferrer"`).
 - **Product Detail**: Detail pages replace local quantity selectors and stock countdowns with an "Official Partner Listing · In Stock" notice and a partner delivery card indicating fulfillment by ClickBank and the partner vendor.
 - **Merchant Product Editor**: The editor provides a Listing Type selector (`standard` vs `affiliate_clickbank`). Choosing affiliate displays a configuration panel for HopLink URL, vendor nickname, and custom CTA button text, while locking platform discounts to 0%, omitting flash sale timers, and displaying partner pricing notices to prevent fictitious pricing discrepancies. Physical shipping dimensions and variant tables are also bypassed.
-- **Backoffice Catalog Audit**: Staff users can filter listings by "ClickBank affiliate offer", view partner offer badges, and inspect outbound HopLinks directly from the store audit table. Coupon creation is strictly disallowed for ClickBank products because checkout is completed externally.
+- **Backoffice Catalog Audit**: Staff users can filter listings by "ClickBank affiliate offer", view partner offer badges, inspect outbound HopLinks, see tracked units sold for standard products, and open each product in read-only preview from the store audit table. Partner offer sales are completed externally and are labeled as not tracked. Coupon creation is strictly disallowed for ClickBank products because checkout is completed externally.
+- **Store Detail**: Business and technical administrators can suspend or reactivate a merchant store from its detail page. Initial store loading is centered over the viewport; catalog refresh loading stays in the catalog flow.
 
 ## October commerce audit fixes
 
@@ -308,7 +363,7 @@ Customer payment labels derive Paid, Awaiting payment, Partial payment, and refu
 
 Collection refreshes use the shared compact spinner across storefront search, seller workspaces, backoffice listings, store management, and notifications. The spinner preserves the existing results and controls while data is fetching, and announces “Updating results” to assistive technology without showing that text in the interface.
 
-The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts the invite code visibly in an optional field. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped) and `/api/v1/admin/affiliates/` (backoffice-only).
+The referral workspace at `/account/affiliates` supports enrollment, copyable `/register?ref=…` invite links, credited-signup progress, and searchable/filterable paginated referral history. Registration accepts an invite code visibly in an optional field; rewards are issued only after email verification. The server grants $25 non-withdrawable ProAce Wallet credit for up to four referred signups; additional referrals remain pending without credit, and reward issuance is serialized per affiliate to enforce the cap under concurrent signups. The displayed earned total is cumulative promotional credit, not a cash balance or ClickBank commission. `/admin/affiliates` lets backoffice operators search/filter enrolled affiliates and review referral totals, credit earned, and account status, with links to existing user management. Customer history omits referred users’ personal information; affiliate account, wallet, and referral routes reject backoffice accounts. Generated links can only target published products in active, verified stores and stop redirecting if a listing becomes unavailable. API endpoints: `/api/v1/affiliates/workspace/` (owner-scoped), `/api/v1/affiliates/referrals/` (owner-scoped, paginated), and `/api/v1/admin/affiliates/` (backoffice-only).
 
 Digital product onboarding & variant enhancements:
 - **Auto-Cover & Smart Photography Card**: When onboarding digital image assets (artwork, wallpapers, photography), the uploaded file immediately populates the storefront cover preview. The Product photography section shows an auto-generated cover card with a `PROACE PREVIEW` badge indicating that no separate cover photo is needed, while preserving an optional upload button for custom promotional banners.
@@ -319,3 +374,114 @@ Digital product onboarding & variant enhancements:
 Product-page interaction hooks, including share-link feedback state, are initialized before loading/error returns. This keeps hook order stable when asynchronous catalog data arrives and prevents the product page from crashing during guest browsing and checkout.
 
 The backoffice overview shows pending merchant payouts, recent requests with detail dialogs, and the affiliate/referral board directly below the summary cards. Payout details remain available for pending, completed, and rejected requests. Authorized staff, business administrators, and technical administrators can inspect, complete, or decline pending requests from the list or details dialog. Account and routing numbers show only their first two and last two characters; legacy last-four-only values show only their final two characters. Approval initiates a Stripe Connect transfer. Bank transfers are sent outside the app and must be confirmed before marking the request completed.
+
+Store creation includes optional store profile picture and Store label (banner/cover) uploads with cropping and previews. JPEG, PNG, and WebP images up to 5 MB use the existing protected branding endpoints after the store is created. Failed image uploads can be retried without creating another store. Creating an additional store selects it before opening the first-product editor. Creating a merchant's first store also initializes their unified merchant wallet in the same transaction; later stores share it. Stripe Express account IDs are committed before onboarding-link creation, so a temporary link failure can be retried against the same account.
+
+Social signup imports a missing Google profile image from the verified credential into configured media storage (MinIO/S3 when enabled), preserving user-selected avatars. When tokeninfo omits the picture, the accepted ID token supplies that claim after provider verification. Google/Apple sign-in with an empty phone number prompts for a phone number and saves it through the authenticated profile endpoint before continuing; existing phones are preserved. Referral codes from the signup field, URL or remembered auth-page referral remain attached to new social signups only; existing-account logins do not create or reassign referrals. A missing Google image or unavailable image service does not block authentication and is retried on the next sign-in while the avatar remains empty.
+
+Logout immediately aborts pending browser API requests and cancels account queries before push cleanup or server revocation. The proxy propagates browser cancellation to backend and refresh requests, preventing a late token-refresh response from restoring auth cookies. Logout expires both root-path auth cookies, updates the observed session query to an anonymous value, and removes other cached account data without detaching the session observer. Unauthorized profile responses clear the displayed identity instead of retaining a previous signed-in greeting.
+
+Customers can manage Google/Apple connections and password sign-in in profile/settings. Provider subjects resolve to a single account, verified matching emails link existing customer profiles, and disconnect preserves at least one login method. See [social account linking](social-account-linking.md) for the schema, authenticated API routes, legacy account migration, security rules and frontend flow.
+
+Settings use compact expandable sections for appearance, browser alerts, optional email preferences and sign-in methods. Browser alert setup waits for the registered Firebase service worker to become active before requesting the device token; the settings page and notification menu share this flow. Authentication pages remain viewable while signed in, with email/password above horizontal Google/Apple alternatives. Sign-in and registration controls are disabled during session loading or an active session; an explicit sign-out action permits account switching. The backend rejects login, registration and public social sign-in attempts carrying a valid current session with HTTP 409, while expired/revoked credentials can recover through normal sign-in. Existing authentication throttling remains active. Password recovery and authenticated provider linking remain available.
+
+Treasury destination selectors keep bank and Stripe account management available even when no default is selected or no accounts are saved. Choose account opens the selector; empty states stay inside it, with compact add/manage actions and edit/default/delete controls for saved accounts.
+
+Treasury withdrawal references expose a hover/focus summary and open a printable details dialog. The Payout accounts page uses explicit default badges and compact per-account Actions menus for editing, deleting, and setting the default.
+
+Saved bank and Stripe account lists share a compact filtering toolbar: debounced search with field-specific placeholders, default-account selection, recent/name sorting, matched counts, and a conditional Clear filters action. Filtering uses the complete owner-scoped saved collection.
+
+Payout account actions prevent overlapping mutations and report successful default/deletion changes. Pickers discard selections that disappear from refreshed account lists. Unified merchant payout history applies search, status, method, date and amount criteria before pagination, with deterministic creation/ID ordering.
+
+Open payout-account Actions menus layer above neighboring account controls so Edit/Delete/Set default remain clickable in multi-account lists.
+
+Merchant payout requests use the treasury-style compact amount/note form and shared bank destination picker. Change/Choose account opens the saved-account management popup instead of embedding full account cards in the withdrawal form. Saved bank accounts are user-provided destinations, not independently bank-verified accounts.
+
+Store dashboards expose `withdrawable_balance`, capped by both the store’s cleared funds and the unified wallet after pending/completed payouts. Merchant payout controls use that amount. Repeated fake-data seeding preserves existing payout debits and does not generate another automated demo payout for the same wallet.
+
+
+### Notification record navigation
+
+Notification actions use recipient-scoped destinations and contextual labels for orders,
+refunds, payouts, stores, wallet, referrals, and account notices. Admin orders/refunds/payouts
+and merchant payouts/earnings consume `order`, `refund`, `payout`, or `ledger` query IDs to
+open their existing detail dialogs. Buyer orders retain their dedicated detail page;
+stores/accounts/wallet/referrals open their existing relevant page. Closing a notification
+dialog clears its record query parameter. Unavailable records show a clean access/unavailable
+message and leave the listing usable.
+
+Dialog resolution uses a separate, user-keyed request with `record_id`, `limit=1`, and
+`offset=0`, independent of listing search, filters, and pagination. `record_id` is a positive
+integer accepted by shared filtered listing endpoints and admin order/refund listings;
+existing endpoint permissions and tenant ownership still apply. Saved notification payloads
+are resolved through the current routing policy when serialized and when push is dispatched,
+so legacy list-only URLs do not require database reseeding or a notification resend.
+
+
+### Backoffice store order history
+
+`/admin/stores/<id>` includes a Store orders section with independent debounced
+search, status/carrier/payment filters, sorting, reset, counts, pagination and the
+existing order detail dialog. The shared admin order endpoint accepts a positive
+`store_id` and filters before pagination. Immutable item snapshots define store
+membership, with fulfillment associations and an empty-snapshot legacy cart fallback.
+Mixed orders appear for each participating store; displayed totals and emergency
+status actions apply to the complete customer order, as labeled. Migration
+`payment.0021_order_items_store_gin` adds a PostgreSQL GIN index for snapshot store
+membership (SQLite uses its test-compatible index implementation). Existing backoffice
+permissions apply; this does not grant access to third-party merchant dashboards.
+
+
+### Backoffice store payments
+
+Admin store detail pages include store financial totals, payout history and an earnings
+ledger with detail dialogs. The summary uses the existing store financial calculation;
+filters apply to histories independently of the all-time summary. Each history has its
+own debounced search, status/type/method/date/amount filters, reset, count and pagination.
+`GET /api/v1/admin/staff/stores/<id>/financials/` returns the typed financial summary;
+`GET /api/v1/admin/staff/stores/<id>/ledger/` returns filtered, paginated store ledger
+entries. The existing `/api/v1/admin/staff/payouts/?store_id=<id>` endpoint scopes payout
+history to that store before filtering and pagination. Unallocated merchant-wallet payouts
+are not attributed to individual stores. These endpoints retain backoffice permissions
+and do not grant merchant-dashboard access or submit financial transactions.
+
+
+The admin dashboard Refund operations preview uses a full-width, horizontally scrollable
+refund table: refund/order links open their detail dialogs, with customer, amount, method,
+status, reason, created date and existing approve/decline actions in separate columns.
+The preview retains the latest five requests; View all refunds opens the searchable,
+filterable full history. Styling uses shared table, button and status primitives in both themes.
+
+
+The dashboard operations previews are stacked at full width: Refund operations first,
+then Coupon operations. Coupons use a scrollable table with code/detail link, discount,
+usage, status, validity dates, creator email and existing toggle/delete controls.
+Used-coupon deletion protection and the full searchable coupon history are unchanged.
+Backoffice refund listings (overview and full history) and refund detail dialogs show the processing staff or administrator's email under “Processed by” after an action. Attribution comes from the backend's recorded refund processor; pending or older records without a processor show no invented identity. This field is exposed only through the existing backoffice refund serializer and access controls.
+App-wide audit fixes (2026-10-15): merchant order history resolves recorded snapshot/fulfillment membership, with live-cart fallback for legacy records. Merchant shipment events are store-scoped; delivery addresses appear only for that store's physical items. Digital download links include an encoded `variant` selector when required and resolve only purchased order lines; legacy single-item links remain supported. Guest physical carts display “Calculated at checkout” and keep totals limited to item costs until the backend quotes delivery. Failed refund attempts retain the operator email, timestamp and reason, while customer/backoffice payloads use safe failure text, including for older failed records. Malformed password-reset identifiers return validation errors. The security runner requires expected live response statuses, uses the current protected routes, treats unreachable probes as failures and exits nonzero on failure. Run `.venv/bin/pytest scripts/qa/test_security_reports.py` for offline runner regressions in addition to the standard test suites.
+The security runner, its offline regression tests and shared report helper are explicitly exempted from the local `scripts/` ignore rule so their fixes can be versioned; generated `qa-reports/` output remains ignored.
+
+
+Checkout address dialogs use the shared address form in embedded mode, without a
+second card or repeated heading. Address rows share label/input/error tracks to keep
+controls aligned when labels or validation messages wrap, and stack on narrow screens.
+Standalone address forms retain their heading and card; both modes use theme tokens.
+
+## Proxy request diagnostics
+
+Only the exact notification-stream route can target `NOTIFICATION_STREAM_URL`; all other routes, including token refresh, use `API_URL`. Refresh deduplication is keyed to the main authentication API even when the triggering request was a stream, preventing concurrent stream/ordinary refresh races. Browser URLs and HttpOnly cookies are unchanged. Compose configures the dedicated internal service through `CONTAINER_NOTIFICATION_STREAM_URL`; leave the optional local-development stream URL blank for the original single-process workflow. An unavailable configured stream process does not fall back to the ordinary API.
+
+The same-origin API proxy preserves only validated `X-Request-ID`, `X-Catalog-Cache` and numeric `Server-Timing` fields from Django. Its additional `proxy` duration includes backend wait and response preparation; it is not proxy-only overhead. Authentication cookies, token isolation and `Cache-Control: no-store` remain unchanged. Arbitrary upstream headers are not forwarded. See [performance](performance.md) for timing boundaries.
+
+
+Signed-out visitors to `/orders/<id>` are redirected to `/login?next=...` after the
+session check, then returned to that order after authentication. A signed-in viewer
+without access sees an unavailable-order message with Your orders and an explicit
+Switch account action. Switching uses normal logout before opening sign-in and retains
+the order return path. Missing and inaccessible orders share the same safe 404 response;
+no owner identity is revealed. Expired-session 401s return to sign-in, while other order
+loading failures show a generic retry message without exposing backend internals.
+
+The customer order detail header centers the order status above the Print receipt action, with consistent spacing on desktop and mobile.
+
+Order refund forms use compact item rows with separate titles, quantities and amounts, theme-aware separators, and wrapping actions. The shopping action is hidden while a refund request is being edited.

@@ -1,5 +1,23 @@
 import { expect, test } from '@playwright/test';
 
+test('app settings explain browser alerts and link guests to sign in', async ({ page }) => {
+  await page.route('**/api/**', route => route.fulfill({
+    status: 401,
+    json: { detail: 'Authentication required' },
+  }));
+
+  await page.goto('/settings');
+  await page.getByText('Push notifications on this device', { exact: true }).click();
+
+  await expect(page.getByRole('region', { name: 'Browser alert settings' })).toContainText(
+    'Sign in to connect this browser to your account’s notifications.',
+  );
+  await expect(page.getByRole('link', { name: 'Sign in to enable alerts' })).toHaveAttribute(
+    'href',
+    '/login?next=/settings',
+  );
+});
+
 test('theme toggles persist through refresh and synchronize existing and new tabs', async ({ page, context }) => {
   await context.route('**/api/**', route => route.fulfill({ status: 401, json: { detail: 'Authentication required' } }));
   await page.goto('/settings');

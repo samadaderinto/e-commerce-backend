@@ -35,7 +35,10 @@ from notification.views import (
     store_moderation_notification,
 )
 from notification.models import Notification
-from store.serializers import StoreAddressSerializer, StorePayoutSerializer
+from store.serializers import (
+    StoreAddressSerializer, StorePayoutSerializer, StoreEarningsLedgerSerializer,
+    MerchantStoreFinancialSummarySerializer,
+)
 from store.services import process_payout_status_change, process_refund_deduction
 from core.services import credit_user_wallet, get_or_create_user_wallet
 from core.models import UserWalletTransaction
@@ -49,6 +52,8 @@ from staff.serializers import (
     BackofficeCouponSerializer,
     CouponUpdateSerializer,
     OrderStatusOverrideSerializer,
+    PayoutDecisionSerializer,
+    RefundDecisionSerializer,
     BackofficeOrderSerializer,
     BackofficeStoreSerializer,
     CommentSerializer,
@@ -59,6 +64,7 @@ from staff.serializers import (
     StaffUserDetailSerializer,
     StaffUserOrderQuerySerializer,
     TreasuryWithdrawalSerializer,
+    TreasuryWithdrawalDecisionSerializer,
     StoreModerationSerializer,
     StoreAuditProductSerializer,
 )
@@ -114,8 +120,11 @@ class StaffViewSet(viewsets.GenericViewSet):
         "block_staff",
         "unblock_staff",
         "resend_staff_verification",
+        "block_store",
+        "unblock_store",
         "commission_wallet",
         "withdraw_commission",
+        "process_commission_withdrawal",
     }
 
     def get_permissions(self):
@@ -239,8 +248,10 @@ class StaffViewSet(viewsets.GenericViewSet):
             })
 
     @action(detail=False, methods=["get"])
-    def users(self, request):
+    def users(self, request: Request) -> Response:
         users = User.objects.all().order_by("-date_joined", "-pk")
+        if not is_admin(request.user):
+            users = users.filter(is_staff=False, is_superuser=False, is_business_admin=False)
         search = request.query_params.get("search")
         if search:
             users = users.filter(
@@ -349,8 +360,9 @@ class StaffViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=["get", "patch"], url_path=r"users/(?P<user_pk>\d+)")
     @transaction.atomic
     def user_detail(self, request: Request, user_pk: str | None = None) -> Response:
-        user = get_object_or_404(User, pk=user_pk)
-        if (user.is_superuser or user.is_business_admin) and not is_admin(request.user):
+        targets = User.objects.select_for_update() if request.method == 'PATCH' else User.objects.all()
+        user = get_object_or_404(targets, pk=user_pk)
+        if (user.is_staff or user.is_superuser or user.is_business_admin) and not is_admin(request.user):
             return Response(
                 {"detail": "Staff accounts cannot inspect administrator profile details."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -446,7 +458,7 @@ class StaffViewSet(viewsets.GenericViewSet):
                 'referral': referral_data,
                 'affiliate': affiliate_data,
             }).data)
-        if not is_admin(request.user):
+        if not is_admin(request.user) and set(request.data) != {'is_active'}:
             return Response(
                 {"detail": "Only an admin can change account permissions."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -566,7 +578,8 @@ class StaffViewSet(viewsets.GenericViewSet):
         return Response(BackofficeStoreSerializer(store).data)
 
     @action(detail=False, methods=["get"])
-    def orders(self, request):
+    @extend_schema(parameters=[ListingQuerySerializer], responses=BackofficeOrderSerializer(many=True))
+    def orders(self, request: Request) -> Response:
         ordering = request.query_params.get("ordering", "-created")
         if ordering not in ("-created", "created", "-total", "total"):
             ordering = "-created"
@@ -595,6 +608,15 @@ class StaffViewSet(viewsets.GenericViewSet):
                 | Q(fulfillments__carrier__icontains=search)
                 | Q(tracking_number__icontains=search)
             ).distinct()
+        identity = ListingQuerySerializer(data=request.query_params)
+        identity.is_valid(raise_exception=True)
+        if identity.validated_data.get("record_id"):
+            orders = orders.filter(pk=identity.validated_data["record_id"])
+        if identity.validated_data.get("store_id"):
+            from payment.order_filters import orders_for_store
+
+            store = get_object_or_404(Store, pk=identity.validated_data["store_id"])
+            orders = orders_for_store(orders, store.pk)
         return self.paginate_response(orders, BackofficeOrderSerializer)
 
     @action(detail=False, methods=["post"], url_path=r"orders/(?P<order_pk>\d+)/status")
@@ -662,11 +684,12 @@ class StaffViewSet(viewsets.GenericViewSet):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=False, methods=["get"], url_path="refunds")
-    def refunds(self, request):
+    @extend_schema(parameters=[ListingQuerySerializer], responses=RefundsSerializer(many=True))
+    def refunds(self, request: Request) -> Response:
         ordering = request.query_params.get("ordering", "-created")
         if ordering not in ("-created", "created"):
             ordering = "-created"
-        refunds = Refund.objects.select_related("order", "order__user").order_by(ordering, "-pk")
+        refunds = Refund.objects.select_related("order", "order__user", "processed_by").order_by(ordering, "-pk")
         refund_status = request.query_params.get("status")
         if refund_status:
             refunds = refunds.filter(status=refund_status)
@@ -681,16 +704,19 @@ class StaffViewSet(viewsets.GenericViewSet):
                 | Q(reason__icontains=search)
                 | Q(provider_reference__icontains=search)
             )
+        identity = ListingQuerySerializer(data=request.query_params)
+        identity.is_valid(raise_exception=True)
+        if identity.validated_data.get("record_id"):
+            refunds = refunds.filter(pk=identity.validated_data["record_id"])
         return self.paginate_response(refunds, RefundsSerializer)
 
     @action(detail=False, methods=["post"], url_path=r"refunds/(?P<refund_pk>\d+)/process")
-    def process_refund(self, request, refund_pk=None):
-        action_type = request.data.get("action", "approve")
-        if action_type not in {"approve", "decline"}:
-            return Response({"action": "Use approve or decline."}, status=400)
-        reason = str(request.data.get("reason", "")).strip()
-        if not reason:
-            return Response({"reason": "A reason is required to process a refund."}, status=400)
+    @extend_schema(request=RefundDecisionSerializer, responses=OpenApiTypes.OBJECT)
+    def process_refund(self, request: Request, refund_pk: str | None = None) -> Response:
+        decision = RefundDecisionSerializer(data=request.data)
+        decision.is_valid(raise_exception=True)
+        action_type = decision.validated_data["action"]
+        reason = decision.validated_data["reason"]
         refund = get_object_or_404(
             Refund.objects.select_related("order", "order__user"),
             pk=refund_pk,
@@ -702,10 +728,44 @@ class StaffViewSet(viewsets.GenericViewSet):
             refund = decline_order_refund(refund, request.user, reason=reason)
             return Response({"detail": "Refund request declined.", "refund": RefundsSerializer(refund).data})
 
+    @action(detail=False, methods=["get"], url_path=r"stores/(?P<store_pk>\d+)/financials")
+    @extend_schema(responses=MerchantStoreFinancialSummarySerializer)
+    def store_financials(self, request: Request, store_pk: str | None = None) -> Response:
+        from store.services import calculate_store_financials
+
+        store = get_object_or_404(Store.objects.select_related("user"), pk=store_pk)
+        data = {
+            "store_id": store.pk,
+            "store_name": store.name,
+            "store_username": store.username,
+            "status": store.status,
+            "is_official": store.is_official,
+            **calculate_store_financials(store),
+        }
+        return Response(MerchantStoreFinancialSummarySerializer(data).data)
+
+    @action(detail=False, methods=["get"], url_path=r"stores/(?P<store_pk>\d+)/ledger")
+    @extend_schema(parameters=[ListingQuerySerializer], responses=StoreEarningsLedgerSerializer(many=True))
+    def store_ledger(self, request: Request, store_pk: str | None = None) -> Response:
+        store = get_object_or_404(Store, pk=store_pk)
+        entries = filter_records(
+            StoreEarningsLedger.objects.filter(store=store).select_related("store", "wallet").order_by("-created", "-pk"),
+            request.query_params,
+            search_fields=("reference", "description", "order__orderId"),
+            fields={"status": "status", "entry_type": "entry_type"},
+            amount_field="net_amount",
+        )
+        return self.paginate_response(entries, StoreEarningsLedgerSerializer)
+
     @action(detail=False, methods=["get"], url_path="payouts")
     @extend_schema(parameters=[ListingQuerySerializer], responses=StorePayoutSerializer(many=True))
     def payouts(self, request: Request) -> Response:
         payouts = StorePayout.objects.select_related("store", "store__user", "wallet").order_by("-created", "-pk")
+        query = ListingQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        if query.validated_data.get("store_id"):
+            store = get_object_or_404(Store, pk=query.validated_data["store_id"])
+            payouts = payouts.filter(store=store)
         payout_status = request.query_params.get("status")
         if payout_status:
             payouts = payouts.filter(status=payout_status)
@@ -752,6 +812,8 @@ class StaffViewSet(viewsets.GenericViewSet):
                     "status": row.status,
                     "reference": row.reference,
                     "created": row.created,
+                    "processed_at": row.processed_at,
+                    "processing_note": row.processing_note,
                 }
                 for row in rows
             ],
@@ -779,10 +841,18 @@ class StaffViewSet(viewsets.GenericViewSet):
         if amount > earned - reserved:
             return Response({'amount': 'Amount exceeds available platform treasury funds.'}, status=400)
         from nanoid import generate
+        if serializer.validated_data['payout_method'] == 'bank':
+            from core.bank_accounts import payout_account_details
+            account_details = payout_account_details(request.user, serializer.validated_data['bank_account_id'])
+        else:
+            from core.bank_accounts import stripe_payout_destination_details
+            account_details = stripe_payout_destination_details(
+                request.user, serializer.validated_data['stripe_destination_id'],
+            )
         row = PlatformCommissionWithdrawal.objects.create(
             amount=amount,
             payout_method=serializer.validated_data['payout_method'],
-            account_details=serializer.validated_data['account_details'],
+            account_details=account_details,
             requested_by=request.user,
             reference=f'PCW-{generate(size=12)}'
         )
@@ -794,10 +864,79 @@ class StaffViewSet(viewsets.GenericViewSet):
             )
         return Response({'id': row.pk, 'reference': row.reference, 'status': row.status}, status=201)
 
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path=r"commission-wallet/withdrawals/(?P<withdrawal_pk>\d+)/process",
+    )
+    @transaction.atomic
+    @extend_schema(
+        request=TreasuryWithdrawalDecisionSerializer,
+        responses=OpenApiTypes.OBJECT,
+    )
+    def process_commission_withdrawal(
+        self, request: Request, withdrawal_pk: str | None = None
+    ) -> Response:
+        decision = TreasuryWithdrawalDecisionSerializer(data=request.data)
+        decision.is_valid(raise_exception=True)
+        withdrawal = get_object_or_404(
+            PlatformCommissionWithdrawal.objects.select_for_update(),
+            pk=withdrawal_pk,
+        )
+        if withdrawal.status != PlatformCommissionWithdrawal.STATUS_PENDING:
+            return Response(
+                {"detail": "This treasury withdrawal has already been processed."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        action_name = decision.validated_data['action']
+        withdrawal.status = (
+            PlatformCommissionWithdrawal.STATUS_COMPLETED
+            if action_name == 'complete'
+            else PlatformCommissionWithdrawal.STATUS_FAILED
+        )
+        withdrawal.processed_at = timezone.now()
+        withdrawal.processed_by = request.user
+        withdrawal.processing_note = decision.validated_data['note']
+        withdrawal.save(
+            update_fields=[
+                'status',
+                'processed_at',
+                'processed_by',
+                'processing_note',
+                'updated',
+            ]
+        )
+        create_notification(
+            recipient=withdrawal.requested_by,
+            verb=f"Treasury withdrawal {withdrawal.status}: {withdrawal.reference}",
+            description=(
+                f"Your {withdrawal.payout_method} withdrawal of "
+                f"${withdrawal.amount} was marked {withdrawal.status}. "
+                f"Note: {withdrawal.processing_note}"
+            ),
+            data={
+                "event": f"treasury_withdrawal_{withdrawal.status}",
+                "withdrawal_id": withdrawal.pk,
+                "amount": str(withdrawal.amount),
+            },
+        )
+        return Response({
+            "id": withdrawal.pk,
+            "reference": withdrawal.reference,
+            "status": withdrawal.status,
+            "processed_at": withdrawal.processed_at,
+            "processing_note": withdrawal.processing_note,
+        })
+
     @action(detail=False, methods=["post"], url_path=r"payouts/(?P<payout_pk>\d+)/process")
-    def process_payout(self, request, payout_pk=None):
+    @transaction.atomic
+    @extend_schema(request=PayoutDecisionSerializer, responses=OpenApiTypes.OBJECT)
+    def process_payout(self, request: Request, payout_pk: str | None = None) -> Response:
+        decision = PayoutDecisionSerializer(data=request.data)
+        decision.is_valid(raise_exception=True)
         payout = get_object_or_404(StorePayout.objects.select_related("store", "store__user", "wallet"), pk=payout_pk)
-        action_type = request.data.get("action", "approve")
+        action_type = decision.validated_data["action"]
         recipient_user = (payout.store and payout.store.user) or (payout.wallet and payout.wallet.user)
 
         if action_type == "approve":
@@ -827,7 +966,7 @@ class StaffViewSet(viewsets.GenericViewSet):
                 )
             return Response({"detail": "Payout marked as completed.", "payout": StorePayoutSerializer(payout).data})
         else:
-            reason = request.data.get("reason", "Payout declined by compliance.")
+            reason = decision.validated_data["reason"]
             payout = process_payout_status_change(payout, action="reject", processed_by=request.user, notes=reason)
 
             if recipient_user:

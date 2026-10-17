@@ -7,12 +7,12 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.contrib.auth.models import update_last_login
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from affiliates.services import reward_referral
 from core.activity import record_activity
-from core.models import Device, User
+from core.models import Device, SocialAccount, User
 
 import sys
 
@@ -76,6 +76,9 @@ def verify_google_credential(credential: str) -> dict[str, Any]:
             'sub': f'mock-google-sub-{email}',
         }
 
+    if not client_id:
+        raise ValidationError({'detail': 'Google sign-in is not configured.'})
+
     # Attempt Google tokeninfo verification
     try:
         resp = requests.get(
@@ -92,29 +95,25 @@ def verify_google_credential(credential: str) -> dict[str, Any]:
                 raise ValidationError({'detail': 'Google email is not verified.'})
             if client_id and payload.get('aud') != client_id:
                 raise ValidationError({'detail': 'Google token audience mismatch.'})
+            # tokeninfo may omit profile claims included in the verified ID token.
+            # Use the token only after Google has accepted it and audience is checked.
+            picture = str(payload.get('picture') or '')
+            if not picture:
+                try:
+                    claims = jwt.decode(cred, options={'verify_signature': False})
+                    picture = str(claims.get('picture') or '')
+                except jwt.InvalidTokenError:
+                    logger.warning('Verified Google token profile claims unavailable')
             return {
                 'email': email,
                 'first_name': payload.get('given_name') or payload.get('name') or 'Google User',
                 'last_name': payload.get('family_name') or '',
                 'sub': payload.get('sub', ''),
+                'picture': picture,
             }
     except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
         # Request exceptions can contain the credential-bearing tokeninfo URL.
         logger.warning('Google verification request failed (%s)', type(exc).__name__)
-
-    if is_development_or_test():
-        try:
-            decoded = jwt.decode(cred, options={'verify_signature': False})
-            iss = decoded.get('iss', '')
-            if iss in ('accounts.google.com', 'https://accounts.google.com') and decoded.get('email'):
-                return {
-                    'email': str(decoded['email']).strip().lower(),
-                    'first_name': decoded.get('given_name') or decoded.get('name') or 'Google User',
-                    'last_name': decoded.get('family_name') or '',
-                    'sub': decoded.get('sub', ''),
-                }
-        except Exception:
-            pass
 
     raise ValidationError({'detail': 'Unable to verify Google credential. Please try again.'})
 
@@ -157,13 +156,13 @@ def verify_apple_credential(credential: str, user_info: dict[str, Any] | None = 
                 audience=client_id,
                 issuer='https://appleid.apple.com',
             )
-        elif is_development_or_test():
-            decoded = jwt.decode(cred, options={'verify_signature': False})
         else:
-            decoded = {}
+            raise ValidationError({'detail': 'Apple sign-in is not configured.'})
 
         iss = decoded.get('iss', '')
         if iss in ('https://appleid.apple.com', 'appleid.apple.com') and decoded.get('email'):
+            if decoded.get('email_verified') not in (True, 'true'):
+                raise ValidationError({'detail': 'Apple email is not verified.'})
             name_obj = (user_info or {}).get('name') or {}
             first_name = name_obj.get('firstName') or decoded.get('given_name') or 'Apple User'
             last_name = name_obj.get('lastName') or decoded.get('family_name') or ''
@@ -174,7 +173,7 @@ def verify_apple_credential(credential: str, user_info: dict[str, Any] | None = 
                 'sub': decoded.get('sub', ''),
             }
     except Exception as exc:
-        logger.warning('Apple token verification failed: %s', exc)
+        logger.warning('Apple token verification failed (%s)', type(exc).__name__)
 
     raise ValidationError({'detail': 'Unable to verify Apple credential. Please try again.'})
 
@@ -197,7 +196,17 @@ def authenticate_social_user(provider: str, data: dict[str, Any], request: Any =
     last_name = str(verified.get('last_name') or '')[:30]
     referral_code = str(data.get('referral_code') or '').strip()
 
-    user = User.objects.filter(email__iexact=email).first()
+    subject = str(verified.get('sub') or '').strip()
+    if not subject or len(subject) > 255:
+        raise ValidationError({'detail': 'Unable to identify the provider account.'})
+    identity = SocialAccount.objects.select_related('user').filter(
+        provider=clean_provider, subject=subject
+    ).first()
+    if identity and not identity.connected:
+        raise PermissionDenied('This sign-in method was disconnected. Use another method and reconnect it in settings.')
+    user = identity.user if identity else User.objects.filter(email__iexact=email).first()
+    if user:
+        user = User.objects.select_for_update().get(pk=user.pk)
     is_new_user = False
 
     if user:
@@ -221,10 +230,30 @@ def authenticate_social_user(provider: str, data: dict[str, Any], request: Any =
             is_business_admin=False,
         )
         user.set_unusable_password()
-        user.save()
+        try:
+            with transaction.atomic():
+                user.save()
+        except IntegrityError:
+            user = User.objects.select_for_update().filter(email__iexact=email).first()
+            if user is None:
+                raise ValidationError({'detail': 'Unable to create your account. Please try again.'}) from None
+            from core.social_accounts import customer_only
+            customer_only(user)
+            is_new_user = False
         # Affiliate referral sync for new signups
-        if referral_code:
+        if referral_code and is_new_user:
             reward_referral(referral_code, user)
+
+    from core.social_accounts import attach_identity
+    already_known = SocialAccount.objects.filter(provider=clean_provider, subject=subject).exists()
+    attach_identity(user, clean_provider, verified, login=True)
+    if not already_known and not is_new_user:
+        from core.social_accounts import notify_method
+        notify_method(user, clean_provider, 'connected')
+
+    if clean_provider == 'google':
+        from core.social_avatar import import_google_avatar
+        import_google_avatar(user, str(verified.get('picture') or ''))
 
     update_last_login(None, user)
     if request:

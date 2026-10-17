@@ -86,8 +86,9 @@ class ProductSerializer(TaggitSerializer, serializers.ModelSerializer):
             data['image_url'] = normalize_media_url(data['image_url'])
         return data
 
-    def get_likes_count(self, product):
-        return getattr(product, "likes_count", product.wishlist_set.count())
+    def get_likes_count(self, product: Product) -> int:
+        likes_count = getattr(product, "likes_count", None)
+        return likes_count if likes_count is not None else product.wishlist_set.count()
 
     def get_is_liked(self, product):
         request = self.context.get("request")
@@ -129,8 +130,9 @@ class ProductCardSerializer(serializers.ModelSerializer):
             "is_digital",
         ]
 
-    def get_likes_count(self, product):
-        return getattr(product, "likes_count", product.wishlist_set.count())
+    def get_likes_count(self, product: Product) -> int:
+        likes_count = getattr(product, "likes_count", None)
+        return likes_count if likes_count is not None else product.wishlist_set.count()
 
     def get_is_liked(self, product):
         request = self.context.get("request")

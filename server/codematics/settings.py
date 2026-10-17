@@ -205,15 +205,21 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 MEDIA_URL = "/media/"
 
-# Object storage is optional locally. Production can enable any S3-compatible
-# provider through the same django-storages settings below.
+# Application media is persisted exclusively in S3-compatible object storage.
+# Offline test settings replace this backend with isolated in-memory storage.
 try:
     import boto3  # noqa: F401
     HAS_BOTO3 = True
 except ImportError:
     HAS_BOTO3 = False
 
-OBJECT_STORAGE_ENABLED = os.environ.get('OBJECT_STORAGE_ENABLED', 'true').lower() == 'true' and HAS_BOTO3
+OBJECT_STORAGE_ENABLED = os.environ.get('OBJECT_STORAGE_ENABLED', 'true').lower() == 'true'
+if not OBJECT_STORAGE_ENABLED:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('MinIO/S3 object storage is required for application media.')
+if OBJECT_STORAGE_ENABLED and not HAS_BOTO3:
+    from django.core.exceptions import ImproperlyConfigured
+    raise ImproperlyConfigured('Object storage requires the configured S3 storage dependencies.')
 MINIO_ENDPOINT_URL = os.environ.get('MINIO_ENDPOINT_URL', 'http://127.0.0.1:9000')
 MINIO_PUBLIC_URL = os.environ.get('MINIO_PUBLIC_URL', MINIO_ENDPOINT_URL).rstrip('/')
 MINIO_BUCKET_NAME = os.environ.get('MINIO_BUCKET_NAME', 'commerce-images')
@@ -257,9 +263,6 @@ if OBJECT_STORAGE_ENABLED:
     }
     MEDIA_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/media/'
     STATIC_URL = f'{MINIO_PUBLIC_URL}/{MINIO_BUCKET_NAME}/static/'
-else:
-    STORAGES['default'] = {'BACKEND': 'django.core.files.storage.FileSystemStorage'}
-    MEDIA_URL = '/media/'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.1/ref/settings/#default-auto-field
@@ -311,6 +314,12 @@ ELASTICSEARCH_NOTIFICATIONS_INDEX = os.environ.get(
     f"{ELASTICSEARCH_INDEX_PREFIX}-notifications",
 )
 ELASTICSEARCH_TIMEOUT = float(os.environ.get("ELASTICSEARCH_TIMEOUT", "2"))
+ELASTICSEARCH_CONNECTIONS_PER_NODE = max(
+    1, min(64, int(os.environ.get('ELASTICSEARCH_CONNECTIONS_PER_NODE', '32')))
+)
+SEARCH_REQUEST_CACHE_ENABLED = os.environ.get(
+    "SEARCH_REQUEST_CACHE_ENABLED", "true"
+).lower() == "true"
 
 CORS_ALLOW_METHODS = [
     "DELETE",
@@ -458,6 +467,15 @@ CELERY_TASK_ROUTES = {
         "queue": CELERY_TASK_DEFAULT_QUEUE,
     },
     "notification.tasks.recover_notification_deliveries": {
+        "queue": CELERY_TASK_DEFAULT_QUEUE,
+    },
+    "product.tasks.index_product_task": {
+        "queue": CELERY_TASK_DEFAULT_QUEUE,
+    },
+    "product.tasks.index_store_products_task": {
+        "queue": CELERY_TASK_DEFAULT_QUEUE,
+    },
+    "product.tasks.delete_product_task": {
         "queue": CELERY_TASK_DEFAULT_QUEUE,
     },
 }

@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test';
 
+declare global {
+  interface Window {
+    __notificationEventSource?: EventTarget;
+  }
+}
+
 test('active store survives merchant navigation and reloads, and switching resets order filters', async ({ page }) => {
   let trackingPayload: unknown;
   await page.route('**/api/**', async route => {
@@ -15,6 +21,9 @@ test('active store survives merchant navigation and reloads, and switching reset
     else if (/\/orders$/.test(path)) {
       const results = path === '/api/stores/2/orders' ? [{
         id: 20, reference: 'BUSY-ORDER', status: 'confirmed', created: '2026-10-01',
+        order_status: 'confirmed', has_physical_items: true,
+        customer: { name: 'Buyer One', email: 'buyer@test.com', phone: '+12025550123' },
+        shipping_address: { address: '1 Main Street', city: 'Tampa', state: 'FL', zip: '33602' },
         items: [{ product: 30, title: 'Test product', quantity: 1 }],
       }] : [];
       json = { count: results.length, results };
@@ -25,7 +34,14 @@ test('active store survives merchant navigation and reloads, and switching reset
   });
   await page.goto('/merchant/orders');
   await page.getByRole('combobox', { name: 'Select store' }).selectOption('2');
-  await expect(page.getByText('BUSY-ORDER', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'View details for order BUSY-ORDER' })).toBeVisible();
+  await page.getByRole('button', { name: 'View details for order BUSY-ORDER' }).click();
+  const orderDialog = page.getByRole('dialog');
+  await expect(orderDialog.getByRole('heading', { name: '#BUSY-ORDER' })).toBeVisible();
+  await expect(orderDialog.getByText('buyer@test.com')).toBeVisible();
+  await expect(orderDialog.getByText(/Test product × 1/)).toBeVisible();
+  await expect(orderDialog.getByRole('button', { name: 'Print details' })).toBeVisible();
+  await orderDialog.getByRole('button', { name: 'Done' }).click();
   await page.getByRole('button', { name: 'Ship / Track' }).click();
   const dialog = page.getByRole('dialog');
   await expect(dialog.getByLabel('Shipping Carrier')).toHaveValue('USPS');
@@ -43,14 +59,199 @@ test('active store survives merchant navigation and reloads, and switching reset
   await page.locator('.merchant-sidebar').getByRole('link', { name: 'Store settings' }).click();
   await expect(page.getByRole('combobox', { name: 'Select store' })).toHaveValue('2');
   await page.locator('.merchant-sidebar').getByRole('link', { name: 'Orders', exact: true }).click();
-  await expect(page.getByText('BUSY-ORDER', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'View details for order BUSY-ORDER' })).toBeVisible();
   await page.reload();
   await expect(page.getByRole('combobox', { name: 'Select store' })).toHaveValue('2');
-  await expect(page.getByText('BUSY-ORDER', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'View details for order BUSY-ORDER' })).toBeVisible();
   await page.getByRole('combobox', { name: 'Filter orders by status' }).selectOption('delivered');
   await page.getByRole('combobox', { name: 'Select store' }).selectOption('1');
   await expect(page.getByRole('combobox', { name: 'Filter orders by status' })).toHaveValue('');
   await expect(page.getByText('Your customer orders will appear here.')).toBeVisible();
+});
+
+test('a merchant order notification deep link opens the matching store order details', async ({ page }) => {
+  const requestedOrderIds: string[] = [];
+  await page.route('**/api/**', async route => {
+    const url = new URL(route.request().url());
+    const path = url.pathname.replace(/\/$/, '');
+    if (path === '/api/me') {
+      await route.fulfill({ json: { id: 7, first_name: 'Seller', email: 'seller@test.com' } });
+      return;
+    }
+    if (path === '/api/stores') {
+      await route.fulfill({ json: { count: 1, results: [{ id: 2, name: 'Busy store', status: 'approved' }] } });
+      return;
+    }
+    if (path === '/api/stores/2') {
+      await route.fulfill({ json: { id: 2, name: 'Busy store', status: 'approved' } });
+      return;
+    }
+    if (path === '/api/stores/2/orders') {
+      requestedOrderIds.push(url.searchParams.get('order_id') || '');
+      await route.fulfill({ json: {
+        count: 1,
+        results: [{
+          id: 20,
+          reference: 'BUSY-ORDER',
+          status: 'confirmed',
+          order_status: 'confirmed',
+          created: '2026-10-01',
+          has_physical_items: true,
+          customer: { name: 'Buyer One', email: 'buyer@test.com', phone: '+12025550123' },
+          items: [{ product: 30, title: 'Test product', quantity: 1 }],
+        }],
+      } });
+      return;
+    }
+    if (path === '/api/cart') {
+      await route.fulfill({ json: { items: [], subtotal: '0', shipping: '0', total: '0' } });
+      return;
+    }
+    if (path === '/api/wishlist') {
+      await route.fulfill({ json: [] });
+      return;
+    }
+    await route.fulfill({ json: [] });
+  });
+
+  await page.goto('/merchant/orders?store=2&order=20');
+  await expect(page.getByRole('combobox', { name: 'Select store' })).toHaveValue('2');
+  await expect(page.getByRole('dialog').getByRole('heading', { name: '#BUSY-ORDER' })).toBeVisible();
+  expect(requestedOrderIds).toContain('20');
+  await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click();
+  await expect(page).toHaveURL('/merchant/orders');
+});
+
+test('merchant payment references open printable payout and ledger details', async ({ page }) => {
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path === '/api/me') {
+      await route.fulfill({ json: { id: 7, first_name: 'Seller', email: 'seller@test.com' } });
+      return;
+    }
+    if (path === '/api/stores') {
+      await route.fulfill({ json: { count: 1, results: [{ id: 2, name: 'Busy store', status: 'approved' }] } });
+      return;
+    }
+    if (path === '/api/stores/2') {
+      await route.fulfill({ json: { id: 2, name: 'Busy store', status: 'approved' } });
+      return;
+    }
+    if (path === '/api/stores/2/dashboard') {
+      await route.fulfill({ json: { wallet: {}, sales: {} } });
+      return;
+    }
+    if (path === '/api/stores/2/payouts') {
+      await route.fulfill({ json: { count: 1, results: [{
+        id: 41,
+        store: 2,
+        store_name: 'Busy store',
+        amount: '42.50',
+        status: 'pending',
+        payout_method: 'bank_transfer',
+        account_details: { bank_name: 'Example Bank', account_number: '1234567890' },
+        reference: 'PAY-REF-41',
+        processed_at: null,
+        notes: 'Weekly settlement',
+        created: '2026-10-01T10:00:00Z',
+      }] } });
+      return;
+    }
+    if (path === '/api/stores/wallet/ledger') {
+      await route.fulfill({ json: { count: 1, results: [{
+        id: 51,
+        wallet: 9,
+        store: 2,
+        store_name: 'Busy store',
+        store_username: 'busy-store',
+        order: 20,
+        entry_type: 'sale',
+        gross_amount: '100.00',
+        fee_amount: '4.00',
+        net_amount: '96.00',
+        status: 'available',
+        available_at: '2026-10-08T10:00:00Z',
+        cleared_at: '2026-10-08T10:00:00Z',
+        description: 'Sale from order BUSY-ORDER',
+        reference: 'LEDGER-REF-51',
+        created: '2026-10-01T10:00:00Z',
+      }] } });
+      return;
+    }
+    if (path === '/api/cart') {
+      await route.fulfill({ json: { items: [], subtotal: '0', shipping: '0', total: '0' } });
+      return;
+    }
+    await route.fulfill({ json: [] });
+  });
+
+  await page.goto('/merchant/payments');
+  await page.getByRole('button', { name: 'View payout PAY-REF-41 details' }).click();
+  const payoutDialog = page.getByRole('dialog');
+  await expect(payoutDialog.getByRole('heading', { name: 'Payout PAY-REF-41' })).toBeVisible();
+  await expect(payoutDialog.getByText('********7890')).toBeVisible();
+  await expect(payoutDialog.getByRole('button', { name: 'Print details' })).toBeVisible();
+  await payoutDialog.getByRole('button', { name: 'Done' }).click();
+
+  await page.getByRole('button', { name: 'Store Earnings Ledger' }).click();
+  await page.getByRole('button', { name: 'View ledger entry LEDGER-REF-51 details' }).click();
+  const ledgerDialog = page.getByRole('dialog');
+  await expect(ledgerDialog.getByRole('heading', { name: 'Ledger entry LEDGER-REF-51' })).toBeVisible();
+  await expect(ledgerDialog.getByText('$96.00')).toBeVisible();
+  await expect(ledgerDialog.getByRole('button', { name: 'Print details' })).toBeVisible();
+});
+
+test('notification stream refreshes notification data without refreshing unrelated page data', async ({ page }) => {
+  let storeCollectionRequests = 0;
+  let notificationCountRequests = 0;
+  await page.addInitScript(() => {
+    class TestEventSource extends EventTarget {
+      readonly readyState: number = 1;
+
+      constructor() {
+        super();
+        window.__notificationEventSource = this;
+      }
+
+      close(): void {}
+    }
+    Object.defineProperty(window, 'EventSource', { configurable: true, value: TestEventSource });
+  });
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path === '/api/me') {
+      await route.fulfill({ json: { id: 7, first_name: 'Seller', email: 'seller@test.com' } });
+      return;
+    }
+    if (path === '/api/stores') {
+      storeCollectionRequests += 1;
+      await route.fulfill({ json: { count: 1, results: [{ id: 2, name: 'Busy store', status: 'approved' }] } });
+      return;
+    }
+    if (path === '/api/stores/2') {
+      await route.fulfill({ json: { id: 2, name: 'Busy store', status: 'approved' } });
+      return;
+    }
+    if (path === '/api/notifications/counts') {
+      notificationCountRequests += 1;
+      await route.fulfill({ json: { unread: 0 } });
+      return;
+    }
+    if (path === '/api/cart') {
+      await route.fulfill({ json: { items: [], subtotal: '0', shipping: '0', total: '0' } });
+      return;
+    }
+    await route.fulfill({ json: [] });
+  });
+
+  await page.goto('/merchant/orders');
+  await expect(page.getByRole('combobox', { name: 'Select store' })).toHaveValue('2');
+  await expect.poll(() => notificationCountRequests).toBeGreaterThan(0);
+  await page.waitForTimeout(250);
+  const initialNotificationCountRequests = notificationCountRequests;
+  await page.evaluate(() => window.__notificationEventSource?.dispatchEvent(new Event('ready')));
+  await expect.poll(() => notificationCountRequests).toBeGreaterThan(initialNotificationCountRequests);
+  expect(storeCollectionRequests).toBe(1);
 });
 
 test('a product outside the selected store explains the store boundary', async ({ page }) => {
@@ -200,6 +401,12 @@ test('onboarding preview includes unsaved variants and a flash deal', async ({ p
   await expect(preview.getByRole('button', { name: /Blue \/ Large/ })).toBeVisible();
   await expect(preview.getByLabel(/Flash deal ends in/)).toBeVisible();
   await expect(preview.getByLabel(/Flash deal ends in/)).toContainText(/\d{2}:\d{2}:\d{2}:\d{2}/);
+  const previewTimer = preview.getByLabel(/Flash deal ends in/);
+  const previewTimerBox = await previewTimer.boundingBox();
+  const previewPriceBox = await preview.locator('.detail-price').boundingBox();
+  expect(previewTimerBox).not.toBeNull();
+  expect(previewPriceBox).not.toBeNull();
+  expect(previewTimerBox!.width).toBeLessThan(previewPriceBox!.width / 2);
   await preview.getByRole('button', { name: /Blue \/ Large/ }).click();
   await expect(preview.getByRole('button', { name: /Blue \/ Large/ })).toHaveAttribute('aria-pressed', 'true');
   await expect(preview.locator('.detail-price > strong')).toHaveText('$25.00');
@@ -243,4 +450,40 @@ test('ClickBank editor hides local promotions and previews vendor-controlled pri
   await expect(preview.locator('.detail-price del')).toHaveCount(0);
   await expect(preview.locator('.flash-deal-badge')).toHaveCount(0);
   await preview.close();
+});
+
+test('merchant payout form uses a compact saved-account popup and submits its ID', async ({page}, testInfo) => {
+  let payload: Record<string, unknown> | null = null;
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
+    if (path === '/api/me') return route.fulfill({json: {id:7,first_name:'Seller',email:'seller@test.com'}});
+    if (path === '/api/stores') return route.fulfill({json: {count:1,results:[{id:2,name:'Busy store',status:'approved'}]}});
+    if (path === '/api/stores/2') return route.fulfill({json: {id:2,name:'Busy store',status:'approved'}});
+    if (path === '/api/stores/2/dashboard') return route.fulfill({json: {wallet:{available_balance:'100.00',withdrawable_balance:'50.00'},sales:{}}});
+    if (path === '/api/bank-accounts') return route.fulfill({json:[{id:81,bank_name:'Example Bank',account_holder_name:'Seller',account_last4:'7890',routing_last4:'2345',is_default:true}]});
+    if (path === '/api/stores/2/payouts' && route.request().method() === 'POST') {
+      payload = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({status:201,json:{id:41,status:'pending'}});
+    }
+    if (path === '/api/cart') return route.fulfill({json:{items:[],subtotal:'0',total:'0'}});
+    if (path.includes('notifications')) return route.fulfill({json:{unread:0,total:0}});
+    if (path === '/api/stores/2/payouts' || path === '/api/stores/wallet/ledger') return route.fulfill({json:{count:0,results:[]}});
+    return route.fulfill({json:[]});
+  });
+  await page.goto('/merchant/payments');
+  await page.getByRole('button',{name:'Request payout',exact:true}).click();
+  await expect(page.getByLabel('Amount (USD)')).toHaveAttribute('max','50');
+  await page.getByLabel('Amount (USD)').fill('25.00');
+  await page.getByRole('button',{name:'Change',exact:true}).click();
+  const picker = page.getByRole('dialog',{name:'Select bank account'});
+  await expect(picker.getByRole('link',{name:'Manage payout accounts'})).toBeVisible();
+  await expect(picker.getByRole('button',{name:'Edit',exact:true})).toBeVisible();
+  await picker.getByRole('button',{name:/Example Bank/}).click();
+  for (const theme of ['light','dark']) {
+    await page.evaluate(theme => {document.documentElement.dataset.theme = theme;}, theme);
+    await page.locator('.merchant-payout-panel').screenshot({path:testInfo.outputPath(`merchant-payout-${theme}.png`)});
+  }
+  await page.getByRole('button',{name:'Request withdrawal',exact:true}).click();
+  await expect.poll(() => payload).toMatchObject({amount:'25.00',payout_method:'bank_transfer',bank_account_id:81});
+  await expect(page.getByRole('heading',{name:'Request store payout',exact:true})).toHaveCount(0);
 });

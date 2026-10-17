@@ -6,14 +6,13 @@ from django.db.models import Count, Q, Sum
 from django.db.models.functions import Coalesce
 from drf_spectacular.utils import extend_schema
 from rest_framework import serializers
-from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from affiliates.models import Marketer, Referral
 from affiliates.services import MAX_REWARDED_REFERRALS, REFERRAL_REWARD_AMOUNT
-from core.access import IsBackoffice
+from core.access import IsBackoffice, IsCustomer
 from core.listing_filters import ListingQuerySerializer, filter_records, record_page
 
 
@@ -97,7 +96,7 @@ class AffiliateOperatorQuerySerializer(ListingQuerySerializer):
 
 
 class ReferralWorkspaceView(APIView):
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsCustomer]
 
     @extend_schema(parameters=[ListingQuerySerializer], responses=ReferralWorkspaceSerializer)
     def get(self, request: Request) -> Response:
@@ -130,7 +129,9 @@ class AffiliateOperatorView(APIView):
 
     @extend_schema(parameters=[AffiliateOperatorQuerySerializer], responses=AffiliateOperatorPageSerializer)
     def get(self, request: Request) -> Response:
-        tab = request.query_params.get('tab', 'affiliates')
+        query = AffiliateOperatorQuerySerializer(data=request.query_params)
+        query.is_valid(raise_exception=True)
+        tab = query.validated_data.get('tab', 'affiliates')
         if tab == 'referrals':
             referrals = Referral.objects.select_related('referred_user', 'marketer__user', 'wallet_transaction')
             records = filter_records(

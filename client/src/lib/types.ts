@@ -187,7 +187,7 @@ export type Cart = {
   id?: number;
   items: CartLine[];
   subtotal: string;
-  shipping: string;
+  shipping: string | null;
   total: string;
 };
 
@@ -214,6 +214,7 @@ export type TrackingEvent = {
 
 export type OrderFulfillment = {
   store: number;
+  store_name: string;
   status: string;
   carrier: string;
   tracking_number: string;
@@ -486,6 +487,7 @@ export type Dashboard = {
     payouts_completed?: string;
     payouts_pending?: string;
     available_balance: string;
+    withdrawable_balance?: string;
     refund_window_days: number;
   };
   orders_by_day: { date: string; count: number }[];
@@ -611,6 +613,7 @@ export type AdminRefund = {
   accepted: boolean;
   status: 'pending' | 'approved' | 'declined' | 'failed';
   processed_by?: number | null;
+  processed_by_email?: string | null;
   processed_at?: string | null;
   provider_reference?: string;
   failure_reason?: string;
@@ -622,6 +625,7 @@ export type StoreAuditProduct = LifecycleTimestamps & {
   title: string;
   category: string;
   price: string;
+  sales: number;
   visibility: boolean;
   is_digital: boolean;
   has_digital_asset: boolean;

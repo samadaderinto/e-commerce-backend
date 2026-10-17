@@ -6,7 +6,7 @@ import { CollectionCount, CollectionFilters, CollectionPagination, financialFiel
 import { DateStamp, activityDate } from './activity';
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { FormEvent, type JSX, useState } from "react";
+import { FormEvent, type JSX, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -71,6 +71,7 @@ import {
   AddToBagButton,
   ProductGallery,
   ProductImage,
+  ResponsiveMediaImage,
   Quantity,
   VerifiedBadge,
 } from "./ui";
@@ -116,11 +117,14 @@ export function HomePage() {
   return (
     <>
       <section className="hero">
-        <img
+        <ResponsiveMediaImage
           className="hero-image"
           src="https://images.unsplash.com/photo-1505740420928-5e560c06d30e?auto=format&fit=crop&w=2000&q=90"
           alt="Yellow studio backdrop with a pair of over-ear headphones"
-          fetchPriority="high"
+          priority
+          sizes="100vw"
+          width={2400}
+          height={1200}
         />
         <div className="container hero-content">
           <span className="eyebrow">THE EVERYDAY EDIT · VOL. 01</span>
@@ -192,10 +196,12 @@ export function HomePage() {
           <Link className="button" href="/shop?deals=true">
             Discover everyday deals <ArrowUpRight size={17} />
           </Link>
-          <img
+          <ResponsiveMediaImage
             src="https://images.unsplash.com/photo-1523275335684-37898b6baf30?auto=format&fit=crop&w=800&q=85"
             alt="Minimal white watch with a grey strap"
-            loading="lazy"
+            sizes="(max-width: 720px) 45vw, 320px"
+            width={640}
+            height={640}
           />
         </div>
       </section>
@@ -392,10 +398,13 @@ export function ShopPage() {
                 }}
               >
                 {storeProfile?.avatar_url ? (
-                  <img
+                  <ResponsiveMediaImage
                     src={storeProfile.avatar_url}
                     alt={storeName}
                     style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    sizes="112px"
+                    width={224}
+                    height={224}
                   />
                 ) : (
                   <span style={{ fontSize: "36px", fontWeight: 700, color: "var(--green)" }}>
@@ -409,8 +418,7 @@ export function ShopPage() {
                 {storeProfile?.email && (
                   <a
                     href={`mailto:${storeProfile.email}?subject=Inquiry regarding ${storeName}`}
-                    className="button secondary"
-                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                    className="button secondary compact pill"
                   >
                     <Mail size={14} /> Message Store
                   </a>
@@ -420,8 +428,7 @@ export function ShopPage() {
                     href={storeProfile.website}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="button secondary"
-                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                    className="button secondary compact pill"
                   >
                     <Globe size={14} /> Website <ArrowUpRight size={12} />
                   </a>
@@ -429,8 +436,7 @@ export function ShopPage() {
                 {storeProfile?.phone1 && (
                   <a
                     href={`tel:${storeProfile.phone1}`}
-                    className="button secondary"
-                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                    className="button secondary compact pill"
                   >
                     <Phone size={14} /> {storeProfile.phone1}
                   </a>
@@ -440,8 +446,7 @@ export function ShopPage() {
                     href={`https://wa.me/${String(storeProfile.whatsapp).replace(/\D/g, "")}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="button secondary"
-                    style={{ minHeight: "34px", padding: "6px 13px", fontSize: "11px", borderRadius: "20px" }}
+                    className="button secondary compact pill"
                   >
                     <MessageCircle size={14} /> WhatsApp
                   </a>
@@ -741,7 +746,7 @@ export function ShopPage() {
 }
 
 export function ProductPage({ id }: { id: string }): JSX.Element {
-  const { add, notify, toggleSave, saved, user } = useShop();
+  const { cart, notify, toggleSave, saved, user } = useShop();
   const params = useSearchParams();
   const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const client = useQueryClient();
@@ -766,6 +771,21 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
   const [selectedVariantIdx, setSelectedVariantIdx] = useState<number | null>(null);
   const [selectedGalleryImage, setSelectedGalleryImage] = useState<string | null>(null);
   const [copied, setCopied] = useState<boolean>(false);
+  const productTabsRef = useRef<HTMLElement | null>(null);
+  const selectedVariantName = selectedVariantIdx !== null
+    ? productQuery.data?.variants?.[selectedVariantIdx]?.name || ""
+    : "";
+  const cartQuantity = productQuery.data
+    ? cart.items.find(
+        (row) =>
+          row.product.id === productQuery.data?.id &&
+          (row.product.selected_variant || "") === selectedVariantName
+      )?.quantity || 0
+    : 0;
+
+  useEffect(() => {
+    setQuantity(cartQuantity || 1);
+  }, [productQuery.data?.id, selectedVariantName, cartQuantity]);
 
   if (productQuery.isLoading) return <Loading />;
   if (productQuery.error) {
@@ -797,28 +817,43 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
     ? Math.min(product.available, activeVariant.available)
     : product.available;
   const effectiveStock = product.is_digital ? 99 : isSoldOut ? 0 : Math.max(0, variantStock);
+  const selectedQuantity = quantity;
   const variantPriceDelta = activeVariant?.price_delta ? Number(activeVariant.price_delta) : 0;
   const effectiveSalePrice = isAffiliate
     ? Number(product.price).toFixed(2)
     : (Number(product.sale_price) + variantPriceDelta).toFixed(2);
   const effectiveOriginalPrice = (Number(product.price) + variantPriceDelta).toFixed(2);
   const liked = saved.some((row) => row.id === product.id);
+
+  function openReviews(): void {
+    setTab("reviews");
+    window.requestAnimationFrame(() => {
+      productTabsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
   async function review(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form));
     setReviewBusy(true);
     try {
-      const imagesRaw = (data.images as string || "")
+      const images = (data.images as string || "")
         .split(/[\n,]/)
         .map((s) => s.trim())
-        .filter((s) => s.length > 0 && (s.startsWith("http://") || s.startsWith("https://") || s.startsWith("data:image/")));
+        .filter((s) => s.length > 0);
+      if (images.length > 3) {
+        throw new Error("You can attach up to 3 photos to a review.");
+      }
+      if (images.some((imageUrl) => !imageUrl.startsWith("https://"))) {
+        throw new Error("Review photo links must use HTTPS.");
+      }
 
       await api(`products/${id}/reviews`, "POST", {
         rating: Number(data.rating),
         label: data.label,
         comment: data.comment,
-        images: imagesRaw.slice(0, 3),
+        images,
       });
       await client.invalidateQueries({ queryKey: ["reviews", id] });
       await client.invalidateQueries({ queryKey: ["product", id] });
@@ -843,42 +878,38 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
     }
   }
 
-  async function handleShare() {
+  async function handleCopyLink() {
     const url = typeof window !== 'undefined' ? window.location.href : `/products/${id}`;
-    const shareData = {
-      title: product.title,
-      text: `Check out ${product.title} on ProAce!`,
-      url,
-    };
-
-    let shared = false;
-    if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare && navigator.canShare(shareData)) {
-      try {
-        await navigator.share(shareData);
-        shared = true;
-      } catch (err) {
-        if ((err as Error).name === 'AbortError') return;
-      }
-    }
-
-    if (!shared) {
-      try {
-        if (typeof navigator !== 'undefined' && navigator.clipboard) {
+    try {
+      let copiedToClipboard = false;
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        try {
           await navigator.clipboard.writeText(url);
-        } else {
-          const textarea = document.createElement('textarea');
-          textarea.value = url;
-          document.body.appendChild(textarea);
+          copiedToClipboard = true;
+        } catch {
+          copiedToClipboard = false;
+        }
+      }
+      if (!copiedToClipboard) {
+        const textarea = document.createElement('textarea');
+        textarea.value = url;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        try {
           textarea.select();
-          document.execCommand('copy');
+          copiedToClipboard = document.execCommand('copy');
+        } finally {
           document.body.removeChild(textarea);
         }
-        setCopied(true);
-        notify('Product link copied to clipboard!');
-        setTimeout(() => setCopied(false), 2500);
-      } catch {
-        notify('Failed to copy link', true);
       }
+      if (!copiedToClipboard) throw new Error('Clipboard copy was rejected.');
+      setCopied(true);
+      notify('Product link copied to clipboard!');
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      notify('Failed to copy link', true);
     }
   }
 
@@ -912,7 +943,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             <button
               type="button"
               className="button secondary storefront-preview-button"
-              onClick={handleShare}
+              onClick={handleCopyLink}
               title="Copy preview link"
             >
               {copied ? <Check size={14} /> : <Share2 size={14} />}
@@ -989,7 +1020,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
               </strong>
             </span>
             <span style={{ color: "var(--line)" }}>•</span>
-            <button className="text-button" onClick={() => setTab("reviews")}>
+            <button className="text-button" onClick={openReviews}>
               {reviews.data?.length || product.rating_count || 0} reviews
             </button>
             {typeof product.sales === "number" && product.sales > 0 && (
@@ -1004,7 +1035,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             <button
               type="button"
               className="text-button"
-              onClick={handleShare}
+              onClick={handleCopyLink}
               title="Copy product link"
               style={{ display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}
             >
@@ -1122,7 +1153,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             <label className="field">
               <span>Quantity</span>
               <Quantity
-                value={effectiveStock <= 0 ? 0 : quantity}
+                value={selectedQuantity}
                 max={effectiveStock}
                 onChange={setQuantity}
                 disabled={effectiveStock <= 0}
@@ -1130,7 +1161,11 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             </label>
           )}
           <div className="purchase-actions">
-            <AddToBagButton quantity={quantity} product={{ ...product, selected_variant: activeVariant?.name || '', available: effectiveStock, title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title, sale_price: effectiveSalePrice, price: effectiveOriginalPrice }} />
+            <AddToBagButton
+              quantity={selectedQuantity}
+              mode="target"
+              product={{ ...product, selected_variant: activeVariant?.name || '', available: effectiveStock, title: activeVariant ? `${product.title} (${activeVariant.name})` : product.title, sale_price: effectiveSalePrice, price: effectiveOriginalPrice }}
+            />
             <button
               type="button"
               className={`button secondary ${liked ? "saved" : ""}`}
@@ -1150,7 +1185,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
               className={`button secondary ${copied ? "copied" : ""}`}
               aria-label="Share product"
               title={copied ? "Link copied!" : "Share product link"}
-              onClick={handleShare}
+              onClick={handleCopyLink}
             >
               {copied ? <Check size={20} style={{ color: "var(--green)" }} /> : <Share2 size={20} />}
             </button>
@@ -1277,7 +1312,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
           )}
         </div>
       </div>
-      <section className="product-tabs">
+      <section className="product-tabs" ref={productTabsRef}>
         <div className="tabs" role="tablist">
           {[
             ["details", "Product details"],
@@ -1444,10 +1479,13 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
                                 background: "var(--soft)"
                               }}
                             >
-                              <img
+                              <ResponsiveMediaImage
                                 src={imgUrl}
                                 alt={`Customer review photo ${idx + 1}`}
                                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                                sizes="70px"
+                                width={140}
+                                height={140}
                               />
                             </a>
                           ))}
@@ -1514,7 +1552,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
                           rows={4}
                         />
                       </Field>
-                      <Field label="Photo attachments (Up to 3 image URLs, optional)">
+                      <Field label="Photo attachments (Up to 3 HTTPS image URLs, optional)">
                         <input
                           name="images"
                           defaultValue={myReview?.images?.join(", ") || ""}

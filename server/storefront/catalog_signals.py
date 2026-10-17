@@ -61,7 +61,28 @@ def catalog_changed(sender: type, instance: Any, **kwargs: Any) -> None:
             )
         if store_id:
             Store.objects.filter(pk=store_id).update(updated=timezone.now())
+    if isinstance(instance, Product):
+        product_id = instance.pk
+        product_store_id = instance.store_id
+        transaction.on_commit(
+            lambda: _invalidate_product_payload(product_id, product_store_id)
+        )
+    elif isinstance(instance, ProductImg):
+        product_id = instance.product_id
+        product_store_id = Product.objects.filter(pk=product_id).values_list(
+            "store_id", flat=True
+        ).first()
+        if product_store_id is not None:
+            transaction.on_commit(
+                lambda: _invalidate_product_payload(product_id, product_store_id)
+            )
     invalidate_catalog_snapshot()
+
+
+def _invalidate_product_payload(product_id: int, store_id: int) -> None:
+    from product.cache import invalidate_product_payload_cache
+
+    invalidate_product_payload_cache(product_id, store_id)
 
 
 @receiver(post_save, sender=Tag)
@@ -69,9 +90,17 @@ def catalog_changed(sender: type, instance: Any, **kwargs: Any) -> None:
 def tag_changed(sender: type, instance: Tag, **kwargs: Any) -> None:
     if kwargs.get("raw"):
         return
-    stores = Product.objects.filter(tags=instance).values_list("store_id", flat=True)
+    products = tuple(Product.objects.filter(tags=instance).values_list("pk", "store_id"))
+    stores = {store_id for _, store_id in products}
     Store.objects.filter(pk__in=stores).update(updated=timezone.now())
+    transaction.on_commit(lambda: _invalidate_product_payloads(products))
     invalidate_catalog_snapshot()
+
+
+def _invalidate_product_payloads(products: tuple[tuple[int, int], ...]) -> None:
+    from product.cache import invalidate_product_payload_caches
+
+    invalidate_product_payload_caches(products)
 
 
 @receiver(m2m_changed, sender=TaggedItem)
@@ -85,9 +114,13 @@ def product_tags_changed(
         return
     if isinstance(instance, Product):
         Store.objects.filter(pk=instance.store_id).update(updated=timezone.now())
-    else:
-        stores = Product.objects.filter(tags=instance).values_list(
-            "store_id", flat=True
-        )
+        products = ((instance.pk, instance.store_id),)
+    elif isinstance(instance, Tag):
+        products = tuple(Product.objects.filter(tags=instance).values_list("pk", "store_id"))
+        stores = {store_id for _, store_id in products}
         Store.objects.filter(pk__in=stores).update(updated=timezone.now())
+    else:
+        # TaggedItem is shared by products and other tagged models, such as posts.
+        return
+    transaction.on_commit(lambda: _invalidate_product_payloads(products))
     invalidate_catalog_snapshot()

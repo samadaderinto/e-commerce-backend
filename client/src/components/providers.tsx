@@ -16,8 +16,12 @@ import {
 } from '@tanstack/react-query';
 import { Check, X, AlertCircle } from 'lucide-react';
 import { ThemeProvider } from './theme';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, cancelPendingApiRequests } from '@/lib/api';
+import { clearSignedInSession } from '@/lib/session-cache';
 import type { Cart, CartLine, Product, User } from '@/lib/types';
+import type { SocialCredential } from '@/lib/social-auth';
+
+type SocialLoginPayload = SocialCredential & { referral_code?: string };
 import { presentNotificationOnce } from '@/lib/notification-presentation';
 import { unregisterPushDevice } from '@/lib/firebase-messaging';
 
@@ -33,7 +37,7 @@ type Context = {
   setQuantity: (product: Product, quantity: number) => Promise<void>;
   toggleSave: (product: Product) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  socialLogin: (provider: 'google' | 'apple', payload: Record<string, any>) => Promise<User>;
+  socialLogin: (provider: 'google' | 'apple', payload: SocialLoginPayload) => Promise<User>;
   logout: () => Promise<void>;
 };
 
@@ -44,11 +48,18 @@ function ShopProvider({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   const session = useQuery({
     queryKey: ['me'],
-    queryFn: () => api<User>('me'),
+    queryFn: async (): Promise<User | null> => {
+      try {
+        return await api<User>('me');
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) return null;
+        throw error;
+      }
+    },
     retry: false,
     staleTime: 60000,
   });
-  const user = session.data;
+  const user = session.data ?? undefined;
   const consumer = !!user && !user.is_staff && !user.is_superuser && !user.is_business_admin;
   const [guest, setGuest] = useState<CartLine[]>([]);
   const [guestSaved, setGuestSaved] = useState<Product[]>([]);
@@ -79,13 +90,21 @@ function ShopProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (ready) {
-      localStorage.setItem('proace-cart', JSON.stringify(guest));
+      try {
+        localStorage.setItem('proace-cart', JSON.stringify(guest));
+      } catch {
+        // Optional persistence must not discard the in-memory shopping session.
+      }
     }
   }, [guest, ready]);
 
   useEffect(() => {
     if (ready) {
-      localStorage.setItem('proace-saved', JSON.stringify(guestSaved));
+      try {
+        localStorage.setItem('proace-saved', JSON.stringify(guestSaved));
+      } catch {
+        // Storage can be blocked or full; saved items remain usable in memory.
+      }
     }
   }, [guestSaved, ready]);
 
@@ -112,15 +131,14 @@ function ShopProvider({ children }: { children: ReactNode }) {
     (sum, row) => sum + Number(row.product.sale_price) * row.quantity,
     0
   );
-  const shipping =
-    subtotal >= 100000 || !guest.length || guest.every((row) => row.product.is_digital)
-      ? 0
-      : 2500;
-  const guestCart = {
+  const shipping: string | null = guest.some((row) => !row.product.is_digital)
+    ? null
+    : '0';
+  const guestCart: Cart = {
     items: guest,
     subtotal: String(subtotal),
-    shipping: String(shipping),
-    total: String(subtotal + shipping),
+    shipping,
+    total: String(subtotal),
   };
   const cart = user
     ? cartQuery.data || { items: [], subtotal: '0', shipping: '0', total: '0' }
@@ -137,7 +155,11 @@ function ShopProvider({ children }: { children: ReactNode }) {
       if (pending !== undefined) return;
       pending = window.setTimeout(() => {
         pending = undefined;
-        void client.invalidateQueries();
+        void Promise.all([
+          client.invalidateQueries({ queryKey: ['notifications'] }),
+          client.invalidateQueries({ queryKey: ['merchant-notifications'] }),
+          client.invalidateQueries({ queryKey: ['merchant-notifications-count'] }),
+        ]);
       }, 100);
     };
 
@@ -298,7 +320,14 @@ function ShopProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const saved = user ? savedQuery.data || [] : guestSaved;
+  const saved = user
+    ? [
+        ...(savedQuery.data || []),
+        ...guestSaved.filter(
+          (item) => !(savedQuery.data || []).some((savedItem) => savedItem.id === item.id)
+        ),
+      ]
+    : guestSaved;
 
   async function toggleSave(product: Product) {
     if (user && !consumer) {
@@ -307,6 +336,7 @@ function ShopProvider({ children }: { children: ReactNode }) {
     const exists = saved.some((item) => item.id === product.id);
     if (user) {
       await api('wishlist', exists ? 'DELETE' : 'POST', { product: product.id });
+      setGuestSaved((rows) => rows.filter((item) => item.id !== product.id));
       await client.invalidateQueries({ queryKey: ['saved'] });
     } else {
       setGuestSaved((rows) =>
@@ -316,7 +346,9 @@ function ShopProvider({ children }: { children: ReactNode }) {
     notify(exists ? 'Removed from saved items' : 'Saved for later');
   }
 
-  async function syncGuestSession(user: User): Promise<CartLine[]> {
+  async function syncGuestSession(
+    user: User
+  ): Promise<{ remainingCart: CartLine[]; remainingSaved: Product[] }> {
     await client.cancelQueries();
     client.clear();
     client.setQueryData(['me'], user);
@@ -324,7 +356,7 @@ function ShopProvider({ children }: { children: ReactNode }) {
       setGuest([]);
       setGuestSaved([]);
       await client.invalidateQueries({ queryKey: ['stores'] });
-      return [];
+      return { remainingCart: [], remainingSaved: [] };
     }
 
     const remaining: CartLine[] = [];
@@ -341,62 +373,96 @@ function ShopProvider({ children }: { children: ReactNode }) {
     }
     setGuest(remaining);
 
+    const remainingSaved: Product[] = [];
     for (const product of guestSaved) {
-      await api('wishlist', 'POST', { product: product.id }).catch(() => null);
+      try {
+        await api('wishlist', 'POST', { product: product.id });
+      } catch {
+        remainingSaved.push(product);
+      }
     }
-    setGuestSaved([]);
+    setGuestSaved(remainingSaved);
     await client.invalidateQueries();
     await client.invalidateQueries({ queryKey: ['saved'] });
-    return remaining;
+    return { remainingCart: remaining, remainingSaved };
+  }
+
+  function signInMergeMessage(
+    remainingCart: CartLine[],
+    remainingSaved: Product[],
+    welcome: string
+  ): string {
+    const messages = [welcome];
+    if (remainingCart.length) {
+      messages.push(
+        'Some guest cart items could not be added because they are unavailable or belong to your own store. Sign out to review them and retry.'
+      );
+    }
+    if (remainingSaved.length) {
+      messages.push('Some saved items could not sync and remain available in Saved items to retry.');
+    }
+    return messages.join(' ');
   }
 
   async function login(email: string, password: string) {
     const result = await api<{ user: User }>('auth/login', 'POST', { email, password });
-    const remaining = await syncGuestSession(result.user);
+    const { remainingCart, remainingSaved } = await syncGuestSession(result.user);
     notify(
-      remaining.length
-        ? 'Signed in. Some guest items could not be added because they are unavailable or belong to your own store.'
-        : `Welcome back, ${result.user.first_name}`
+      signInMergeMessage(
+        remainingCart,
+        remainingSaved,
+        `Welcome back, ${result.user.first_name}`
+      ),
+      remainingSaved.length > 0
     );
   }
 
   async function socialLogin(
     provider: 'google' | 'apple',
-    payload: Record<string, any>
+    payload: SocialLoginPayload
   ): Promise<User> {
     const result = await api<{ user: User; is_new_user?: boolean; provider?: string }>(
       `auth/${provider}`,
       'POST',
       payload
     );
-    const remaining = await syncGuestSession(result.user);
+    const { remainingCart, remainingSaved } = await syncGuestSession(result.user);
     notify(
-      remaining.length
-        ? 'Signed in. Some guest items could not be added because they are unavailable or belong to your own store.'
-        : result.is_new_user
+      signInMergeMessage(
+        remainingCart,
+        remainingSaved,
+        result.is_new_user
           ? `Welcome to ProAce, ${result.user.first_name}!`
           : `Welcome back, ${result.user.first_name}`
+      ),
+      remainingSaved.length > 0
     );
     return result.user;
   }
 
   async function logout() {
     let pushCleanupFailed = false;
+    let revocationFailed = false;
+    cancelPendingApiRequests();
+    await clearSignedInSession(client);
     try {
       await unregisterPushDevice();
     } catch {
       pushCleanupFailed = true;
     }
-    await api('auth/logout', 'POST', {});
-    client.clear();
-    client.setQueryData(['me'], null);
-    setGuest([]);
-    setGuestSaved([]);
-    notify(
-      pushCleanupFailed
-        ? 'You have been signed out, but browser push could not be disabled. The inbox will remain account-scoped.'
-        : 'You have been signed out'
-    );
+    try {
+      await api('auth/logout', 'POST', {});
+    } catch {
+      revocationFailed = true;
+    }
+    const messages = ['You have been signed out on this device.'];
+    if (pushCleanupFailed) {
+      messages.push('Browser push could not be disabled. The inbox will remain account-scoped.');
+    }
+    if (revocationFailed) {
+      messages.push('The server could not confirm session revocation. Change your password to revoke outstanding sessions.');
+    }
+    notify(messages.join(' '), revocationFailed);
   }
 
   return (

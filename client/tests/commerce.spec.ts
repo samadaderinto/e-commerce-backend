@@ -54,6 +54,13 @@ test('storefront, assets, search and saved items', async ({ page }, testInfo) =>
   const matches: ApiPage<Product> = await searchResponse.json();
   expect(matches.results.length).toBeGreaterThan(0);
   await expect(page.locator('.product-card')).toHaveCount(matches.results.length);
+  const firstProductPath = await page.locator('.product-card a[href^="/products/"]').first().getAttribute('href');
+  expect(firstProductPath).toBeTruthy();
+  await page.goto(firstProductPath!);
+  await page.getByRole('button', { name: /reviews/ }).click();
+  await expect(page.getByRole('tab', { name: /Reviews/ })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.product-tabs')).toBeInViewport();
+  await page.goto('/shop?search=headphones');
   await page.locator('.save-button').first().click();
   await page.goto('/saved');
   await expect(page.locator('.product-card')).toHaveCount(1);

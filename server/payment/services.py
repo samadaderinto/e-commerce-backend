@@ -14,6 +14,7 @@ from core.models import Refund, UserWalletTransaction
 from core.services import credit_user_wallet
 from notification.views import create_notification
 from payment.models import Order
+from payment.refund_messages import REFUND_FAILURE_MESSAGE
 from payment.accounting import order_paid_lines
 from store.models import Store
 from store.services import process_refund_deduction
@@ -35,6 +36,10 @@ ALLOWED_ORDER_TRANSITIONS: dict[str, set[str]] = {
     "refunded": set(),
 }
 logger = logging.getLogger(__name__)
+
+
+class RefundProviderError(ValidationError):
+    default_code = "refund_provider_failed"
 
 
 def validate_return_window(order: Order, items: list[dict[str, Any]]) -> None:
@@ -177,11 +182,19 @@ def remaining_inventory(order: Order) -> list[dict[str, Any]]:
 def process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund:
     try:
         return _process_order_refund(refund, actor, reason)
-    except ValidationError as exc:
-        if "Payment provider refund failed" in str(exc):
+    except RefundProviderError:
+        with transaction.atomic():
+            # Follow the order/refund lock ordering used by approval and decline.
+            Order.objects.select_for_update().filter(pk=refund.order_id).first()
+            current = Refund.objects.select_for_update().get(pk=refund.pk)
+            if current.status not in (Refund.STATUS_PENDING, Refund.STATUS_FAILED):
+                raise
             Refund.objects.filter(pk=refund.pk).update(
                 status=Refund.STATUS_FAILED,
-                failure_reason=str(exc),
+                failure_reason=REFUND_FAILURE_MESSAGE,
+                processed_by=actor,
+                processed_at=timezone.now(),
+                processing_reason=reason,
                 updated=timezone.now(),
             )
             refund.refresh_from_db()
@@ -319,9 +332,9 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
     except Exception as exc:
         refund.status = Refund.STATUS_FAILED
         logger.exception('Refund provider operation failed for refund %s', refund.pk)
-        refund.failure_reason = 'Payment provider refund failed. Support will review it.'
+        refund.failure_reason = REFUND_FAILURE_MESSAGE
         refund.save(update_fields=["status", "failure_reason", "updated"])
-        raise ValidationError({'detail': 'Payment provider refund failed. Please try again or contact support.'}) from exc
+        raise RefundProviderError({'detail': 'Payment provider refund failed. Please try again or contact support.'}) from exc
 
     with transaction.atomic():
         refund = Refund.objects.select_for_update().get(pk=refund.pk)
@@ -636,6 +649,25 @@ def execute_order_status_transition(
         )
 
     is_digital = is_digital_only_order(order)
+    if next_status == "cancelled":
+        if is_digital:
+            raise ValidationError(
+                {
+                    "detail": "Digital orders are fulfilled immediately and cannot be cancelled through the order status workflow."
+                }
+            )
+        from payment.fulfillment import ensure_fulfillments
+
+        ensure_fulfillments(order)
+        if previous in {"shipped", "delivered", "picked up"} or order.fulfillments.filter(
+            status__in=["shipped", "delivered", "picked up"]
+        ).exists():
+            raise ValidationError(
+                {
+                    "detail": "A physically fulfilled order cannot be cancelled. Use the refund workflow instead."
+                }
+            )
+
     if is_digital:
         if next_status in ("shipped", "picked up"):
             raise ValidationError(

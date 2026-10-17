@@ -152,6 +152,14 @@ class AdminSerializer(serializers.ModelSerializer):
 
 
 class RefundsSerializer(serializers.ModelSerializer):
+    failure_reason = serializers.SerializerMethodField()
+    processed_by_email = serializers.EmailField(source="processed_by.email", read_only=True, default=None)
+
+    def get_failure_reason(self, obj: Refund) -> str:
+        from payment.refund_messages import refund_failure_reason
+
+        return refund_failure_reason(obj)
+
     class Meta:
         model = Refund
         fields = [
@@ -163,6 +171,7 @@ class RefundsSerializer(serializers.ModelSerializer):
             "accepted",
             "status",
             "processed_by",
+            "processed_by_email",
             "processed_at",
             "provider_reference",
             "failure_reason",

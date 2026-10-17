@@ -1,5 +1,7 @@
 'use client';
 
+import { notificationAction } from '@/lib/notification-action';
+
 import { useDebouncedValue } from './collection-filters';
 
 
@@ -449,6 +451,8 @@ function NotificationCard({
   onDelete: () => void;
   isPending: boolean;
 }) {
+  const action = notificationAction(item);
+
   const levelIcon =
     item.level === 'success' ? (
       <CheckCircle size={17} className="icon-success" />
@@ -503,6 +507,11 @@ function NotificationCard({
 
         <div className="card-footer-meta">
           <span className="card-exact-date">{formattedDate}</span>
+          {action && (
+            <Link className="text-link notification-order-link" href={action.href}>
+              {action.label} <ArrowRight size={13} />
+            </Link>
+          )}
         </div>
       </div>
 

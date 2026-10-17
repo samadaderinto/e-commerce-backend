@@ -24,7 +24,7 @@ def reward_referral(referral_code: str, referred_user: Any) -> Optional[Referral
     code = str(referral_code or "").strip()
     if not code:
         return None
-    marketer = Marketer.objects.select_related("user").filter(
+    marketer = Marketer.objects.select_related("user").select_for_update().filter(
         marketer_id__iexact=code
     ).first()
     if marketer is None or marketer.user_id == referred_user.pk:
@@ -56,6 +56,7 @@ def reward_referral(referral_code: str, referred_user: Any) -> Optional[Referral
         description=f"Referral reward ($25.00) for inviting {referred_user.first_name or referred_user.email} ({rewarded_count + 1}/{MAX_REWARDED_REFERRALS})",
         source=UserWalletTransaction.SOURCE_REFERRAL,
         reference=f"REF-{referral.pk}",
+        idempotency_key=f"referral-reward-{referral.pk}",
     )
 
     wallet, _ = AffiliateWallet.objects.select_for_update().get_or_create(
@@ -68,7 +69,6 @@ def reward_referral(referral_code: str, referred_user: Any) -> Optional[Referral
         reason="referral_signup",
         metadata={
             "referral": referral.pk,
-            "referred_user": referred_user.pk,
             "referral_code": referral_code,
             "wallet_credited": True,
             "reward_number": rewarded_count + 1,

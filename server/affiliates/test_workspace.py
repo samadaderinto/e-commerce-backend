@@ -75,3 +75,35 @@ class ReferralWorkspaceTests(TestCase):
         self.assertEqual(first_ref['marketer']['name'], 'Owner')
         self.assertIn('@test.com', first_ref['referred_user']['email'])
 
+    def test_operator_credit_totals_are_not_multiplied_by_referral_counts(self) -> None:
+        self.client.force_authenticate(self.owner)
+        response = self.client.get('/api/v1/admin/affiliates/?search=referral-owner')
+        self.assertEqual(response.status_code, 403)
+
+        staff = User.objects.create_user(
+            email='affiliate-totals-staff@test.com', password='Password123!', is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        response = self.client.get('/api/v1/admin/affiliates/?search=referral-owner')
+        self.assertEqual(response.status_code, 200)
+        row = response.data['results'][0]
+        self.assertEqual(row['referral_count'], 5)
+        self.assertEqual(row['rewarded_count'], 4)
+        self.assertEqual(row['credit_earned'], '100.00')
+
+    def test_customer_referral_filter_validation_is_returned_as_400(self) -> None:
+        self.client.force_authenticate(self.owner)
+        response = self.client.get('/api/v1/affiliates/workspace/?status=unknown')
+        self.assertEqual(response.status_code, 400)
+
+    def test_workspace_rejects_backoffice_and_operator_rejects_unknown_tab(self) -> None:
+        staff = User.objects.create_user(
+            email='affiliate-boundary-staff@test.com', password='Password123!', is_staff=True,
+        )
+        self.client.force_authenticate(staff)
+        self.assertEqual(self.client.get('/api/v1/affiliates/workspace/').status_code, 403)
+        self.assertEqual(
+            self.client.get('/api/v1/admin/affiliates/?tab=unexpected').status_code,
+            400,
+        )
+

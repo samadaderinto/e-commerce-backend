@@ -20,6 +20,7 @@ from store.models import (
 from store.services import calculate_store_tier
 from utils.functions import normalize_media_url
 from utils.digital_previews import is_image_digital_asset
+from utils.image_uploads import ImageUploadError, normalize_public_image
 
 
 class StoreSerializer(serializers.ModelSerializer):
@@ -69,17 +70,11 @@ class StoreBrandingImageSerializer(serializers.Serializer):
     image = serializers.ImageField(allow_empty_file=False)
 
     def validate_image(self, value: UploadedFile) -> UploadedFile:
-        if value.size > 5 * 1024 * 1024:
-            raise serializers.ValidationError('Images must be at most 5 MB.')
-        image = getattr(value, 'image')
-        if image.format not in {'JPEG', 'PNG', 'WEBP'}:
-            raise serializers.ValidationError('Use a JPEG, PNG or WebP image.')
         dimensions = (512, 512) if self.context['kind'] == 'avatar' else (1600, 600)
-        if image.size != dimensions:
-            raise serializers.ValidationError(
-                f'Crop this image to {dimensions[0]} × {dimensions[1]} pixels.'
-            )
-        return value
+        try:
+            return normalize_public_image(value, expected_size=dimensions)
+        except ImageUploadError as error:
+            raise serializers.ValidationError(str(error)) from error
 
 
 class StoreAddressSerializer(serializers.ModelSerializer):
@@ -117,12 +112,11 @@ class MerchantImageSerializer(serializers.ModelSerializer):
         model = ProductImg
         fields = ['id', 'image']
 
-    def validate_image(self, value):
-        if value.size > 5 * 1024 * 1024:
-            raise serializers.ValidationError('Images must be at most 5 MB.')
-        if value.image.format not in {'JPEG', 'PNG', 'WEBP'}:
-            raise serializers.ValidationError('Use a JPEG, PNG or WebP image.')
-        return value
+    def validate_image(self, value: UploadedFile) -> UploadedFile:
+        try:
+            return normalize_public_image(value)
+        except ImageUploadError as error:
+            raise serializers.ValidationError(str(error)) from error
 
     def to_representation(self, instance: ProductImg) -> dict[str, Any]:
         data = super().to_representation(instance)
@@ -190,6 +184,26 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
                 row['digital_file_type'] = serializers.ChoiceField(
                     choices=['image', 'audio', 'video', 'document'],
                 ).run_validation(row['digital_file_type'])
+            digital_file_url = row.get('digital_file_url', '')
+            if digital_file_url:
+                try:
+                    path = urllib.parse.urlsplit(digital_file_url).path.lstrip('/')
+                except (TypeError, ValueError) as error:
+                    raise serializers.ValidationError('Choose a digital asset uploaded for this product.') from error
+                for prefix in (f'{settings.MINIO_BUCKET_NAME}/media/', f'{settings.MINIO_BUCKET_NAME}/', 'media/'):
+                    if path.startswith(prefix):
+                        path = path[len(prefix):]
+                        break
+                expected = (
+                    f'digital_products/{self.instance.store_id}/{self.instance.pk}/variants/'
+                    if self.instance is not None else None
+                )
+                if (
+                    expected is None
+                    or '..' in path.split('/')
+                    or not path.startswith(expected)
+                ):
+                    raise serializers.ValidationError('Choose a digital asset uploaded for this product.')
         return value
 
     def validate_image_url(self, value: str) -> str:
@@ -358,6 +372,7 @@ class StorePayoutSerializer(serializers.ModelSerializer):
 
 
 class PayoutCreateSerializer(serializers.Serializer):
+    bank_account_id = serializers.IntegerField(required=False, min_value=1)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('5.00'))
     payout_method = serializers.ChoiceField(
         choices=StorePayout.METHOD_CHOICES,
@@ -365,6 +380,18 @@ class PayoutCreateSerializer(serializers.Serializer):
     )
     account_details = serializers.DictField(required=False, default=dict)
     notes = serializers.CharField(required=False, allow_blank=True, default='')
+
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        method = attrs.get('payout_method', StorePayout.METHOD_BANK_TRANSFER)
+        account_id = attrs.get('bank_account_id')
+        if method != StorePayout.METHOD_BANK_TRANSFER and account_id:
+            raise serializers.ValidationError({'bank_account_id': 'Choose a bank account only for bank transfers.'})
+        if method == StorePayout.METHOD_BANK_TRANSFER and not account_id:
+            details = attrs.get('account_details', {})
+            if not all(isinstance(details.get(field), str) and details[field].strip() for field in ('bank_name', 'account_number')):
+                raise serializers.ValidationError({'bank_account_id': 'Select a saved bank account or provide bank name and account number.'})
+        return attrs
 
 
 class StoreEarningsLedgerSerializer(serializers.ModelSerializer):
@@ -417,7 +444,8 @@ class MerchantWalletSerializer(serializers.Serializer):
     stores = MerchantStoreFinancialSummarySerializer(many=True)
 
 
-class MerchantPayoutCreateSerializer(serializers.Serializer):
+class MerchantPayoutCreateSerializer(PayoutCreateSerializer):
+    bank_account_id = serializers.IntegerField(required=False, min_value=1)
     amount = serializers.DecimalField(max_digits=12, decimal_places=2, min_value=Decimal('5.00'))
     payout_method = serializers.ChoiceField(
         choices=StorePayout.METHOD_CHOICES,

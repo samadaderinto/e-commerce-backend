@@ -11,7 +11,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from core.models import User
-from notification.models import Notification, NotificationDelivery
+from notification.models import Notification, NotificationDelivery, PushDevice
 from notification.views import account_access_notification, create_notification, password_changed_notification
 from product.models import Product
 from store.models import Store
@@ -59,6 +59,32 @@ class TransactionalEmailTests(TestCase):
             response = self.client.post(f"/api/v1/admin/staff/stores/{self.store.pk}/unblock/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(NotificationDelivery.objects.filter(recipient=self.owner).count(), 2)
+
+    @override_settings(FCM_ENABLED=True)
+    def test_store_restore_queues_push_to_the_store_owner_device(self) -> None:
+        PushDevice.objects.create(user=self.owner, token="owner-browser-token")
+
+        with self.deliver_callbacks():
+            self.client.post(
+                f"/api/v1/admin/staff/stores/{self.store.pk}/block/",
+                {"reason": "Temporary review"},
+                format="json",
+            )
+            response = self.client.post(
+                f"/api/v1/admin/staff/stores/{self.store.pk}/unblock/",
+                format="json",
+            )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        notification = Notification.objects.get(
+            recipient=self.owner,
+            data__event="store_unblocked",
+        )
+        push_delivery = NotificationDelivery.objects.get(
+            notification=notification,
+            channel=NotificationDelivery.CHANNEL_PUSH,
+        )
+        self.assertEqual(push_delivery.recipient, self.owner)
 
     def test_account_suspension_notifies_inactive_owner_and_noop_is_silent(self) -> None:
         self.owner.is_active = False
@@ -129,7 +155,7 @@ class TransactionalEmailTests(TestCase):
         self.assertEqual(NotificationDelivery.objects.filter(recipient=self.owner).count(), 2)
 
     def test_password_reset_sends_security_confirmation(self) -> None:
-        from django.contrib.auth.tokens import default_token_generator
+        from core.auth_tokens import credential_version_token_generator
         from django.utils.encoding import force_bytes
         from django.utils.http import urlsafe_base64_encode
 
@@ -139,7 +165,7 @@ class TransactionalEmailTests(TestCase):
                 "/api/v1/auth/reset/",
                 {
                     "uid": urlsafe_base64_encode(force_bytes(self.owner.pk)),
-                    "token": default_token_generator.make_token(self.owner),
+                    "token": credential_version_token_generator.make_token(self.owner),
                     "password": "ResetSecretPassword2026!",
                 },
                 format="json",

@@ -16,4 +16,19 @@ client/AGENTS.md
 client/CLAUDE.md
 artifacts/
 qa-reports/
+# Keep local QA tooling ignored except the reviewed security runner and its dependencies.
 scripts/
+!/scripts/
+/scripts/*
+!/scripts/qa/
+/scripts/qa/*
+!/scripts/qa/security_test.py
+!/scripts/qa/test_security_reports.py
+!/scripts/qa/utils.py
+# Browser downloads do not belong in the repository root.
+/*.mp4
+/*.mov
+/*.webm
+/*.m4v
+# Provider console exports may contain OAuth client secrets.
+client_secret_*.json

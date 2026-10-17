@@ -137,6 +137,9 @@ class ActivityTests(TestCase):
         from affiliates.models import Marketer, Redirect, Url
         from affiliates.views import AffiliatesViewSet
         from rest_framework.test import APIRequestFactory
+        self.store.status = Store.STATUS_ACTIVE
+        self.store.verified_at = timezone.now()
+        self.store.save(update_fields=['status', 'verified_at'])
         product = Product.objects.create(store=self.store, title='Linked', description='Linked', price=Decimal('10'), discount=0, available=2, category='books')
         marketer = Marketer.objects.create(user=self.user, name='Tracking marketer')
         url = Url.objects.create(marketer=marketer, product=product, identifier='tracked', active=True)

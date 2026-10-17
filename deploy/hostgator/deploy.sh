@@ -18,11 +18,11 @@ cd "$REPOSITORY_DIR"
 
 docker network inspect "$NETWORK" >/dev/null 2>&1 || docker network create "$NETWORK" >/dev/null
 
-docker compose --env-file "$ENV_FILE" -f server/compose.yaml build api notification-worker
+docker compose --env-file "$ENV_FILE" -f server/compose.yaml build api notification-worker celery-beat notification-stream
 docker compose --env-file "$ENV_FILE" -f client/compose.yaml build client
 
 docker compose --env-file "$ENV_FILE" -f server/compose.yaml up -d --wait postgres redis elasticsearch
-docker compose --env-file "$ENV_FILE" -f server/compose.yaml up -d api notification-worker
+docker compose --env-file "$ENV_FILE" -f server/compose.yaml up -d api notification-worker celery-beat notification-stream
 docker compose --env-file "$ENV_FILE" -f server/compose.yaml exec -T api python manage.py migrate --noinput
 docker compose --env-file "$ENV_FILE" -f server/compose.yaml exec -T api python manage.py collectstatic --noinput
 docker compose --env-file "$ENV_FILE" -f server/compose.yaml exec -T api python manage.py rebuild_product_index
