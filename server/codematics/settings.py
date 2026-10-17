@@ -506,6 +506,7 @@ PASSWORD_HASHERS = [
 
 STRIPE_SECRET = str(os.environ.get("STRIPE_SECRET"))
 PUBLISHER_KEY = str(os.environ.get("PUBLISHER_KEY"))
+STRIPE_WEBHOOK_SECRET = str(os.environ.get("STRIPE_WEBHOOK_SECRET", "") or "")
 
 
 CRON_CLASSES = [

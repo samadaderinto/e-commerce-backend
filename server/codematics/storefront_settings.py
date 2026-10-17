@@ -182,6 +182,7 @@ if FCM_ENABLED and not (FIREBASE_PROJECT_ID and (
     )
 STRIPE_WALLET_PAYMENT_METHODS = os.environ.get('STRIPE_WALLET_PAYMENT_METHODS', 'card,cashapp')
 STRIPE_CURRENCY = os.environ.get('STRIPE_CURRENCY', 'usd')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '').strip()
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
 APPLE_CLIENT_ID = os.environ.get('APPLE_CLIENT_ID', '').strip()
 SESSION_COOKIE_SECURE = not DEBUG
