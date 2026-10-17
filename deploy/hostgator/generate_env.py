@@ -80,6 +80,7 @@ def main() -> None:
         "OBSERVABILITY_TOKEN": observability_token,
         "STRIPE_SECRET": os.environ.get("STRIPE_SECRET", "").strip(),
         "PUBLISHER_KEY": os.environ.get("PUBLISHER_KEY", "").strip(),
+        "STRIPE_WEBHOOK_SECRET": os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip(),
         "STRIPE_WALLET_PAYMENT_METHODS": os.environ.get(
             "STRIPE_WALLET_PAYMENT_METHODS", "cashapp"
         ).strip(),
@@ -101,6 +102,10 @@ def main() -> None:
         "FCM_ENABLED": os.environ.get("FCM_ENABLED", "false").strip(),
         "FIREBASE_PROJECT_ID": os.environ.get("FIREBASE_PROJECT_ID", "").strip(),
         "FIREBASE_CREDENTIALS_JSON": os.environ.get("FIREBASE_CREDENTIALS_JSON", "").strip(),
+        "GOOGLE_CLIENT_ID": os.environ.get("GOOGLE_CLIENT_ID", "").strip(),
+        "APPLE_CLIENT_ID": os.environ.get("APPLE_CLIENT_ID", "").strip(),
+        "NEXT_PUBLIC_GOOGLE_CLIENT_ID": os.environ.get("NEXT_PUBLIC_GOOGLE_CLIENT_ID", "").strip() or os.environ.get("GOOGLE_CLIENT_ID", "").strip(),
+        "NEXT_PUBLIC_APPLE_CLIENT_ID": os.environ.get("NEXT_PUBLIC_APPLE_CLIENT_ID", "").strip() or os.environ.get("APPLE_CLIENT_ID", "").strip(),
         "SHIPPING_RATE_MODE": os.environ.get("SHIPPING_RATE_MODE", "live").strip(),
         "SHIPPING_SANDBOX": os.environ.get("SHIPPING_SANDBOX", "false").strip(),
         "USPS_CLIENT_ID": os.environ.get("USPS_CLIENT_ID", "").strip(),
@@ -116,6 +121,9 @@ def main() -> None:
         "CHECKOUT_TAX_RATE": "0",
         "REALTIME_REDIS_URL": os.environ.get("REALTIME_REDIS_URL", "").strip(),
         "GUNICORN_THREADS": os.environ.get("GUNICORN_THREADS", "32").strip(),
+        "CLICKBANK_AFFILIATE_NICKNAME": os.environ.get("CLICKBANK_AFFILIATE_NICKNAME", "").strip(),
+        "CLICKBANK_SECRET_KEY": os.environ.get("CLICKBANK_SECRET_KEY", "").strip(),
+        "CLICKBANK_DEV_KEY": os.environ.get("CLICKBANK_DEV_KEY", "").strip(),
     }
 
     with open(output_path, "w", encoding="utf-8") as f:

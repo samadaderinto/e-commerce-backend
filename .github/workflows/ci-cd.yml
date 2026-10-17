@@ -215,8 +215,13 @@ jobs:
           PROD_OBSERVABILITY_TOKEN: ${{ secrets.PROD_OBSERVABILITY_TOKEN || secrets.OBSERVABILITY_TOKEN }}
           STRIPE_SECRET: ${{ secrets.STRIPE_SECRET }}
           PUBLISHER_KEY: ${{ secrets.PUBLISHER_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL || vars.RESEND_FROM_EMAIL }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || vars.GOOGLE_CLIENT_ID }}
+          APPLE_CLIENT_ID: ${{ secrets.APPLE_CLIENT_ID || vars.APPLE_CLIENT_ID }}
+          NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${{ secrets.NEXT_PUBLIC_GOOGLE_CLIENT_ID || vars.NEXT_PUBLIC_GOOGLE_CLIENT_ID }}
+          NEXT_PUBLIC_APPLE_CLIENT_ID: ${{ secrets.NEXT_PUBLIC_APPLE_CLIENT_ID || vars.NEXT_PUBLIC_APPLE_CLIENT_ID }}
           USPS_CLIENT_ID: ${{ secrets.USPS_CLIENT_ID }}
           USPS_CLIENT_SECRET: ${{ secrets.USPS_CLIENT_SECRET }}
           FEDEX_API_KEY: ${{ secrets.FEDEX_API_KEY }}
@@ -227,6 +232,9 @@ jobs:
           UPS_CLIENT_ID: ${{ secrets.UPS_CLIENT_ID }}
           UPS_CLIENT_SECRET: ${{ secrets.UPS_CLIENT_SECRET }}
           UPS_ACCOUNT_NUMBER: ${{ secrets.UPS_ACCOUNT_NUMBER }}
+          CLICKBANK_AFFILIATE_NICKNAME: ${{ secrets.CLICKBANK_AFFILIATE_NICKNAME || vars.CLICKBANK_AFFILIATE_NICKNAME }}
+          CLICKBANK_SECRET_KEY: ${{ secrets.CLICKBANK_SECRET_KEY }}
+          CLICKBANK_DEV_KEY: ${{ secrets.CLICKBANK_DEV_KEY }}
         run: |
           echo "Composing deploy/hostgator/.env strictly from GitHub Secrets and Variables..."
           python3 deploy/hostgator/generate_env.py

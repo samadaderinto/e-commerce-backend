@@ -86,6 +86,7 @@ The `.env` file deployed to `deploy/hostgator/.env` must contain the following p
 | `OBSERVABILITY_TOKEN` | Private bearer token for `/metrics/` | `openssl rand -hex 32` |
 | `STRIPE_SECRET` | Stripe Secret API Key (live or test) | `sk_live_...` |
 | `PUBLISHER_KEY` | Stripe Publishable API Key | `pk_live_...` |
+| `STRIPE_WEBHOOK_SECRET` | Stripe webhook signing secret | `whsec_...` |
 | `STRIPE_WALLET_PAYMENT_METHODS` | Payment methods for wallet top-up | `cashapp` |
 | `STRIPE_CURRENCY` | Base transaction currency | `usd` |
 | `RESEND_API_KEY` | Resend API key for transactional emails | `re_...` |
