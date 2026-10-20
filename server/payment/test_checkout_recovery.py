@@ -19,6 +19,7 @@ class CheckoutRecoveryTests(TestCase):
 
     @patch('stripe.Refund.create')
     def test_paid_failure_refunds_and_releases_wallet_once(self, refund) -> None:
+        refund.return_value = {'id': 're_recovery', 'status': 'succeeded'}
         session = {'payment_status': 'paid', 'payment_intent': 'pi_recovery'}
         self.assertTrue(compensate_checkout(self.attempt, session, 'Price changed'))
         self.assertTrue(compensate_checkout(self.attempt, session, 'Duplicate callback'))
@@ -27,6 +28,7 @@ class CheckoutRecoveryTests(TestCase):
 
     @patch('stripe.Refund.create')
     def test_failed_refund_remains_durable_and_retryable(self, refund) -> None:
+        refund.return_value = {'id': 're_recovery', 'status': 'succeeded'}
         refund.side_effect = RuntimeError('Stripe unavailable')
         session = {'payment_status': 'paid', 'payment_intent': 'pi_recovery'}
         self.assertFalse(compensate_checkout(self.attempt, session, 'Coupon depleted'))

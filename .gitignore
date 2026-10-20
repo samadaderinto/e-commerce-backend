@@ -33,3 +33,6 @@ scripts/
 /*.m4v
 # Provider console exports may contain OAuth client secrets.
 client_secret_*.json
+
+# Machine-specific Nginx operator allowlist.
+server/nginx/allowed-ips.local.conf

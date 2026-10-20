@@ -35,12 +35,14 @@ if DATABASE_ENGINE not in {'postgres', 'postgresql'}:
         'NAME': os.environ.get('SQLITE_DATABASE_PATH', str(BASE_DIR / 'storefront.sqlite3')),
         'OPTIONS': {'timeout': 20},
     }}
+LOCAL_VISION_URL = os.environ.get('LOCAL_VISION_URL', '').strip()
+
 REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.IsAuthenticated'],
     'DEFAULT_AUTHENTICATION_CLASSES': ['core.access.BackofficeJWTAuthentication'],
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_THROTTLE_CLASSES': ['rest_framework.throttling.ScopedRateThrottle'],
-    'DEFAULT_THROTTLE_RATES': {'auth': '10/minute'},
+    'DEFAULT_THROTTLE_RATES': {'auth': '10/minute', 'visual_search': '6/minute'},
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
 }
 SWAGGER_API_DESCRIPTION = """# ProAce Multi-Vendor Commerce REST API
@@ -167,6 +169,7 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_REDIRECT_EXEMPT = [r'^health/(live|ready)/$']
     SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'true').lower() == 'true'
     SECURE_HSTS_SECONDS = int(os.environ.get('SECURE_HSTS_SECONDS', '31536000'))
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True

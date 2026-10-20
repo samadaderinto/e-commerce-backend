@@ -261,6 +261,8 @@ def authenticate_social_user(provider: str, data: dict[str, Any], request: Any =
         if remote_ip:
             Device.objects.filter(user=user, device_ip=remote_ip).update(last_login=user.last_login)
     record_activity(user)
+    from store.services import link_pending_store_team_invitations
+    link_pending_store_team_invitations(user)
 
     from storefront.views import tokens
     payload = tokens(user)

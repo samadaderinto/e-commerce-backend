@@ -4,14 +4,12 @@ import io
 import math
 import re
 from typing import Any
-from decimal import Decimal
 
 from PIL import Image, ImageOps
-from django.conf import settings
-from django.db.models import Q
+from django.db.models import Q, QuerySet
 from rest_framework.exceptions import ValidationError
 
-from product.models import Product, Specification
+from product.models import Product
 from store.models import Store
 
 
@@ -335,123 +333,29 @@ def extract_dominant_palette(
     return extracted
 
 
+def subject_for(result: dict[str, Any], box: list[float]) -> dict[str, Any] | None:
+    """A whole-image/crop classification, never a fabricated object bounding box."""
+    if not result['category'] or float(result['score']) < 0.20 or float(result['margin']) < 0.015:
+        return None
+    return {
+        'id': 'subject', 'label': result['label'], 'category': result['category'],
+        'confidence': None, 'box': box, 'dominant_colors': [],
+        'keywords': [result['label'].lower()],
+    }
+
+
 def analyze_image_regions(image: Image.Image) -> list[dict[str, Any]]:
-    """
-    Performs spatial region detection across an uploaded photo (outfit or room).
-    Generates interactive focal item hotspots with normalized bounding boxes:
-    [ymin, xmin, ymax, xmax] coordinates from 0.0 to 1.0.
-    """
-    width, height = image.size
-    aspect_ratio = height / max(1, width)
+    """Recognize one subject; this is not multi-object detection."""
+    from product.local_vision import recognize
 
-    items: list[dict[str, Any]] = []
-
-    # Case 1: Tall portrait / Fashion & Streetwear outfit (aspect_ratio >= 1.1)
-    if aspect_ratio >= 1.1:
-        # Upper body (Jacket / Tops / Outerwear)
-        top_crop = image.crop((int(width * 0.15), int(height * 0.10), int(width * 0.85), int(height * 0.50)))
-        top_palette = extract_dominant_palette(top_crop, num_colors=2)
-        top_color = top_palette[0]["name"] if top_palette else "Neutral"
-        items.append({
-            "id": "item_top",
-            "label": f"{top_color} Outerwear & Tops",
-            "category": "outwear",
-            "confidence": 0.94,
-            "box": [0.10, 0.15, 0.50, 0.85],
-            "dominant_colors": [c["hex"] for c in top_palette],
-            "keywords": ["jacket", "coat", "hoodie", "shirt", "top", "outerwear", top_color.lower()],
-        })
-
-        # Lower body (Trousers / Pants / Bottoms)
-        bottom_crop = image.crop((int(width * 0.20), int(height * 0.45), int(width * 0.80), int(height * 0.78)))
-        bottom_palette = extract_dominant_palette(bottom_crop, num_colors=2)
-        bottom_color = bottom_palette[0]["name"] if bottom_palette else "Neutral"
-        items.append({
-            "id": "item_bottom",
-            "label": f"{bottom_color} Pants & Trousers",
-            "category": "outwear",
-            "confidence": 0.91,
-            "box": [0.45, 0.20, 0.78, 0.80],
-            "dominant_colors": [c["hex"] for c in bottom_palette],
-            "keywords": ["pants", "jeans", "trousers", "joggers", "cargo", bottom_color.lower()],
-        })
-
-        # Base (Footwear / Sneakers / Shoes)
-        shoes_crop = image.crop((int(width * 0.15), int(height * 0.75), int(width * 0.85), int(height * 0.98)))
-        shoes_palette = extract_dominant_palette(shoes_crop, num_colors=2)
-        shoes_color = shoes_palette[0]["name"] if shoes_palette else "Neutral"
-        items.append({
-            "id": "item_shoes",
-            "label": f"{shoes_color} Sneakers & Footwear",
-            "category": "footwear",
-            "confidence": 0.96,
-            "box": [0.75, 0.15, 0.98, 0.85],
-            "dominant_colors": [c["hex"] for c in shoes_palette],
-            "keywords": ["sneakers", "shoes", "boots", "footwear", "runners", shoes_color.lower()],
-        })
-
-        # Accessory / Gear (Side/Chest/Wrist)
-        acc_crop = image.crop((int(width * 0.05), int(height * 0.25), int(width * 0.45), int(height * 0.55)))
-        acc_palette = extract_dominant_palette(acc_crop, num_colors=2)
-        items.append({
-            "id": "item_accessory",
-            "label": "Bags & Accessories",
-            "category": "jewelry",
-            "confidence": 0.85,
-            "box": [0.25, 0.05, 0.55, 0.45],
-            "dominant_colors": [c["hex"] for c in acc_palette],
-            "keywords": ["bag", "backpack", "watch", "accessory", "strap", "hat", "cap"],
-        })
-    else:
-        # Case 2: Landscape / Room Setup / Living / Tech Workspace
-        # Center Workspace/Table
-        center_crop = image.crop((int(width * 0.20), int(height * 0.25), int(width * 0.80), int(height * 0.75)))
-        center_palette = extract_dominant_palette(center_crop, num_colors=2)
-        center_color = center_palette[0]["name"] if center_palette else "Neutral"
-        items.append({
-            "id": "item_main",
-            "label": f"{center_color} Centerpiece & Furniture",
-            "category": "home",
-            "confidence": 0.93,
-            "box": [0.25, 0.20, 0.75, 0.80],
-            "dominant_colors": [c["hex"] for c in center_palette],
-            "keywords": ["desk", "table", "chair", "sofa", "furniture", "home", center_color.lower()],
-        })
-
-        # Computing / Tech Gear
-        tech_crop = image.crop((int(width * 0.30), int(height * 0.15), int(width * 0.70), int(height * 0.55)))
-        tech_palette = extract_dominant_palette(tech_crop, num_colors=2)
-        items.append({
-            "id": "item_tech",
-            "label": "Computing & Audio Gear",
-            "category": "computing",
-            "confidence": 0.89,
-            "box": [0.15, 0.30, 0.55, 0.70],
-            "dominant_colors": [c["hex"] for c in tech_palette],
-            "keywords": ["computing", "laptop", "keyboard", "headphones", "audio", "electronics"],
-        })
-
-        # Lighting / Accents
-        acc_crop = image.crop((int(width * 0.65), int(height * 0.10), int(width * 0.95), int(height * 0.50)))
-        acc_palette = extract_dominant_palette(acc_crop, num_colors=2)
-        items.append({
-            "id": "item_lighting",
-            "label": "Lighting & Decor Accents",
-            "category": "home",
-            "confidence": 0.84,
-            "box": [0.10, 0.65, 0.50, 0.95],
-            "dominant_colors": [c["hex"] for c in acc_palette],
-            "keywords": ["lamp", "lighting", "decor", "decorations", "accent"],
-        })
-
-    return items
+    item = subject_for(recognize(image), [0.0, 0.0, 1.0, 1.0])
+    return [item] if item else []
 
 
 class VisualSearchEngine:
     """
-    Multimodal visual search & 'Shop The Look' matching engine.
-    Analyzes uploaded look images, extracts dominant color palettes, identifies
-    interactive focal item hotspots with bounding boxes, and ranks active marketplace products.
+    Local subject recognition and bounded image-to-description catalog ranking.
+    Preset examples use explicit metadata, never fabricated recognition scores.
     """
 
     MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024  # 5 MiB
@@ -463,252 +367,169 @@ class VisualSearchEngine:
         if hasattr(file_obj, "size") and file_obj.size > cls.MAX_FILE_SIZE_BYTES:
             raise ValidationError("Image file exceeds maximum allowed size of 5MB.")
 
-        raw_bytes = file_obj.read() if hasattr(file_obj, "read") else bytes(file_obj)
+        raw_bytes = file_obj.read(cls.MAX_FILE_SIZE_BYTES + 1) if hasattr(file_obj, "read") else bytes(file_obj)
         if len(raw_bytes) > cls.MAX_FILE_SIZE_BYTES:
             raise ValidationError("Image file exceeds maximum allowed size of 5MB.")
 
         try:
             image = Image.open(io.BytesIO(raw_bytes))
+            if image.width * image.height > 16_000_000:
+                raise ValidationError('Image dimensions are too large. Use an image under 16 megapixels.')
             image.verify()
+        except ValidationError:
+            raise
         except Exception as err:
             raise ValidationError("Uploaded file is not a valid or readable image.") from err
 
-        # Re-open after verify to safely read pixel data
-        image = Image.open(io.BytesIO(raw_bytes))
-
-        if (image.format or "").upper() not in cls.ALLOWED_IMAGE_FORMATS:
-            raise ValidationError(
-                f"Unsupported image format '{image.format}'. Supported formats are JPEG, PNG, and WebP."
-            )
-
-        # Apply EXIF orientation if present and normalize to RGB
-        image = ImageOps.exif_transpose(image)
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        # Bound maximum dimension to 1600px to safeguard server compute and memory
-        max_dim = 1600
-        if image.width > max_dim or image.height > max_dim:
-            image.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+        # Header verification is not a full pixel decode (notably for JPEG).
+        try:
+            with Image.open(io.BytesIO(raw_bytes)) as source:
+                if (source.format or "").upper() not in cls.ALLOWED_IMAGE_FORMATS:
+                    raise ValidationError('Supported image formats are JPEG, PNG, and WebP.')
+                image = ImageOps.exif_transpose(source).convert('RGB')
+                image.load()
+                image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+        except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
+            raise ValidationError('Uploaded file is not a valid or readable image.') from error
 
         return image
 
     @classmethod
     def analyze_look(
-        cls,
-        image: Image.Image,
-        focus_box: list[float] | None = None,
-        selected_item_id: str | None = None,
-        user_query: str = "",
-        category_filter: str = "",
-        store_id: int | None = None,
+        cls, image: Image.Image, focus_box: list[float] | None = None,
+        selected_item_id: str | None = None, user_query: str = "",
+        category_filter: str = "", store_id: int | None = None,
     ) -> dict[str, Any]:
-        """
-        Executes full visual analysis:
-        1. Extracts image-wide color palette.
-        2. Detects region items / bounding boxes.
-        3. Identifies the focused item.
-        4. Matches against active marketplace catalog products with similarity scoring.
-        """
-        palette = extract_dominant_palette(image, num_colors=6)
-        detected_items = analyze_image_regions(image)
+        from product.local_vision import recognize, rank
 
-        # Determine target focus item
-        active_item: dict[str, Any] | None = None
-        if selected_item_id:
-            for item in detected_items:
-                if item["id"] == selected_item_id:
-                    active_item = item
-                    break
+        box = focus_box or [0.0, 0.0, 1.0, 1.0]
+        if (len(box) != 4 or not all(math.isfinite(v) and 0 <= v <= 1 for v in box)
+                or box[0] >= box[2] or box[1] >= box[3]):
+            raise ValidationError({'focus_box': 'Choose a valid image crop.'})
+        if focus_box:
+            width, height = image.size
+            bounds = (int(box[1] * width), int(box[0] * height),
+                      int(box[3] * width), int(box[2] * height))
+            if bounds[0] >= bounds[2] or bounds[1] >= bounds[3]:
+                raise ValidationError({'focus_box': 'Choose a larger image crop.'})
+            image = image.crop(bounds)
+        prediction = recognize(image)
+        item = subject_for(prediction, box)
+        choices: list[dict[str, Any]] = []
+        if item:
+            choices = [item]
+        else:
+            from django.utils.text import slugify
 
-        # If a custom crop/focus box was supplied [ymin, xmin, ymax, xmax]
-        if focus_box and len(focus_box) == 4:
-            ymin, xmin, ymax, xmax = [max(0.0, min(1.0, float(v))) for v in focus_box]
-            w, h = image.size
-            crop_box = (int(xmin * w), int(ymin * h), int(xmax * w), int(ymax * h))
-            if crop_box[2] > crop_box[0] and crop_box[3] > crop_box[1]:
-                cropped = image.crop(crop_box)
-                crop_palette = extract_dominant_palette(cropped, num_colors=3)
-                custom_item = {
-                    "id": "custom_crop",
-                    "label": "Custom Focal Selection",
-                    "category": category_filter or (active_item["category"] if active_item else "outwear"),
-                    "confidence": 0.98,
-                    "box": [ymin, xmin, ymax, xmax],
-                    "dominant_colors": [c["hex"] for c in crop_palette],
-                    "keywords": [c["name"].lower() for c in crop_palette],
+            choices = [
+                {
+                    'id': f"candidate-{slugify(candidate['label'])}",
+                    'label': candidate['label'], 'category': candidate['category'],
+                    'confidence': None, 'box': box, 'dominant_colors': [],
+                    'keywords': [candidate['label'].lower()],
                 }
-                detected_items.insert(0, custom_item)
-                active_item = custom_item
-
-        if not active_item and detected_items:
-            active_item = detected_items[0]
-
-        target_category = category_filter or (active_item.get("category", "") if active_item else "")
-        target_colors = active_item.get("dominant_colors", []) if active_item else [p["hex"] for p in palette[:3]]
-        target_keywords = list(active_item.get("keywords", [])) if active_item else []
-
-        if user_query:
-            clean_tokens = [t.lower() for t in re.findall(r"\b[a-zA-Z0-9_-]+\b", user_query)]
-            target_keywords.extend(clean_tokens)
-
-        # Match active marketplace products
-        matched_results = cls.match_products(
-            target_category=target_category,
-            target_colors=target_colors,
-            target_keywords=target_keywords,
-            user_query=user_query,
-            store_id=store_id,
-        )
-
+                for candidate in prediction.get('alternatives', [])
+            ]
+        if selected_item_id:
+            item = next((choice for choice in choices if choice['id'] == selected_item_id), None)
+            if item is None:
+                raise ValidationError({'item_id': 'Choose one of the suggested items for this photo.'})
+        results: list[dict[str, Any]] = []
+        message = 'No reliable product subject was recognized. Try a clearer, closer photo or text search.'
+        if choices and item is None:
+            message = 'Possible items found. Choose what you want to search for; these suggestions are not confirmed detections.'
+        if item:
+            candidates = cls.candidates(item['category'], store_id, user_query, item['label'])
+            if category_filter and category_filter != item['category']:
+                candidates = []
+            descriptors = [
+                {'id': product.pk, 'text': f"A photo of {product.title}, {product.brand}, {product.get_category_display()}"[:512]}
+                for product in candidates
+            ]
+            ranked = rank(prediction['embedding'], descriptors)
+            # Hydrate authoritative product data again after potentially slow inference.
+            current_products = cls.public_products().filter(category=item['category'])
+            if store_id:
+                current_products = current_products.filter(store_id=store_id)
+            if user_query:
+                current_products = current_products.filter(
+                    Q(title__icontains=user_query) | Q(tags__name__icontains=user_query)
+                ).distinct()
+            current_products = cls.filter_subject(current_products, item['label'])
+            current = current_products.in_bulk([row['id'] for row in ranked])
+            for row in ranked:
+                product = current.get(row['id'])
+                if float(row['score']) < 0.18 or product is None:
+                    continue
+                results.append({
+                    'product': product, 'product_id': product.pk, 'similarity_score': None,
+                    'match_reasons': ['Local image-to-description semantic ranking'],
+                })
+                if len(results) == 24:
+                    break
+            origin = 'Searching your selected item' if selected_item_id and item['id'].startswith('candidate-') else 'Recognized subject'
+            message = (
+                f"{origin}: {item['label']}. Related catalog items are ranked against their descriptions, not verified identical photos."
+                if results else f"{origin}: {item['label']}, but no relevant catalog items were found."
+            )
         return {
-            "palette": palette,
-            "detected_items": detected_items,
-            "selected_item_id": active_item["id"] if active_item else (detected_items[0]["id"] if detected_items else None),
-            "selected_item": active_item,
-            "results": matched_results,
-            "query_applied": user_query or (active_item["label"] if active_item else ""),
+            'palette': extract_dominant_palette(image, num_colors=6),
+            'detected_items': choices,
+            'selected_item_id': item['id'] if item else None, 'selected_item': item,
+            'results': results, 'query_applied': user_query or (item['label'] if item else ''),
+            'method': 'local_clip', 'message': message,
+            'selection_required': bool(choices and item is None),
         }
 
     @classmethod
-    def match_products(
-        cls,
-        target_category: str,
-        target_colors: list[str],
-        target_keywords: list[str],
-        user_query: str = "",
-        store_id: int | None = None,
-        limit: int = 24,
-    ) -> list[dict[str, Any]]:
-        """
-        Ranks active catalog products by visual and attribute similarity:
-        - Category alignment (0-35 points)
-        - Color similarity against product specs, title & tags (0-35 points)
-        - Text/keyword overlap with visual labels and user query (0-20 points)
-        - Popularity & rating boost (0-10 points)
-        """
-        # Base filter: active, published, unblocked products from active stores
-        qs = Product.objects.filter(
-            visibility=True,
-            is_blocked=False,
-            store__status=Store.STATUS_ACTIVE,
-        ).select_related("store", "specification").prefetch_related("images", "tags")
+    def public_products(cls) -> QuerySet[Product]:
+        return Product.objects.filter(
+            visibility=True, is_blocked=False, store__status=Store.STATUS_ACTIVE,
+            store__verified_at__isnull=False,
+        ).select_related('store', 'specification').prefetch_related('images', 'tags')
 
+    @classmethod
+    def filter_subject(cls, products: QuerySet[Product], label: str) -> QuerySet[Product]:
+        if not label:
+            return products
+        from product.visual_retrieval import subject_title_filter
+
+        return products.filter(subject_title_filter(label))
+
+    @classmethod
+    def candidates(cls, category: str, store_id: int | None, query: str = '', subject_label: str = '') -> list[Product]:
+        products = cls.public_products().filter(category=category)
         if store_id:
-            qs = qs.filter(store_id=store_id)
+            products = products.filter(store_id=store_id)
+        if query:
+            products = products.filter(Q(title__icontains=query) | Q(tags__name__icontains=query)).distinct()
+        return list(cls.filter_subject(products, subject_label).order_by('-created', '-pk')[:256])
 
-        # Extract target RGB values for color matching
-        target_rgbs: list[tuple[int, int, int]] = []
-        for hex_str in target_colors:
-            clean_hex = hex_str.lstrip("#")
-            if len(clean_hex) == 6:
-                try:
-                    r = int(clean_hex[0:2], 16)
-                    g = int(clean_hex[2:4], 16)
-                    b = int(clean_hex[4:6], 16)
-                    target_rgbs.append((r, g, b))
-                except ValueError:
-                    pass
-
-        # Parse any optional price filter from query (e.g. "under $50", "< 100")
-        max_price_filter: Decimal | None = None
-        price_match = re.search(r"(?:under|<|below)\s*\$?(\d+(?:\.\d+)?)", user_query, re.IGNORECASE)
-        if price_match:
-            try:
-                max_price_filter = Decimal(price_match.group(1))
-            except Exception:
-                pass
-
-        if max_price_filter is not None:
-            qs = qs.filter(price__lte=max_price_filter)
-
-        candidates = list(qs[:120])
-        scored_products: list[tuple[float, Product, list[str]]] = []
-
-        for product in candidates:
-            score = 50.0  # Baseline base score
-            reasons: list[str] = []
-
-            # 1. Category scoring
-            prod_cat = (product.category or "").lower()
-            if target_category:
-                if prod_cat == target_category.lower():
-                    score += 25.0
-                    reasons.append(f"Category match: {product.get_category_display() if hasattr(product, 'get_category_display') else prod_cat.title()}")
-                elif target_category.lower() in prod_cat or prod_cat in target_category.lower():
-                    score += 15.0
-                    reasons.append("Related category match")
-                elif prod_cat in CATEGORY_KEYWORDS.get(target_category.lower(), []):
-                    score += 20.0
-                    reasons.append("Cross-category aesthetic match")
-
-            # 2. Color scoring
-            spec = getattr(product, "specification", None)
-            spec_color = (getattr(spec, "color", "") or "").lower()
-            prod_title = product.title.lower()
-            prod_tags = [t.name.lower() for t in product.tags.all()]
-
-            color_matched = False
-            best_color_dist = float("inf")
-
-            for name, rgb in NAMED_COLORS:
-                if name.lower() in spec_color or name.lower() in prod_title or any(name.lower() in tag for tag in prod_tags):
-                    for trgb in target_rgbs:
-                        dist = _color_distance(rgb, trgb)
-                        if dist < best_color_dist:
-                            best_color_dist = dist
-                    color_matched = True
-
-            if color_matched:
-                if best_color_dist < 80:
-                    score += 25.0
-                    reasons.append("Exact color palette alignment")
-                elif best_color_dist < 150:
-                    score += 18.0
-                    reasons.append("Complementary color tone")
-                else:
-                    score += 8.0
-
-            # 3. Keyword / Style match
-            matched_keywords: list[str] = []
-            for kw in target_keywords:
-                if len(kw) < 3:
-                    continue
-                if kw in prod_title or any(kw in tag for tag in prod_tags):
-                    matched_keywords.append(kw)
-
-            if matched_keywords:
-                score += min(20.0, len(matched_keywords) * 8.0)
-                reasons.append(f"Style match: {', '.join(matched_keywords[:3])}")
-
-            # 4. Rating & Verified merchant boost
-            avg_rating = getattr(product, "average_rating", 0) or 0
-            if avg_rating >= 4.5:
-                score += 5.0
-            if getattr(product.store, "is_official", False) or getattr(product.store, "verified_at", None):
-                score += 3.0
-
-            # Cap similarity score between 70% and 98% for realistic natural aesthetics
-            normalized_pct = min(98, max(70, int(score)))
-
-            if not reasons:
-                reasons.append("Curated visual similarity")
-
-            scored_products.append((score, product, reasons))
-
-        # Sort products by score descending
-        scored_products.sort(key=lambda x: x[0], reverse=True)
-
-        results: list[dict[str, Any]] = []
-        for score, product, reasons in scored_products[:limit]:
-            results.append({
-                "product_id": product.pk,
-                "product": product,
-                "similarity_score": min(98, max(70, int(score))),
-                "match_reasons": reasons,
-            })
-
-        return results
+    @classmethod
+    def match_products(
+        cls, target_category: str, target_colors: list[str],
+        target_keywords: list[str], user_query: str = "",
+        store_id: int | None = None, limit: int = 24,
+    ) -> list[dict[str, Any]]:
+        """Curated preset browsing only; no recognition/confidence claims."""
+        # Footwear is represented by outwear in the authoritative catalog.
+        category = 'outwear' if target_category == 'footwear' else target_category
+        products = cls.public_products().filter(category=category)
+        if store_id:
+            products = products.filter(store_id=store_id)
+        tokens = [token for token in target_keywords if len(token) >= 3]
+        if user_query:
+            tokens.extend(re.findall(r'\b[a-zA-Z]+\b', user_query))
+        if tokens:
+            conditions = Q()
+            for token in tokens:
+                conditions |= Q(title__icontains=token) | Q(tags__name__icontains=token)
+            products = products.filter(conditions).distinct()
+        return [
+            {'product': product, 'product_id': product.pk, 'similarity_score': None,
+             'match_reasons': ['Curated example: category and catalog text, not image recognition']}
+            for product in products.order_by('-average_rating', '-created', '-pk')[:limit]
+        ]
 
     @classmethod
     def get_preset_look(cls, preset_id: str) -> dict[str, Any] | None:

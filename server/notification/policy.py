@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from django.db.models import Model
+from django.db.models import Model, Q
 
 CATEGORIES: dict[str, str] = {
     "order": "Orders", "refund": "Refunds", "payout": "Payouts",
@@ -80,7 +80,7 @@ def destination_for(recipient: Any, category: str, data: dict[str, Any]) -> str:
         from payment.models import Order
         if Order.objects.filter(pk=data["order_id"], user=recipient).exists():
             return f"/orders/{data['order_id']}"
-        from store.models import Store
+        from store.models import Store, StoreTeamMember
 
         raw_store_ids = list(data.get("store_ids") or [])
         raw_store_ids.append(data.get("store_id"))
@@ -93,7 +93,12 @@ def destination_for(recipient: Any, category: str, data: dict[str, Any]) -> str:
             if store_id > 0:
                 store_ids.add(store_id)
         if store_ids:
-            store = Store.objects.filter(pk__in=store_ids, user=recipient).order_by("pk").first()
+            store = Store.objects.filter(
+                Q(user=recipient) | Q(
+                    team_members__user=recipient,
+                    team_members__status=StoreTeamMember.STATUS_ACTIVE,
+                ), pk__in=store_ids,
+            ).order_by("pk").first()
             if store is None:
                 store = Store.objects.filter(pk__in=store_ids, assigned_staff=recipient).order_by("pk").first()
             if store is not None:
@@ -108,7 +113,6 @@ def destination_for(recipient: Any, category: str, data: dict[str, Any]) -> str:
         if recipient.is_staff or recipient.is_business_admin or recipient.is_superuser:
             return f"/admin/payouts?payout={payout_id}" if payout_id else "/admin/payouts"
         from store.models import Store, StorePayout
-        from django.db.models import Q
 
         payout = StorePayout.objects.filter(
             Q(store__user=recipient) | Q(wallet__user=recipient), pk=payout_id,

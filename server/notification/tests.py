@@ -878,7 +878,7 @@ class EmailTemplateRenderingTests(TestCase):
     def test_staff_onboarding_and_payout_html_emails(self):
         from decimal import Decimal
         from core.onboarding import invite_staff
-        from store.models import Store, StorePayout
+        from store.models import MerchantWallet, Store, StoreEarningsLedger, StorePayout
 
         # 1. Staff invitation -> onboarding-staff
         staff_user = invite_staff({
@@ -896,8 +896,14 @@ class EmailTemplateRenderingTests(TestCase):
             user=self.user,
             name="Apex Athletics",
         )
+        wallet = MerchantWallet.objects.create(user=self.user)
+        StoreEarningsLedger.objects.create(
+            wallet=wallet, store=store, gross_amount=Decimal('450.00'),
+            net_amount=Decimal('450.00'), status=StoreEarningsLedger.STATUS_AVAILABLE,
+        )
         payout = StorePayout.objects.create(
             store=store,
+            wallet=wallet,
             amount=Decimal("450.00"),
             status=StorePayout.STATUS_PENDING,
             reference="PO-998877",

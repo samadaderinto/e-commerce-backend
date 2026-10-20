@@ -41,6 +41,20 @@ logger = logging.getLogger(__name__)
 class RefundProviderError(ValidationError):
     default_code = "refund_provider_failed"
 
+    def __init__(self, detail: dict[str, str], provider_reference: str = "") -> None:
+        self.provider_reference = provider_reference
+        super().__init__(detail)
+
+
+class RefundProviderPending(ValidationError):
+    def __init__(self, reference: str) -> None:
+        self.reference = reference
+        self.refund_amount: Decimal | None = None
+        self.selected_items: list[dict[str, Any]] | None = None
+        super().__init__(
+            {"detail": "Your refund is processing with the payment provider."}
+        )
+
 
 def validate_return_window(order: Order, items: list[dict[str, Any]]) -> None:
     """A physical line's return clock starts at its recorded store delivery."""
@@ -73,6 +87,8 @@ def call_stripe_refund(
 ) -> str:
     stripe_key = getattr(settings, "STRIPE_SECRET", "")
     idempotency_key = f"refund_{refund.pk if refund else 'order'}_{order.orderId}"
+    if refund and refund.status == Refund.STATUS_FAILED and refund.provider_reference:
+        idempotency_key += f"_retry_{refund.provider_reference}"
 
     if stripe is None or not stripe_key:
         raise ValidationError(
@@ -87,7 +103,11 @@ def call_stripe_refund(
             session = stripe.checkout.Session.retrieve(session_id)
             payment_intent_id = session.get("payment_intent")
         except Exception:
-            pass
+            logger.warning(
+                "Unable to retrieve Stripe session for refund on order %s",
+                order.pk,
+                exc_info=True,
+            )
 
     refund_kwargs: dict[str, Any] = {
         "reason": "requested_by_customer",
@@ -116,7 +136,28 @@ def call_stripe_refund(
     refund_kwargs["amount"] = int(refund_amount * 100)
 
     result = stripe.Refund.create(**refund_kwargs)
-    return getattr(result, "id", str(result))
+    provider_status = (
+        result.get("status")
+        if isinstance(result, dict)
+        else getattr(result, "status", None)
+    )
+    reference = str(result.get("id", "") if isinstance(result, dict) else result.id)
+    if provider_status in {"pending", "requires_action"}:
+        raise RefundProviderPending(reference)
+    if provider_status != "succeeded":
+        logger.warning(
+            "Stripe refund did not settle for order %s: %s", order.pk, provider_status
+        )
+        raise RefundProviderError(
+            {
+                "detail": "The payment provider has not completed this refund. Please contact support."
+            },
+            provider_reference=reference,
+        )
+    from payment.provider_events import record_local_provider_refund
+
+    record_local_provider_refund(order, reference, refund_amount, refund)
+    return reference
 
 
 def split_wallet_paid(order: Order) -> Decimal:
@@ -164,9 +205,13 @@ def refund_parts(order: Order, amount: Decimal) -> tuple[Decimal, Decimal]:
     return wallet_part, card_part
 
 
-def remaining_inventory(order: Order) -> list[dict[str, Any]]:
+def remaining_inventory(
+    order: Order, exclude_refund: int | None = None
+) -> list[dict[str, Any]]:
     quantities: dict[tuple[Any, str], int] = {}
-    for prior in Refund.objects.filter(order=order, status=Refund.STATUS_APPROVED):
+    for prior in Refund.objects.filter(order=order, accepted=True).exclude(
+        pk=exclude_refund
+    ):
         for row in prior.selected_items or order.items_snapshot or []:
             key = (row.get("product"), str(row.get("variant") or ""))
             quantities[key] = quantities.get(key, 0) + int(row.get("quantity", 1))
@@ -182,7 +227,21 @@ def remaining_inventory(order: Order) -> list[dict[str, Any]]:
 def process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund:
     try:
         return _process_order_refund(refund, actor, reason)
-    except RefundProviderError:
+    except RefundProviderPending as exc:
+        with transaction.atomic():
+            Order.objects.select_for_update().get(pk=refund.order_id)
+            Refund.objects.filter(pk=refund.pk).update(
+                provider_reference=exc.reference,
+                refund_amount=exc.refund_amount or refund.refund_amount,
+                selected_items=exc.selected_items or refund.selected_items,
+                status=Refund.STATUS_PENDING,
+                processed_by=actor,
+                processing_reason=reason,
+                updated=timezone.now(),
+            )
+        refund.refresh_from_db()
+        return refund
+    except RefundProviderError as exc:
         with transaction.atomic():
             # Follow the order/refund lock ordering used by approval and decline.
             Order.objects.select_for_update().filter(pk=refund.order_id).first()
@@ -192,6 +251,7 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund
             Refund.objects.filter(pk=refund.pk).update(
                 status=Refund.STATUS_FAILED,
                 failure_reason=REFUND_FAILURE_MESSAGE,
+                provider_reference=exc.provider_reference or current.provider_reference,
                 processed_by=actor,
                 processed_at=timezone.now(),
                 processing_reason=reason,
@@ -201,18 +261,36 @@ def process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund
             if refund.order_id:
                 with transaction.atomic():
                     from notification.domain import refund_notice
-                    refund_notice(refund, actor, refund.selected_items or refund.order.items_snapshot, decision="failed")
+
+                    refund_notice(
+                        refund,
+                        actor,
+                        refund.selected_items or refund.order.items_snapshot,
+                        decision="failed",
+                    )
                     if refund.order.user_id:
                         create_notification(
-                            refund.order.user, f"Refund delayed for Order #{refund.order.orderId}", target=refund,
+                            refund.order.user,
+                            f"Refund delayed for Order #{refund.order.orderId}",
+                            target=refund,
                             description="The payment provider could not complete your refund. Support will review it.",
-                            data={"event": "refund_failed", "order_id": refund.order_id, "refund_id": refund.pk},
+                            data={
+                                "event": "refund_failed",
+                                "order_id": refund.order_id,
+                                "refund_id": refund.pk,
+                            },
                         )
         raise
 
 
 @transaction.atomic
-def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund:
+def _process_order_refund(
+    refund: Refund,
+    actor: Any,
+    reason: str = "",
+    *,
+    settled_reference: str = "",
+) -> Refund:
     order = Order.objects.select_for_update().filter(pk=refund.order_id).first()
     refund = Refund.objects.select_for_update().get(pk=refund.pk)
     if not order:
@@ -231,7 +309,8 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
         raise ValidationError(
             {"detail": "This order has no remaining refundable payment."}
         )
-    available_items = remaining_inventory(order)
+    previously_accepted = refund.accepted
+    available_items = remaining_inventory(order, exclude_refund=refund.pk)
     selected_items: list[dict[str, Any]] = []
     if refund.selected_items:
         amount = Decimal("0")
@@ -274,7 +353,20 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
                 {"detail": "Partial refunds require selected order items."}
             )
         selected_items = available_items
+    if previously_accepted:
+        amount = min(amount, order.paid_total - order.refunded_total)
+    if (
+        Refund.objects.filter(order=order, status=Refund.STATUS_PENDING)
+        .exclude(pk=refund.pk)
+        .exclude(provider_reference="")
+        .exists()
+    ):
+        raise ValidationError(
+            {"detail": "Another refund is still processing for this order."}
+        )
     wallet_part, card_part = refund_parts(order, amount)
+    refund.refund_amount = amount
+    refund.selected_items = selected_items
     provider_reference = ""
     try:
         if refund.refund_type == Refund.REFUND_TYPE_ORIGINAL_PAYMENT:
@@ -293,7 +385,8 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
                     provider_reference = f"WALLET-REF-{order.orderId}"
             elif order.payment_type == "split_tender":
                 provider_reference = (
-                    call_stripe_refund(order, refund, amount=card_part)
+                    settled_reference
+                    or call_stripe_refund(order, refund, amount=card_part)
                     if card_part > 0
                     else "WALLET-ONLY"
                 )
@@ -309,7 +402,9 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
                 order.payment_type in ("stripe_wallet", "card")
                 or order.stripe_session_id
             ):
-                provider_reference = call_stripe_refund(order, refund, amount=amount)
+                provider_reference = settled_reference or call_stripe_refund(
+                    order, refund, amount=amount
+                )
             elif order.payment_type == "cash_on_delivery":
                 provider_reference = f"COD-REVERSAL-{order.orderId}"
             else:
@@ -329,12 +424,22 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
                 provider_reference = f"WALLET-TX-{tx.pk}"
             else:
                 provider_reference = f"STORE-CREDIT-{order.orderId}"
+    except RefundProviderPending as exc:
+        exc.refund_amount = amount
+        exc.selected_items = selected_items
+        raise
+    except RefundProviderError:
+        raise
     except Exception as exc:
         refund.status = Refund.STATUS_FAILED
-        logger.exception('Refund provider operation failed for refund %s', refund.pk)
+        logger.exception("Refund provider operation failed for refund %s", refund.pk)
         refund.failure_reason = REFUND_FAILURE_MESSAGE
         refund.save(update_fields=["status", "failure_reason", "updated"])
-        raise RefundProviderError({'detail': 'Payment provider refund failed. Please try again or contact support.'}) from exc
+        raise RefundProviderError(
+            {
+                "detail": "Payment provider refund failed. Please try again or contact support."
+            }
+        ) from exc
 
     with transaction.atomic():
         refund = Refund.objects.select_for_update().get(pk=refund.pk)
@@ -364,6 +469,9 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
             ]
         )
 
+        from affiliates.services import reverse_referral_reward_for_order
+
+        reverse_referral_reward_for_order(order)
         order.refunded_total += amount
         order.wallet_refunded_total += wallet_part
         order.card_refunded_total += card_part
@@ -424,7 +532,8 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
         from product.models import Product
         from store.views import invalidate_catalog
 
-        for row in refund.selected_items:
+        items_to_restock = [] if previously_accepted else refund.selected_items
+        for row in items_to_restock:
             product = (
                 Product.objects.select_for_update()
                 .filter(pk=row.get("product"), is_digital=False)
@@ -494,6 +603,12 @@ def _process_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refun
 
 
 def decline_order_refund(refund: Refund, actor: Any, reason: str = "") -> Refund:
+    if refund.status == Refund.STATUS_PENDING and refund.provider_reference:
+        raise ValidationError(
+            {
+                "detail": "This refund is processing with the provider and cannot be declined."
+            }
+        )
     if refund.status not in (Refund.STATUS_PENDING, Refund.STATUS_FAILED):
         raise ValidationError({"detail": f"This refund was already {refund.status}."})
 
@@ -687,6 +802,9 @@ def execute_order_status_transition(
     cancel_card_refund = Decimal("0.00")
     cancel_total_refund = Decimal("0.00")
     if next_status == "cancelled":
+        from affiliates.services import reverse_referral_reward_for_order
+
+        reverse_referral_reward_for_order(order)
         remaining = order.paid_total - order.refunded_total
         if remaining > 0:
             wallet_part, card_part = refund_parts(order, remaining)

@@ -104,6 +104,11 @@ class TestVisualSearchEngine:
             VisualSearchEngine.load_and_validate_image(b"not-an-image-payload")
         assert "not a valid or readable image" in str(exc.value)
 
+    def test_truncated_jpeg_with_valid_headers_is_a_validation_error(self) -> None:
+        raw = create_test_image(format='JPEG', size=(300, 400))[:-50]
+        with pytest.raises(ValidationError):
+            VisualSearchEngine.load_and_validate_image(io.BytesIO(raw))
+
     def test_image_validation_rejects_oversized_file(self):
         large_bytes = b"x" * (VisualSearchEngine.MAX_FILE_SIZE_BYTES + 100)
         with pytest.raises(ValidationError) as exc:
@@ -119,25 +124,31 @@ class TestVisualSearchEngine:
         assert "Blue" in palette[0]["name"] or "Navy" in palette[0]["name"]
         assert palette[0]["percentage"] > 80
 
-    def test_region_analysis_detects_hotspots(self):
-        # Portrait orientation (aspect ratio >= 1.1)
-        raw = create_test_image(format="JPEG", size=(300, 500))
-        img = Image.open(io.BytesIO(raw))
-        items = analyze_image_regions(img)
-        assert len(items) >= 3
-        # Must have top, bottom, and footwear segments
-        item_ids = [item["id"] for item in items]
-        assert "item_top" in item_ids
-        assert "item_shoes" in item_ids
-        for item in items:
-            assert len(item["box"]) == 4
-            ymin, xmin, ymax, xmax = item["box"]
-            assert 0.0 <= ymin <= ymax <= 1.0
-            assert 0.0 <= xmin <= xmax <= 1.0
+    def test_region_analysis_uses_model_not_aspect_ratio(self, monkeypatch):
+        monkeypatch.setattr("product.local_vision.recognize", lambda image: {
+            "label": "Book", "category": "books", "score": 0.30, "margin": 0.08,
+        })
+        for size in [(300, 500), (500, 300)]:
+            items = analyze_image_regions(Image.new("RGB", size, "red"))
+            assert len(items) == 1
+            assert items[0]["label"] == "Book"
+            assert items[0]["confidence"] is None
+            assert items[0]["box"] == [0, 0, 1, 1]
 
 
 @pytest.mark.django_db
 class TestVisualSearchApi:
+    def test_truncated_jpeg_upload_returns_clean_400(self, api_client: APIClient) -> None:
+        response = api_client.post('/api/v1/products/visual-search/', {
+            'image': SimpleUploadedFile(
+                'truncated.jpg', create_test_image(format='JPEG')[:-50],
+                content_type='image/jpeg',
+            ),
+        }, format='multipart')
+        assert response.status_code == 400
+        assert 'OSError' not in str(response.data)
+        assert 'truncated (' not in str(response.data)
+
     def test_get_presets_returns_curated_looks(self, api_client):
         res = api_client.get("/api/v1/products/visual-search/presets/")
         assert res.status_code == 200
@@ -164,28 +175,67 @@ class TestVisualSearchApi:
         assert len(data["results"]) >= 1
         top_match = data["results"][0]
         assert "Bomber Jacket" in top_match["product"]["title"]
-        assert top_match["similarity_score"] >= 70
+        assert top_match["similarity_score"] is None
+        assert data["method"] == "preset_metadata"
         assert len(top_match["match_reasons"]) >= 1
 
-    def test_search_with_uploaded_image(self, api_client, sample_products):
-        raw_image = create_test_image(format="JPEG", size=(400, 600), color=(15, 15, 15))
-        uploaded = SimpleUploadedFile(
-            "outfit.jpg",
-            raw_image,
-            content_type="image/jpeg",
+    @pytest.mark.parametrize("score,margin", [(0.30, 0.08), (0.10, 0.08), (0.30, 0.001)])
+    def test_book_never_returns_unrelated_categories(
+        self, api_client, sample_products, active_store, monkeypatch, score, margin,
+    ):
+        book = Product.objects.create(
+            store=active_store, title="Red Paper Book", category="books",
+            price=Decimal("12.00"), discount=0, available=5, visibility=True,
         )
-        res = api_client.post(
-            "/api/v1/products/visual-search/",
-            {"image": uploaded, "query": "sneakers under $150"},
-            format="multipart",
-        )
+        monkeypatch.setattr("product.local_vision.recognize", lambda image: {
+            "label": "Book", "category": "books", "score": score,
+            "margin": margin, "embedding": [1.0] + [0.0] * 511,
+        })
+
+        def rank(embedding: list[float], candidates: list[dict]) -> list[dict]:
+            assert all(row["id"] == book.pk for row in candidates)
+            return [{"id": row["id"], "score": 0.31} for row in candidates]
+
+        monkeypatch.setattr("product.local_vision.rank", rank)
+        res = api_client.post("/api/v1/products/visual-search/", {
+            "image": SimpleUploadedFile("book.jpg", create_test_image(), content_type="image/jpeg"),
+        }, format="multipart")
         assert res.status_code == 200
         data = res.json()
-        assert len(data["detected_items"]) >= 1
-        assert len(data["results"]) >= 1
-        assert "palette" in data
-        # Query applied should reflect the text refinement
-        assert "sneakers" in data["query_applied"].lower()
+        assert data["method"] == "local_clip"
+        if score >= 0.20 and margin >= 0.015:
+            assert data["selected_item"]["label"] == "Book"
+            assert [row["product"]["id"] for row in data["results"]] == [book.pk]
+            assert data["results"][0]["similarity_score"] is None
+        else:
+            assert data["detected_items"] == []
+            assert data["results"] == []
+
+    def test_unavailable_model_does_not_guess(self, api_client, settings):
+        settings.LOCAL_VISION_URL = ""
+        res = api_client.post("/api/v1/products/visual-search/", {
+            "image": SimpleUploadedFile("book.jpg", create_test_image(), content_type="image/jpeg"),
+        }, format="multipart")
+        assert res.status_code == 503
+        assert "text search" in str(res.json()).lower()
+
+    @pytest.mark.parametrize("box", ["[0,0,0,1]", "[0,0,2,1]", "[0,0,NaN,1]", "null", "{}"])
+    def test_invalid_crop_rejected(self, api_client, box):
+        res = api_client.post("/api/v1/products/visual-search/", {
+            "image": SimpleUploadedFile("book.jpg", create_test_image(), content_type="image/jpeg"),
+            "focus_box": box,
+        }, format="multipart")
+        assert res.status_code == 400
+
+    def test_candidates_exclude_nonpublic_products(self, sample_products, active_store):
+        product = sample_products[0]
+        assert product in VisualSearchEngine.candidates("outwear", None)
+        product.is_blocked = True
+        product.save(update_fields=["is_blocked"])
+        assert product not in VisualSearchEngine.candidates("outwear", None)
+        active_store.verified_at = None
+        active_store.save(update_fields=["verified_at"])
+        assert VisualSearchEngine.candidates("outwear", None) == []
 
     def test_search_requires_image_or_preset(self, api_client):
         res = api_client.post(

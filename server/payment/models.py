@@ -221,6 +221,10 @@ class Order(DatesMixin):
     buyer_email = models.EmailField(max_length=255, blank=True, default="")
     buyer_phone = models.CharField(max_length=50, blank=True, default="")
     checkout_key = models.UUIDField(null=True, blank=True, unique=True)
+    stripe_payment_intent = models.CharField(
+        max_length=255, blank=True, default="", db_index=True
+    )
+    payment_disputed = models.BooleanField(default=False, db_index=True)
     stripe_session_id = models.CharField(
         max_length=255, null=True, blank=True, unique=True
     )
@@ -397,3 +401,17 @@ class WalletFundingAttempt(DatesMixin):
     expires_at = models.DateTimeField()
     status = models.CharField(max_length=24, default="reserved", db_index=True)
     failure_reason = models.TextField(blank=True)
+
+
+class ProviderAdjustment(DatesMixin):
+    """One durable state per provider refund/dispute, serialized with its order."""
+
+    reference = models.CharField(max_length=255, unique=True)
+    order = models.ForeignKey(
+        Order, on_delete=models.PROTECT, related_name="provider_adjustments"
+    )
+    kind = models.CharField(max_length=12)
+    status = models.CharField(max_length=40, blank=True)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    applied_amount = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    allocations = models.JSONField(default=dict)

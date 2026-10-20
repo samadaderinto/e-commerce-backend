@@ -49,6 +49,18 @@ def update_fulfillment(
         raise ValidationError(
             {"order": f"Cannot fulfill an order with status {order.status}."}
         )
+    from types import SimpleNamespace
+    from payment.geo import validate_military_carrier
+
+    snapshot = order.address_snapshot or {}
+    validate_military_carrier(
+        SimpleNamespace(
+            city=snapshot.get("city", ""),
+            state=snapshot.get("state", ""),
+            zip=snapshot.get("zip", ""),
+        ),
+        carrier,
+    )
     ensure_fulfillments(order)
     fulfillment = order.fulfillments.filter(store=store).first()
     if fulfillment is None:

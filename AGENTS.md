@@ -157,6 +157,8 @@ npm run test:e2e
 ### Tier 3: Pre-Deployment Performance, Security & Bug Audits (Local Execution)
 Before shipping features or releases to production, operators run individual performance and security suites locally, and AI agents record bug audits into dedicated report directories. All generated reports must be written exclusively to `qa-reports/` and must remain strictly untracked by git (`.gitignore`):
 
+- **Latest-Only Performance & Security Reports**: Retain only the latest completed run in each performance category (`qa-reports/performance-testing/load/`, `stress/`, and `volume/`) and in `qa-reports/security/`. Keep that run's summary and supporting artifacts together; do not accumulate dated reports, logs, or artifact directories from older runs. Publish the new completed report before removing superseded output so an interrupted run cannot erase the latest available results. A completed run reporting failures is still the latest report and must not be replaced by an older passing result. Cleanup must stay within the corresponding report category and must never delete source code, test fixtures, or unrelated reports. This policy does not change bug-audit report retention.
+
 - **AI Agent Bug Audits**: Whenever an AI agent conducts a bug audit (e.g. reviewing regressions, triage, security inspection, or error-handling audits), the agent must write its comprehensive markdown audit report directly into `qa-reports/bug-audit/` (e.g., `qa-reports/bug-audit/bug-audit-YYYY-MM-DD.md`).
 - **Pre-Deployment Performance & Security Testing Commands**:
   ```bash

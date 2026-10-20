@@ -2,7 +2,7 @@
 from typing import Any
 
 from core.models import Refund, User
-from notification.events import operators
+from notification.events import operators, store_recipients
 from notification.views import create_notification
 from store.models import Store
 
@@ -12,7 +12,7 @@ def refund_notice(refund: Refund, actor: User, items: list[dict[str, Any]], *, u
     recipients = {user.pk: user for user in operators(admins_only=True)}
     scoped = {user_id: set(ids) for user_id in recipients}
     for store in Store.objects.filter(pk__in=ids).select_related("user"):
-        for user in [store.user, *operators(store)]:
+        for user in store_recipients(store):
             recipients[user.pk] = user
             scoped.setdefault(user.pk, set()).add(store.pk)
     if not decision and refund.order.user_id:

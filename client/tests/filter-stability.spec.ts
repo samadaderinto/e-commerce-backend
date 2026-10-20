@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import type { NotificationItem } from '../src/lib/types';
+import { postAuthWithRetry } from './helpers/auth';
 
 type Profile = {
   id: number;
@@ -206,7 +207,8 @@ for (const profile of profiles.filter(profile => profile.is_staff)) {
 
 for (const profile of profiles) {
   test(`${profile.first_name}: seeded account filters update without a document reload`, async ({ page, baseURL }) => {
-    const login = await page.request.post('/api/auth/login', {
+    test.setTimeout(150000);
+    const login = await postAuthWithRetry(page.request, '/api/auth/login', {
       headers: { origin: new URL(baseURL!).origin },
       data: {
         email: `${profile.first_name}@proace.local`,
@@ -242,9 +244,16 @@ for (const profile of profiles) {
     page.on('request', request => {
       if (request.isNavigationRequest() && request.resourceType() === 'document') documentRequests += 1;
     });
+    const filteredResponse = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return profile.is_staff
+        ? url.pathname.includes('/admin/staff/users') && url.searchParams.get('role') === option
+        : url.pathname.includes('/products') && url.searchParams.get('ordering') === option;
+    }, { timeout: 30000 });
     try {
       await assertStableControl(page, label, option);
       release?.();
+      expect((await filteredResponse).ok()).toBe(true);
       await expect(page.locator('.loading.compact')).toHaveCount(0);
       await expect(control).toHaveValue(option);
       expect(documentRequests).toBe(0);

@@ -70,3 +70,27 @@ class SearchCacheSafetyTests(TransactionTestCase):
         self.assertEqual(response.data["results"], [])
         response = self.client.get("/api/v1/products/?search=headphones&category=other")
         self.assertEqual(response.data["results"], [])
+
+    def test_stale_hits_do_not_leave_phantom_totals_or_empty_pages(self) -> None:
+        Product.objects.filter(pk=self.product.pk).update(visibility=False)
+        response = self.client.get('/api/v1/products/?search=headphones')
+        self.assertEqual(response.data['results'], [])
+        self.assertEqual(response.data['count'], 0)
+        self.assertEqual(response.data['pages'], 1)
+
+    def test_stale_first_page_is_refilled_from_current_catalog(self) -> None:
+        replacement = Product.objects.create(
+            store=self.store, title='Headphones replacement', price=Decimal('25.00'),
+            available=5, discount=0,
+        )
+        Product.objects.filter(pk=self.product.pk).update(visibility=False)
+        response = self.client.get('/api/v1/products/?search=headphones')
+        self.assertEqual([row['id'] for row in response.data['results']], [replacement.pk])
+        self.assertEqual(response.data['count'], 1)
+
+    def test_incomplete_index_page_uses_current_count(self) -> None:
+        self.search.return_value = {'ids': [], 'count': 25}
+        response = self.client.get('/api/v1/products/?search=headphones')
+        self.assertEqual([row['id'] for row in response.data['results']], [self.product.pk])
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['pages'], 1)

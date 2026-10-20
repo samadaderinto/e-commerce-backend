@@ -20,17 +20,23 @@ import {
   Ban,
   ChartNoAxesCombined,
   Check,
+  Clock,
   DollarSign,
+  ExternalLink,
   Eye,
   FileText,
   Landmark,
   LockKeyhole,
+  Mail,
   Package, Printer,
   Plus,
+  RefreshCw,
   RotateCcw,
   Search,
   Share2,
+  Shield,
   ShieldAlert,
+  ShieldCheck,
   ShoppingBag,
   Store,
   Trash2,
@@ -39,6 +45,7 @@ import {
   UserRoundCheck,
   UserRoundX,
   UsersRound,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
@@ -66,15 +73,15 @@ function isOrderAllDigital(order: { items_snapshot?: Array<Record<string, unknow
 
 function getOrderOverrideOptions(status: string, isAllDigital: boolean): string[] {
   if (isAllDigital) {
-    if (status === 'pending') return ['pending', 'cancelled'];
-    if (status === 'confirmed') return ['confirmed', 'cancelled'];
+    if (status === 'pending') return ['pending'];
+    if (status === 'confirmed') return ['confirmed'];
     if (status === 'shipped') return ['shipped', 'delivered'];
     if (status === 'delivered') return ['delivered'];
     return [status];
   }
   if (status === 'pending') return ['pending', 'confirmed', 'cancelled'];
   if (status === 'confirmed') return ['confirmed', 'shipped', 'picked up', 'cancelled'];
-  if (status === 'shipped') return ['shipped', 'delivered', 'confirmed', 'cancelled'];
+  if (status === 'shipped') return ['shipped', 'delivered', 'confirmed'];
   if (status === 'delivered') return ['delivered', 'shipped'];
   if (status === 'picked up') return ['picked up', 'confirmed'];
   return [status];
@@ -235,6 +242,7 @@ function payoutDetail(payout: StorePayout): DashboardDetail {
 
 export function AdminDashboardPage() {
   const { user, sessionLoading, notify } = useShop();
+  const isAdmin = Boolean(user && (user.is_superuser || user.is_business_admin));
   const [days, setDays] = useState('30');
   const actionDialog = useActionDialog();
   const [detail, setDetail] = useState<DashboardDetail | null>(null);
@@ -299,8 +307,8 @@ export function AdminDashboardPage() {
     const reason = await actionDialog.ask({ title: `${action === 'approve' ? 'Approve' : 'Decline'} refund #${refund.id}`, message: 'A reason is required for every refund decision.', confirmLabel: action === 'approve' ? 'Approve refund' : 'Decline refund', reasonLabel: 'Reason' });
     if (reason === null) return;
     try {
-      await api(`admin/staff/refunds/${refund.id}/process`, 'POST', { action, reason });
-      notify(`Refund ${action === 'approve' ? 'approved' : 'declined'}`);
+      const result = await api<{ detail: string }>(`admin/staff/refunds/${refund.id}/process`, 'POST', { action, reason });
+      notify(result.detail);
       await refreshOperations();
     } catch (error) { notify((error as Error).message, true); }
   }
@@ -428,7 +436,7 @@ export function AdminDashboardPage() {
         </select>
       </div>
 
-      {dashboard.isFetching && !dashboard.isLoading && <Loading compact />}
+      {dashboard.isFetching && !dashboard.isLoading && <Loading compact overlay />}
 
       {dashboard.isLoading ? (
         <Loading />
@@ -437,14 +445,16 @@ export function AdminDashboardPage() {
       ) : data && (
         <>
           <div className="stats-grid">
-            <div className="stat-item stat-0">
-              <div>
-                <span>Gross Platform Revenue</span>
-                <DollarSign size={19} />
+            {isAdmin && data.orders.gross_total != null && (
+              <div className="stat-item stat-0">
+                <div>
+                  <span>Gross Platform Revenue</span>
+                  <DollarSign size={19} />
+                </div>
+                <strong>{money(data.orders.gross_total)}</strong>
+                <small>Paid orders over the last {days} days</small>
               </div>
-              <strong>{money(data.orders.gross_total)}</strong>
-              <small>Paid orders over the last {days} days</small>
-            </div>
+            )}
 
             <div className="stat-item stat-1">
               <div>
@@ -472,22 +482,29 @@ export function AdminDashboardPage() {
               <strong>{data.stores.active}</strong>
               <small>{data.stores.total} stores total · {data.stores.blocked} suspended</small>
             </div>
-            <div className="stat-item stat-0">
-              <div>
-                <span>Total Amount in Escrow</span>
-                <LockKeyhole size={19} />
+
+            {isAdmin && data.financials?.escrow_total != null && (
+              <div className="stat-item stat-0">
+                <div>
+                  <span>Total Amount in Escrow</span>
+                  <LockKeyhole size={19} />
+                </div>
+                <strong>{money(data.financials.escrow_total)}</strong>
+                <small>Merchant funds awaiting release</small>
               </div>
-              <strong>{money(data.financials.escrow_total)}</strong>
-              <small>Merchant funds awaiting release</small>
-            </div>
-            <div className="stat-item stat-1">
-              <div>
-                <span>Total Commission Earned</span>
-                <DollarSign size={19} />
+            )}
+
+            {isAdmin && data.financials?.commission_earned != null && (
+              <div className="stat-item stat-1">
+                <div>
+                  <span>Total Commission Earned</span>
+                  <DollarSign size={19} />
+                </div>
+                <strong>{money(data.financials.commission_earned)}</strong>
+                <small>Platform fees recorded in the ledger</small>
               </div>
-              <strong>{money(data.financials.commission_earned)}</strong>
-              <small>Platform fees recorded in the ledger</small>
-            </div>
+            )}
+
             <div className="stat-item stat-2">
               <div>
                 <span>Pending Actions</span>
@@ -496,11 +513,13 @@ export function AdminDashboardPage() {
               <strong>{data.pending_actions.withdrawals + data.pending_actions.refunds}</strong>
               <small>{data.pending_actions.withdrawals} withdrawals · {data.pending_actions.refunds} refunds/disputes</small>
             </div>
+
             <Link href="/admin/payouts?status=pending" className="stat-item stat-0">
               <div><span>Pending Payouts</span><Landmark size={19} /></div>
               <strong>{data.pending_actions.withdrawals}</strong>
               <small>Review merchant withdrawal requests</small>
             </Link>
+
             <div className="stat-item stat-3">
               <div>
                 <span>Store Growth</span>
@@ -538,14 +557,16 @@ export function AdminDashboardPage() {
                 <strong>{data.referrals?.rewarded ?? 0}</strong>
                 <small>{data.referrals?.pending ?? 0} signups pending</small>
               </div>
-              <div className="stat-item stat-2">
-                <div>
-                  <span>Promotional Credit Awarded</span>
-                  <DollarSign size={19} />
+              {isAdmin && data.referrals?.rewarded_amount != null && (
+                <div className="stat-item stat-2">
+                  <div>
+                    <span>Promotional Credit Awarded</span>
+                    <DollarSign size={19} />
+                  </div>
+                  <strong>{money(data.referrals.rewarded_amount)}</strong>
+                  <small>Store credit in wallets</small>
                 </div>
-                <strong>{money(data.referrals?.rewarded_amount ?? '0')}</strong>
-                <small>Store credit in wallets</small>
-              </div>
+              )}
               <div className="stat-item stat-3">
                 <div>
                   <span>Enrolled Affiliates</span>
@@ -795,7 +816,7 @@ export function AdminDashboardPage() {
                   </Link>
                 </div>
               </div>
-              {refunds.isFetching && !refunds.isLoading && <Loading compact />}
+              {refunds.isFetching && !refunds.isLoading && <Loading compact overlay />}
               {refunds.isLoading ? (
                 <Loading />
               ) : refunds.error ? (
@@ -893,7 +914,7 @@ export function AdminDashboardPage() {
                   <Link href="/admin/coupons" className="button secondary">View all coupons &rarr;</Link>
                 </div>
               </div>
-              {coupons.isFetching && !coupons.isLoading && <Loading compact />}
+              {coupons.isFetching && !coupons.isLoading && <Loading compact overlay />}
               {coupons.isLoading ? (
                 <Loading />
               ) : coupons.error ? (
@@ -1092,7 +1113,7 @@ export function AdminUsersPage() {
       {typeof users.data?.count === 'number' && (
         <CollectionCount count={users.data.count} />
       )}
-      {users.isFetching && !users.isLoading && <Loading compact />}
+      {users.isFetching && !users.isLoading && <Loading compact overlay />}
 
       {users.isLoading ? (
         <Loading />
@@ -1271,7 +1292,7 @@ export function AdminUserDetailPage({ id }: { id: string }) {
         All users
       </Link>
 
-      {profile.isFetching && !profile.isLoading && <Loading compact />}
+      {profile.isFetching && !profile.isLoading && <Loading compact overlay />}
 
       <section className="admin-profile-card">
         <div className="admin-profile-identity">
@@ -1669,7 +1690,7 @@ export function AdminPayoutsPage() {
         <CollectionCount count={payouts.data.count} />
       )}
 
-      {payouts.isFetching && !payouts.isLoading && <Loading compact />}
+      {payouts.isFetching && !payouts.isLoading && <Loading compact overlay />}
 
       {payouts.isLoading ? (
         <Loading />
@@ -1841,7 +1862,7 @@ export function AdminStaffPage() {
       {typeof staff.data?.count === 'number' && (
         <CollectionCount count={staff.data.count} />
       )}
-      {staff.isFetching && !staff.isLoading && <Loading compact />}
+      {staff.isFetching && !staff.isLoading && <Loading compact overlay />}
       {staff.isLoading ? (
         <Loading />
       ) : staff.error ? (
@@ -2155,7 +2176,7 @@ export function AdminStoresPage() {
         setSearch('');
         setStatusFilter(''); setOrdering('-created'); setOffset(0);
       }}>Reset all filters</button>
-      {stores.isFetching && !stores.isLoading && <Loading compact />}
+      {stores.isFetching && !stores.isLoading && <Loading compact overlay />}
 
       {stores.isLoading ? (
         <Loading />
@@ -2467,7 +2488,7 @@ function AdminStorePayments({ storeId }: { storeId: string }): React.JSX.Element
         fields={fields}
       />
       <CollectionCount count={count} />
-      {result.isFetching && !result.isLoading && <Loading compact />}
+      {result.isFetching && !result.isLoading && <Loading compact overlay />}
       {result.isLoading ? <Loading /> : result.error ? (
         <ErrorState error={result.error} retry={() => void result.refetch()} />
       ) : count === 0 ? (
@@ -2945,9 +2966,593 @@ export function AdminStoreDetailPage({ id }: { id: string }) {
         )}
       </section>
       <AdminOrdersPage key={id} storeId={id} />
+      <AdminStoreTeam key={`team-${id}`} storeId={id} store={data} />
       <AdminStorePayments key={`payments-${id}`} storeId={id} />
       {actionDialog.dialog}
     </div>
+  );
+}
+
+function AdminStoreTeam({
+  storeId,
+  store,
+}: {
+  storeId: string;
+  store: import('@/lib/types').Store & { owner_email?: string; owner_name?: string; owner_avatar_url?: string };
+}) {
+  const { notify } = useShop();
+  const client = useQueryClient();
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<'store_admin' | 'catalog_manager' | 'fulfillment_specialist'>('catalog_manager');
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<number | null>(null);
+
+  const [deleteTarget, setDeleteTarget] = useState<import('@/lib/types').StoreTeamMember | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const inviteDialogRef = useDialogFocus<HTMLDivElement>(inviteOpen, () => setInviteOpen(false));
+  const deleteDialogRef = useDialogFocus<HTMLDivElement>(Boolean(deleteTarget), () => setDeleteTarget(null));
+
+  const filters = useCollectionFilters();
+  const team = useQuery({
+    queryKey: ['admin', 'store-team', storeId, filters.query],
+    queryFn: () => api<Page<import('@/lib/types').StoreTeamMember>>(`stores/${storeId}/team?paginated=1&${filters.query}`),
+  });
+
+  async function handleInvite(e: FormEvent) {
+    e.preventDefault();
+    setInviteError(null);
+    setInviting(true);
+    try {
+      await api<import('@/lib/types').StoreTeamMember>(`stores/${storeId}/team`, 'POST', {
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      });
+      await client.invalidateQueries({ queryKey: ['admin', 'store-team', storeId] });
+      notify(`Invited ${inviteEmail} to store team.`);
+      setInviteEmail('');
+      setInviteRole('catalog_manager');
+      setInviteOpen(false);
+    } catch (err: unknown) {
+      let message = err instanceof Error ? err.message : 'Failed to add team member.';
+      message = message.replace(/^(?:email|detail|error|non_field_errors):\s*/i, '');
+      setInviteError(message);
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function handleResendInvite(member: import('@/lib/types').StoreTeamMember) {
+    setResendingId(member.id);
+    try {
+      await api<{ detail: string }>(`stores/${storeId}/team/${member.id}/resend`, 'POST');
+      notify(`Invitation email resent to ${member.email}.`);
+    } catch (err: unknown) {
+      let message = err instanceof Error ? err.message : 'Failed to resend invitation.';
+      message = message.replace(/^(?:email|detail|error|non_field_errors):\s*/i, '');
+      notify(message, true);
+    } finally {
+      setResendingId(null);
+    }
+  }
+
+  async function handleRoleChange(
+    memberId: number,
+    newRole: 'store_admin' | 'catalog_manager' | 'fulfillment_specialist'
+  ) {
+    try {
+      await api<import('@/lib/types').StoreTeamMember>(`stores/${storeId}/team/${memberId}`, 'PATCH', { role: newRole });
+      await client.invalidateQueries({ queryKey: ['admin', 'store-team', storeId] });
+      notify('Team member role updated.');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to update role.';
+      notify(message, true);
+    }
+  }
+
+  async function handleRemoveMember() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api(`stores/${storeId}/team/${deleteTarget.id}`, 'DELETE');
+      await client.invalidateQueries({ queryKey: ['admin', 'store-team', storeId] });
+      notify(`Removed ${deleteTarget.email} from store team.`);
+      setDeleteTarget(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to remove team member.';
+      notify(message, true);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  function getRoleBadge(roleValue: string) {
+    if (roleValue === 'owner') {
+      return (
+        <span
+          className="badge"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 9px',
+            borderRadius: 999,
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            background: 'rgba(245, 158, 11, 0.15)',
+            color: '#d97706',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
+          }}
+        >
+          <Shield size={12} />
+          Store Owner
+        </span>
+      );
+    }
+    if (roleValue === 'store_admin') {
+      return (
+        <span
+          className="badge"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 9px',
+            borderRadius: 999,
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            background: 'rgba(99, 102, 241, 0.15)',
+            color: '#6366f1',
+            border: '1px solid rgba(99, 102, 241, 0.35)',
+          }}
+        >
+          <ShieldCheck size={12} />
+          Store Admin
+        </span>
+      );
+    }
+    if (roleValue === 'catalog_manager') {
+      return (
+        <span
+          className="badge"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 9px',
+            borderRadius: 999,
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            background: 'rgba(14, 165, 233, 0.15)',
+            color: '#0284c7',
+            border: '1px solid rgba(14, 165, 233, 0.35)',
+          }}
+        >
+          <Package size={12} />
+          Catalog Manager
+        </span>
+      );
+    }
+    return (
+      <span
+        className="badge"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '3px 9px',
+          borderRadius: 999,
+          fontSize: '0.78rem',
+          fontWeight: 600,
+          background: 'rgba(16, 185, 129, 0.15)',
+          color: '#059669',
+          border: '1px solid rgba(16, 185, 129, 0.35)',
+        }}
+      >
+        <Truck size={12} />
+        Fulfillment Specialist
+      </span>
+    );
+  }
+
+  const memberList = team.data?.results || [];
+
+  return (
+    <section className="merchant-section" style={{ marginTop: '2.5rem' }}>
+      <div className="section-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <h2>Store Team & Delegated Access</h2>
+          <p>Audit and manage backoffice staff, managers, and fulfillment specialists granted access to this store.</p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span className="muted" style={{ marginRight: 6 }}>{memberList.length + 1} total members</span>
+          <Link
+            href={`/merchant?store=${storeId}&tab=team`}
+            className="button secondary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', padding: '6px 12px' }}
+            title="Open merchant workspace team tab"
+          >
+            <ExternalLink size={14} />
+            <span>Merchant View</span>
+          </Link>
+          <button
+            type="button"
+            className="button primary"
+            onClick={() => {
+              setInviteError(null);
+              setInviteOpen(true);
+            }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: '0.82rem', padding: '6px 12px' }}
+          >
+            <UserPlus size={15} />
+            <span>Invite Member</span>
+          </button>
+        </div>
+      </div>
+
+      <CollectionFilters
+        filters={filters}
+        label="team members"
+        fields={[
+          {
+            key: 'role',
+            label: 'Role',
+            options: [
+              { value: 'store_admin', label: 'Store administrator' },
+              { value: 'catalog_manager', label: 'Catalog manager' },
+              { value: 'fulfillment_specialist', label: 'Fulfillment specialist' },
+            ],
+          },
+          { key: 'start_date', label: 'Joined from', type: 'date' },
+          { key: 'end_date', label: 'Joined until', type: 'date' },
+        ]}
+      />
+
+      {team.isLoading ? (
+        <Loading />
+      ) : team.error ? (
+        <ErrorState error={team.error} retry={() => team.refetch()} />
+      ) : (
+        <div className="card" style={{ padding: 0, overflow: 'hidden', marginTop: '1rem' }}>
+          <div className="table-scroll">
+            <table className="table" style={{ margin: 0 }}>
+              <thead>
+                <tr>
+                  <th>User / Member</th>
+                  <th>Assigned Role</th>
+                  <th>Added</th>
+                  <th>Invited By</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {store.owner_avatar_url ? (
+                        <ResponsiveMediaImage
+                          src={store.owner_avatar_url}
+                          alt={store.owner_name || 'Primary Store Owner'}
+                          style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover' }}
+                          sizes="34px"
+                          width={68}
+                          height={68}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: 34,
+                            height: 34,
+                            borderRadius: '50%',
+                            background: 'rgba(245, 158, 11, 0.15)',
+                            color: '#d97706',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 700,
+                            fontSize: '0.82rem',
+                            border: '1px solid rgba(245, 158, 11, 0.3)',
+                          }}
+                        >
+                          <Shield size={16} />
+                        </div>
+                      )}
+                      <div>
+                        <strong>{store.owner_name || 'Primary Store Owner'}</strong>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                          {store.owner_email || 'Store Owner'}
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                  <td>{getRoleBadge('owner')}</td>
+                  <td>—</td>
+                  <td>Account Owner</td>
+                  <td style={{ textAlign: 'right', color: 'var(--muted)', fontSize: '0.82rem' }}>—</td>
+                </tr>
+
+                {memberList.map((member) => {
+                  const isPending = member.status === 'pending';
+                  return (
+                    <tr key={member.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {member.avatar_url ? (
+                            <ResponsiveMediaImage
+                              src={member.avatar_url}
+                              alt={member.first_name || member.email}
+                              style={{ width: 34, height: 34, borderRadius: '50%', objectFit: 'cover' }}
+                              sizes="34px"
+                              width={68}
+                              height={68}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width: 34,
+                                height: 34,
+                                borderRadius: '50%',
+                                background: isPending ? 'rgba(245, 158, 11, 0.15)' : 'var(--soft)',
+                                color: isPending ? 'var(--amber, #d97706)' : 'var(--ink)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 700,
+                                fontSize: '0.82rem',
+                                border: isPending ? '1px solid rgba(245, 158, 11, 0.35)' : '1px solid var(--line)',
+                              }}
+                            >
+                              {isPending ? (
+                                <Mail size={15} />
+                              ) : (
+                                (member.first_name?.[0] || member.email[0]).toUpperCase()
+                              )}
+                            </div>
+                          )}
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              <strong>
+                                {member.first_name || member.last_name
+                                  ? `${member.first_name || ''} ${member.last_name || ''}`.trim()
+                                  : member.email.split('@')[0]}
+                              </strong>
+                              {isPending && (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 3,
+                                    padding: '1px 6px',
+                                    borderRadius: 999,
+                                    fontSize: '0.68rem',
+                                    fontWeight: 600,
+                                    background: 'rgba(245, 158, 11, 0.15)',
+                                    color: 'var(--amber, #d97706)',
+                                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                                  }}
+                                >
+                                  <Clock size={10} />
+                                  Pending
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                              {member.email}
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                      <td>{getRoleBadge(member.role)}</td>
+                      <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
+                        {activityDate(member.created)}
+                      </td>
+                      <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
+                        {member.invited_by_email || 'Store Owner'}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+                          {isPending && (
+                            <button
+                              type="button"
+                              className="button secondary"
+                              style={{ padding: '4px 8px', fontSize: '0.78rem', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                              disabled={resendingId === member.id}
+                              onClick={() => handleResendInvite(member)}
+                              title="Resend invitation email"
+                            >
+                              <RefreshCw size={12} className={resendingId === member.id ? 'spin' : ''} />
+                              <span>Resend</span>
+                            </button>
+                          )}
+                          {!isPending && (
+                            <select
+                              value={member.role}
+                              onChange={(e) => handleRoleChange(member.id, e.target.value as 'store_admin' | 'catalog_manager' | 'fulfillment_specialist')}
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: '0.78rem',
+                                borderRadius: 6,
+                                background: 'var(--surface)',
+                                color: 'var(--ink)',
+                                border: '1px solid var(--line)',
+                              }}
+                              aria-label={`Change role for ${member.email}`}
+                            >
+                              <option value="store_admin">Store Admin</option>
+                              <option value="catalog_manager">Catalog Manager</option>
+                              <option value="fulfillment_specialist">Fulfillment Specialist</option>
+                            </select>
+                          )}
+                          <button
+                            type="button"
+                            className="button secondary"
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: '0.78rem',
+                              color: 'var(--red, #ef4444)',
+                              borderColor: 'rgba(239, 68, 68, 0.3)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                            onClick={() => setDeleteTarget(member)}
+                            title={isPending ? 'Cancel Invitation' : 'Remove Member'}
+                          >
+                            <Trash2 size={13} />
+                            <span>{isPending ? 'Revoke' : 'Remove'}</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {memberList.length === 0 && (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: 'center', padding: '1.5rem 1rem', color: 'var(--muted)' }}>
+                      {filters.active ? 'No team members match the search filters.' : 'No delegated staff accounts assigned to this store.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+      <CollectionPagination filters={filters} count={team.data?.count || 0} />
+
+      {inviteOpen && (
+        <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="admin-team-invite-title">
+          <div className="dialog card" ref={inviteDialogRef} style={{ maxWidth: 480 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <h3 id="admin-team-invite-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <UserPlus size={18} />
+                <span>Invite Store Team Member</span>
+              </h3>
+              <button
+                type="button"
+                onClick={() => setInviteOpen(false)}
+                className="button icon"
+                style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: 'var(--muted)' }}
+                aria-label="Close dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.86rem', color: 'var(--muted)', marginTop: 0, marginBottom: '1.25rem' }}>
+              Invite staff members or collaborators to this store. They will receive an email invitation to join with designated permissions.
+            </p>
+
+            {inviteError && (
+              <div
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: 6,
+                  background: 'rgba(239, 68, 68, 0.12)',
+                  color: 'var(--red, #ef4444)',
+                  fontSize: '0.84rem',
+                  marginBottom: '1rem',
+                  border: '1px solid rgba(239, 68, 68, 0.25)',
+                }}
+              >
+                {inviteError}
+              </div>
+            )}
+
+            <form onSubmit={handleInvite}>
+              <div style={{ marginBottom: '1rem' }}>
+                <label htmlFor="admin-team-invite-email" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: 4 }}>
+                  Email address
+                </label>
+                <input
+                  id="admin-team-invite-email"
+                  type="email"
+                  required
+                  placeholder="staff@proace.local"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                  disabled={inviting}
+                  style={{ width: '100%' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: '1.5rem' }}>
+                <label htmlFor="admin-team-invite-role" style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: 4 }}>
+                  Assigned Role
+                </label>
+                <select
+                  id="admin-team-invite-role"
+                  value={inviteRole}
+                  onChange={(e) => setInviteRole(e.target.value as 'store_admin' | 'catalog_manager' | 'fulfillment_specialist')}
+                  disabled={inviting}
+                  style={{ width: '100%' }}
+                >
+                  <option value="catalog_manager">Catalog Manager (products, variants, inventory)</option>
+                  <option value="fulfillment_specialist">Fulfillment Specialist (orders, labels, tracking)</option>
+                  <option value="store_admin">Store Administrator (full operations & team management)</option>
+                </select>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => setInviteOpen(false)}
+                  disabled={inviting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="button primary"
+                  disabled={inviting || !inviteEmail.trim()}
+                >
+                  {inviting ? 'Sending Invite...' : 'Send Invitation'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="admin-team-delete-title">
+          <div className="dialog card" ref={deleteDialogRef} style={{ maxWidth: 440 }}>
+            <h3 id="admin-team-delete-title" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+              {deleteTarget.status === 'pending' ? 'Revoke Invitation' : 'Remove Team Member'}
+            </h3>
+            <p style={{ fontSize: '0.88rem', color: 'var(--muted)', marginTop: 0, marginBottom: '1.25rem' }}>
+              {deleteTarget.status === 'pending'
+                ? `Are you sure you want to revoke the pending invitation for ${deleteTarget.email}? They will no longer be able to use the link to join.`
+                : `Are you sure you want to remove ${deleteTarget.email} from this store? They will immediately lose all workspace access.`}
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="button primary"
+                style={{ background: 'var(--red, #ef4444)', borderColor: 'var(--red, #ef4444)', color: '#fff' }}
+                onClick={handleRemoveMember}
+                disabled={deleting}
+              >
+                {deleting ? 'Removing...' : deleteTarget.status === 'pending' ? 'Revoke Invite' : 'Remove Access'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -3118,7 +3723,7 @@ export function AdminOrdersPage({ storeId }: { storeId?: string } = {}) {
         )}
       </div>
 
-      {orders.isFetching && !orders.isLoading && <Loading compact />}
+      {orders.isFetching && !orders.isLoading && <Loading compact overlay />}
 
       {orders.isLoading ? (
         <Loading />
@@ -3388,7 +3993,7 @@ export function AdminCouponsPage() {
         setSearch('');
         setActiveFilter(''); setOrdering('-created'); setPage(1);
       }}>Reset all filters</button>
-      {coupons.isFetching && !coupons.isLoading && <Loading compact />}
+      {coupons.isFetching && !coupons.isLoading && <Loading compact overlay />}
 
       {coupons.isLoading ? (
         <Loading />
@@ -3617,8 +4222,8 @@ export function AdminRefundsPage() {
     const reason = await actionDialog.ask({ title: `${action === 'approve' ? 'Approve' : 'Decline'} refund #${refund.id}`, message: 'A reason is required for every refund decision.', confirmLabel: action === 'approve' ? 'Approve refund' : 'Decline refund', reasonLabel: 'Reason' });
     if (reason === null) return;
     try {
-      await api(`admin/staff/refunds/${refund.id}/process`, 'POST', { action, reason });
-      notify(`Refund ${action === 'approve' ? 'approved' : 'declined'}`);
+      const result = await api<{ detail: string }>(`admin/staff/refunds/${refund.id}/process`, 'POST', { action, reason });
+      notify(result.detail);
       await client.invalidateQueries({ queryKey: ['admin', 'all_refunds'] });
       await client.invalidateQueries({ queryKey: ['admin', 'refunds'] });
       await client.invalidateQueries({ queryKey: ['admin', 'dashboard'] });
@@ -3703,7 +4308,7 @@ export function AdminRefundsPage() {
         )}
       </div>
 
-      {refunds.isFetching && !refunds.isLoading && <Loading compact />}
+      {refunds.isFetching && !refunds.isLoading && <Loading compact overlay />}
 
       {refunds.isLoading ? (
         <Loading />
@@ -3942,7 +4547,7 @@ export function AdminCommissionPage() {
         </div>
         <Link className="button secondary" href="/admin">Dashboard</Link>
       </div>
-      {wallet.isFetching && !wallet.isLoading && <Loading compact />}
+      {wallet.isFetching && !wallet.isLoading && <Loading compact overlay />}
       {wallet.isLoading ? (
         <Loading />
       ) : wallet.error ? (
@@ -4187,28 +4792,30 @@ export function AdminTaxesPage() {
     setIsCreating(true);
   }
 
-  function openEdit(jurisdiction: AdminTaxJurisdiction) {
+  function openEdit(jurisdiction: AdminTaxJurisdiction): void {
     setIsCreating(false);
     setEditTarget(jurisdiction);
     setFormCountry(jurisdiction.country);
     setFormState(jurisdiction.state);
     setFormPostalCode(jurisdiction.postal_code || '');
     setFormName(jurisdiction.name);
-    const num = parseFloat(jurisdiction.rate) * 100;
-    setFormRate(isNaN(num) ? jurisdiction.rate : num.toFixed(3).replace(/\.?0+$/, ''));
+    const percentage: number = Number(jurisdiction.rate) * 100;
+    setFormRate(percentage.toFixed(3).replace(/\.?0+$/, ''));
     setFormTaxShipping(jurisdiction.tax_shipping);
     setFormTaxDigital(jurisdiction.tax_digital);
     setFormIsActive(jurisdiction.is_active);
   }
 
-  async function handleFormSubmit(e: FormEvent) {
+  async function handleFormSubmit(e: FormEvent<HTMLFormElement>): Promise<void> {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const parsedRate = formRate.trim().replace('%', '');
-      const numVal = parseFloat(parsedRate);
-      if (isNaN(numVal) || numVal < 0) throw new Error('Please enter a valid non-negative tax rate.');
-      const decimalRate = numVal > 1 ? (numVal / 100).toFixed(5) : numVal.toFixed(5);
+      const parsedRate: string = formRate.trim().replace(/%$/, '').trim();
+      const percentage: number = parsedRate === '' ? NaN : Number(parsedRate);
+      if (!Number.isFinite(percentage) || percentage < 0 || percentage > 100) {
+        throw new Error('Please enter a tax percentage between 0 and 100.');
+      }
+      const decimalRate: string = (percentage / 100).toFixed(5);
 
       if (isCreating) {
         await api<AdminTaxJurisdiction>('admin/taxes', 'POST', {
@@ -4384,7 +4991,7 @@ export function AdminTaxesPage() {
         )}
       </div>
 
-      {taxes.isFetching && !taxes.isLoading && <Loading compact />}
+      {taxes.isFetching && !taxes.isLoading && <Loading compact overlay />}
 
       {taxes.isLoading ? (
         <Loading />
@@ -4525,7 +5132,7 @@ export function AdminTaxesPage() {
                 />
               </Field>
 
-              <Field label="Tax Rate (Percentage e.g. 8.85 or decimal e.g. 0.08850)">
+              <Field label="Tax Rate (Percentage, e.g. 0.5 for 0.5%)">
                 <input
                   required
                   placeholder="e.g. 8.85"

@@ -1121,6 +1121,12 @@ class Command(BaseCommand):
         products: List[Product],
         coupons: List[Coupon],
     ) -> List[Order]:
+        products = [
+            product for product in products
+            if product.product_type == Product.PRODUCT_TYPE_STANDARD
+        ]
+        if not products:
+            return []
         shoppers = [u for u in users if u.is_active and not (u.is_staff or u.email in ["merchant@proace.local", "seller@proace.local", "pending-seller@proace.local", "blocked-seller@proace.local"])]
         if not shoppers:
             shoppers = users
@@ -1178,7 +1184,7 @@ class Command(BaseCommand):
             deliveries_to_create.append(delivery)
 
             # Choose 1 to 3 items
-            selected_products = random.sample(products, k=random.randint(1, 3))
+            selected_products = random.sample(products, k=min(len(products), random.randint(1, 3)))
             raw_order_data.append((shopper, address, order_time, status, selected_products, shipping_fee))
 
         # Bulk create carts and deliveries
@@ -1474,7 +1480,11 @@ class Command(BaseCommand):
 
         self.stdout.write(self.style.SUCCESS(f"  -> {len(created_reviews)} verified customer reviews populated."))
 
-    def seed_carts_and_wishlists(self, users: List[User], products: List[Product]):
+    def seed_carts_and_wishlists(self, users: List[User], products: List[Product]) -> None:
+        cart_products = [
+            product for product in products
+            if product.product_type == Product.PRODUCT_TYPE_STANDARD
+        ]
         shopper = next((u for u in users if u.email == "shopper@proace.local"), users[0])
         other_shoppers = random.sample(users, k=min(10, len(users)))
 
@@ -1490,7 +1500,7 @@ class Command(BaseCommand):
             cart, _ = Cart.objects.get_or_create(user=u, ordered=False)
             cart.cart_items.all().delete()
 
-            selected = random.sample(products, k=random.randint(2, 4))
+            selected = random.sample(cart_products, k=min(len(cart_products), random.randint(2, 4)))
             for p in selected:
                 cart_items_to_create.append(CartItem(cart=cart, product=p, quantity=random.randint(1, 2)))
 

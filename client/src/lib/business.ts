@@ -19,10 +19,12 @@ export const business = {
   returnWindowDays: 7,
   cancellationWindowHours: 12,
   escrowReviewDays: 7,
+  escrowPolicy: 'Physical sales remain in review until seven days after the store shipment’s recorded delivery, and never clear before the original seven-day sale hold. Undelivered physical sales stay in review. Digital sales retain the seven-day sale hold.',
   standardCommissionPercent: 4,
   officialCommissionPercent: 0,
   referralRewardAmount: 25,
   referralRewardLimit: 4,
+  referralRewardPolicy: 'Referral rewards require a fully paid qualifying order and are reversed when that order is cancelled or refunded. Already-spent promotional credit is recovered from the wallet balance, which can remain negative until replenished.',
   affiliateNetwork: 'ClickBank Official Partner Network',
 } as const;
 

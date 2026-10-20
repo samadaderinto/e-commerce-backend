@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from core.throttles import AccountAuthThrottle
 from core.listing_filters import ListingQuerySerializer, filter_records, record_page
 
 import logging
@@ -71,10 +72,10 @@ from .serializers import (
     WalletTopupRequestSerializer, PaymentSessionRequestSerializer,
     PasswordChangeRequestSerializer, AddressSerializer, AuthRequestSerializer, CartMutationRequestSerializer,
     CartSerializer, CatalogPageSerializer, CouponAdminSerializer,
-    CatalogQuerySerializer, CatalogSerializer, CheckoutRequestSerializer,
+    CatalogQuerySerializer, CatalogSerializer, CartProductSerializer, CheckoutRequestSerializer,
     OrderSerializer, OrderTrackingSerializer, ProductIdRequestSerializer, PublicStoreSerializer, RefundRequestSerializer, RegisterSerializer,
     ReviewSerializer, ShippingRateSerializer, UserSerializer, UserAvatarImageSerializer, WalletCheckoutSerializer, unit_price,
-    VisualSearchResponseSerializer, VisualSearchPresetLookSerializer,
+    VisualSearchResponseSerializer, VisualSearchPresetLookSerializer, VisualSearchRequestSerializer,
 )
 
 
@@ -133,7 +134,20 @@ def tokens(user):
 class AuthView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
+    throttle_classes = [AccountAuthThrottle]
     throttle_scope = 'auth'
+
+    def initial(self, request: Request, *args: Any, **kwargs: Any) -> None:
+        from collections.abc import Mapping
+
+        if not isinstance(request.data, Mapping):
+            raise ValidationError({'detail': 'Submit a JSON object with authentication fields.'})
+        super().initial(request, *args, **kwargs)
+
+    def get_throttles(self) -> list[AccountAuthThrottle]:
+        from core.throttles import ClientAuthThrottle
+
+        return [AccountAuthThrottle(), ClientAuthThrottle()]
 
     @extend_schema(
         request=AuthRequestSerializer,
@@ -197,6 +211,8 @@ class AuthView(APIView):
             from core.models import Device
             Device.objects.filter(user=user, device_ip=request.META.get('REMOTE_ADDR')).update(last_login=user.last_login)
             record_activity(user)
+            from store.services import link_pending_store_team_invitations
+            link_pending_store_team_invitations(user)
             return Response(tokens(user))
         if action == 'register':
             payload = {**data, 'email': str(data.get('email', '')).strip().lower()}
@@ -209,6 +225,8 @@ class AuthView(APIView):
             try:
                 with transaction.atomic():
                     user = User.objects.create_user(**serializer.validated_data, is_active=False)
+                    from store.services import link_pending_store_team_invitations
+                    link_pending_store_team_invitations(user)
                     token_payload = {'user': user.pk, 'version': user.credential_version}
                     if referral_code:
                         token_payload['ref'] = referral_code
@@ -242,6 +260,8 @@ class AuthView(APIView):
                     user.is_active = True
                     user.credential_version += 1
                     user.save(update_fields=['is_active', 'credential_version'])
+                    from store.services import link_pending_store_team_invitations
+                    link_pending_store_team_invitations(user)
                     ref = str(payload.get('ref') or '').strip()
                     if ref:
                         record_referral(ref, user)
@@ -267,6 +287,10 @@ class AuthView(APIView):
                 )
             return Response({'detail': 'If an active account exists, a reset link has been sent.'})
         if action == 'reset':
+            for field in ('uid', 'token'):
+                value = data.get(field)
+                if not isinstance(value, str) or not value.strip() or len(value) > 256:
+                    raise ValidationError({'detail': 'Invalid reset link.'})
             try:
                 decoded_uid = force_str(urlsafe_base64_decode(data.get('uid', '')))
                 if not decoded_uid.isascii() or not decoded_uid.isdecimal() or len(decoded_uid) > 19:
@@ -408,7 +432,9 @@ class ProductsView(APIView):
         # Sort/offset narrow IDs, not the full model graph and review subqueries.
         with stage("hydrate"):
             count = products.count()
-            if page == 1:
+            if (page - 1) * 24 >= count:
+                rows = []
+            elif page == 1:
                 # The ordering index can fetch the first 24 rows directly; retain
                 # the existing five-query budget on the common first page.
                 rows = list(products[:24])
@@ -501,11 +527,17 @@ class ProductsView(APIView):
         if ordering not in valid_orderings:
             ordering = '-created'
         search_ordering = ordering if params.get('ordering') in valid_orderings else None
-        page = serializers.IntegerField(min_value=1, default=1).run_validation(params.get('page', 1))
+        page = CatalogQuerySerializer().fields['page'].run_validation(params.get('page', 1))
         page_size = 24
         offset = (page - 1) * page_size
         if search:
-            if not is_store_preview and not params.get("is_digital") and not params.get("product_type"):
+            if (
+                not is_store_preview
+                and not params.get("is_digital")
+                and not params.get("product_type")
+                and not params.get("start_date")
+                and not params.get("end_date")
+            ):
                 from django.db import connection
 
                 with stage("search"):
@@ -531,17 +563,20 @@ class ProductsView(APIView):
                     count = search_results['count']
                     with stage("hydrate"):
                         products_by_id = products.filter(pk__in=ids).in_bulk(ids)
-                        products = [products_by_id[pk] for pk in ids if pk in products_by_id]
-                    with stage("serialize"):
-                        results = CatalogSerializer(
-                            products, many=True, context={'request': request}
-                        ).data
-                    return Response({
-                        'count': count,
-                        'page': page,
-                        'pages': max(1, (count + page_size - 1) // page_size),
-                        'results': results,
-                    })
+                    expected = max(0, min(page_size, count - offset))
+                    if len(products_by_id) == len(ids) == expected:
+                        indexed_products = [products_by_id[pk] for pk in ids]
+                        with stage("serialize"):
+                            results = CatalogSerializer(
+                                indexed_products, many=True, context={'request': request}
+                            ).data
+                        return Response({
+                            'count': count,
+                            'page': page,
+                            'pages': max(1, (count + page_size - 1) // page_size),
+                            'results': results,
+                        })
+                    logger.warning('Stale search page detected; using authoritative catalog search')
             products = filter_catalog_text(products, search)
             if search_ordering is None:
                 products = products.order_by(
@@ -596,7 +631,12 @@ class ProductDetailView(APIView):
                 or getattr(user, 'is_superuser', False)
                 or getattr(user, 'is_business_admin', False)
             )
-            if not is_authorized or not raw_product.visibility or (raw_product.is_blocked and not is_staff_operator):
+            operator_preview = is_staff_operator and request.query_params.get('preview') == '1'
+            if (
+                not is_authorized
+                or (not raw_product.visibility and not operator_preview)
+                or (raw_product.is_blocked and not is_staff_operator)
+            ):
                 raise Http404('No Product matches the given query.')
             product = raw_product
         if request.user.is_authenticated:
@@ -687,6 +727,7 @@ class ProductDropLiveView(APIView):
 
                     if is_dropped and curr and curr.drop_at:
                         yield encode_event('dropped', {'product_id': pk, 'is_dropped': True})
+                        break
 
                     time.sleep(3)
             except GeneratorExit:
@@ -716,44 +757,38 @@ class VisualSearchPresetsView(APIView):
     )
     def get(self, request: Request) -> Response:
         from product.visual_search import PRESET_LOOKS
-        return Response(list(PRESET_LOOKS.values()))
+        return Response([
+            {**preset, 'items': [{**item, 'confidence': None} for item in preset['items']]}
+            for preset in PRESET_LOOKS.values()
+        ])
 
 
 class VisualSearchView(APIView):
     permission_classes = [AllowAny]
     parser_classes = [MultiPartParser, FormParser]
+    throttle_scope = 'visual_search'
 
     @extend_schema(
         operation_id='storefront_visual_search',
+        request=VisualSearchRequestSerializer,
         responses=VisualSearchResponseSerializer,
         auth=[],
-        description='Upload a photo or choose a preset look to discover matching products across categories, colors, and silhouettes.',
+        description='Local image recognition with image-to-description catalog ranking. Presets are curated metadata examples, not recognition.',
     )
     def post(self, request: Request) -> Response:
-        import json
         import re
         from product.visual_search import VisualSearchEngine, PRESET_LOOKS
 
-        image_file = request.FILES.get('image')
-        preset_id = request.data.get('preset_id')
-        item_id = request.data.get('item_id')
-        user_query = str(request.data.get('query') or '').strip()
-        category_filter = str(request.data.get('category') or '').strip()
-        store_id = request.data.get('store_id')
-
-        focus_box = None
-        raw_box = request.data.get('focus_box')
-        if raw_box:
-            try:
-                if isinstance(raw_box, str):
-                    if raw_box.startswith('['):
-                        focus_box = json.loads(raw_box)
-                    else:
-                        focus_box = [float(v.strip()) for v in raw_box.split(',') if v.strip()]
-                elif isinstance(raw_box, (list, tuple)):
-                    focus_box = [float(v) for v in raw_box]
-            except Exception:
-                focus_box = None
+        inputs = VisualSearchRequestSerializer(data=request.data)
+        inputs.is_valid(raise_exception=True)
+        data = inputs.validated_data
+        image_file = data.get('image')
+        preset_id = data.get('preset_id')
+        item_id = data.get('item_id')
+        user_query = data.get('query', '')
+        category_filter = data.get('category', '')
+        store_id = data.get('store_id')
+        focus_box = data.get('focus_box')
 
         if image_file:
             image = VisualSearchEngine.load_and_validate_image(image_file)
@@ -763,11 +798,11 @@ class VisualSearchView(APIView):
                 selected_item_id=item_id,
                 user_query=user_query,
                 category_filter=category_filter,
-                store_id=int(store_id) if store_id and str(store_id).isdigit() else None,
+                store_id=store_id,
             )
         elif preset_id and preset_id in PRESET_LOOKS:
             preset = PRESET_LOOKS[preset_id]
-            items = preset['items']
+            items = [{**item, 'confidence': None} for item in preset['items']]
             active_item = None
             if item_id:
                 for item in items:
@@ -788,13 +823,12 @@ class VisualSearchView(APIView):
                 target_colors=target_colors,
                 target_keywords=target_keywords,
                 user_query=user_query,
-                store_id=int(store_id) if store_id and str(store_id).isdigit() else None,
+                store_id=store_id,
             )
             analysis = {
-                'palette': [
-                    {'hex': color, 'name': 'Accent Tone', 'percentage': 30.0}
-                    for color in target_colors
-                ],
+                'palette': [],
+                'method': 'preset_metadata',
+                'message': 'Curated example look: related category and catalog text, not image recognition.',
                 'detected_items': items,
                 'selected_item_id': active_item['id'] if active_item else None,
                 'selected_item': active_item,
@@ -813,10 +847,13 @@ class VisualSearchView(APIView):
             })
 
         response_data = {
+            'method': analysis['method'],
+            'message': analysis['message'],
             'palette': analysis['palette'],
             'detected_items': analysis['detected_items'],
             'selected_item_id': analysis['selected_item_id'],
             'selected_item': analysis.get('selected_item'),
+            'selection_required': analysis.get('selection_required', False),
             'results': serialized_results,
             'query_applied': analysis['query_applied'],
         }
@@ -939,27 +976,35 @@ class ReviewsView(APIView):
             return [IsAuthenticated()]
         return super().get_permissions()
 
-    @extend_schema(responses=ReviewSerializer(many=True), auth=[])
-    def get(self, request, pk):
+    @extend_schema(parameters=[ListingQuerySerializer], responses=ReviewSerializer(many=True), auth=[])
+    def get(self, request: Request, pk: int) -> Response:
         product = get_object_or_404(catalog(), pk=pk)
-        reviews = list(
-            Review.objects.filter(product=product)
-            .select_related('user')
-            .order_by('-created', '-pk')[:50]
-        )
+        records = Review.objects.filter(product=product).select_related('user').order_by('-created', '-pk')
+        paginated = request.query_params.get('paginated') == '1'
+        own_review = records.filter(user=request.user).first() if request.user.is_authenticated else None
+        count, page = record_page(records, request.query_params) if paginated else (0, records[:50])
+        reviews = list(page)
+        verification_rows = reviews + ([own_review] if own_review else [])
         context = {
             'request': request,
             'verified_buyer_ids': verified_buyer_ids(
                 product.pk,
-                {review.user_id for review in reviews},
+                {review.user_id for review in verification_rows},
             ),
         }
         context['verified_buyer_ids'].update(
             review.user_id
-            for review in reviews
+            for review in verification_rows
             if review.user.is_staff or review.user.is_superuser
         )
-        return Response(ReviewSerializer(reviews, many=True, context=context).data)
+        results = ReviewSerializer(reviews, many=True, context=context).data
+        if paginated:
+            return Response({
+                'count': count,
+                'results': results,
+                'own_review': ReviewSerializer(own_review, context=context).data if own_review else None,
+            })
+        return Response(results)
 
     @extend_schema(request=ReviewSerializer, responses={201: ReviewSerializer, 400: OpenApiTypes.OBJECT, 403: OpenApiTypes.OBJECT})
     @transaction.atomic
@@ -1123,29 +1168,41 @@ def cart_data(cart: Cart, request: Request) -> dict[str, Any]:
             # A seller can retire an option while it is in a shopper's cart.
             # Keep the cart readable/removable; checkout still rejects the option.
             valid_option = False
-            price = unit_price(product)
+            # Catalog pricing remains readable even if a later price edit rounds
+            # below a payable cent. This row is unavailable, never a free item.
+            price = max(Decimal(product.sale_price), Decimal('0.00'))
         available = min(product.available, option.get('available', product.available)) if option else product.available
-        data = CatalogSerializer(product, context={'request': request}).data
+        data = CartProductSerializer(
+            product, context={'request': request, 'cart_unit_price': price},
+        ).data
         data['selected_variant'] = item.variant
         data['sale_price'] = str(price)
         data['available'] = available if valid_option else 0
         if item.variant:
             data['title'] += f' ({item.variant})'
-        rows.append({
-            'product': data,
-            'quantity': item.quantity,
-            'total': str(price * item.quantity),
-            'purchasable': valid_option
-            and product.product_type != Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
-            and not is_own_store(product, request.user)
-            and product.visibility
-            and not product.is_blocked
-            and product.store.status == Store.STATUS_ACTIVE
-            and product.store.verified_at is not None
-            and (item.quantity == 1 if product.is_digital else (
-                item.quantity <= available and quantities[product.pk] <= product.available
-            )),
-        })
+        rows.append(
+            {
+                "product": data,
+                "quantity": item.quantity,
+                "total": str(price * item.quantity),
+                "purchasable": valid_option
+                and product.product_type != Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK
+                and not is_own_store(product, request.user)
+                and product.visibility
+                and not product.is_upcoming_drop
+                and not product.is_blocked
+                and product.store.status == Store.STATUS_ACTIVE
+                and product.store.verified_at is not None
+                and (
+                    item.quantity == 1
+                    if product.is_digital
+                    else (
+                        item.quantity <= available
+                        and quantities[product.pk] <= product.available
+                    )
+                ),
+            }
+        )
     subtotal = sum((Decimal(row['total']) for row in rows), Decimal('0'))
     has_physical_items = any(not row['product']['is_digital'] for row in rows)
     shipping = None if has_physical_items else Decimal('0.00')
@@ -1195,6 +1252,7 @@ class CartView(APIView):
                 quantity += item.quantity
             from product.policies import selected_variant
             option = selected_variant(product, variant_name)
+            unit_price(product, variant_name)
             if option and not product.is_digital and quantity > option.get('available', product.available):
                 raise ValidationError({'variant': 'Insufficient stock for the selected option.'})
             other_quantity = sum(row.quantity for row in cart.cart_items.filter(product=product).exclude(variant=variant_name))
@@ -1303,6 +1361,7 @@ def order_data(order: Order) -> dict[str, Any]:
                 'id': refund.pk,
                 'status': refund.status,
                 'is_pending': refund.status == Refund.STATUS_PENDING,
+                'is_editable': refund.status == Refund.STATUS_PENDING and not refund.provider_reference,
                 'reason': refund.reason,
                 'refund_type': refund.refund_type,
                 'refund_amount': str(refund.refund_amount),
@@ -1341,6 +1400,7 @@ class OrdersView(APIView):
         orders = filter_records(
             Order.objects.filter(user=request.user).order_by('-created', '-pk'), request.query_params,
             search_fields=("orderId", "tracking_number", "carrier", "cart__cart_items__product__title"),
+            json_search_fields=('items_snapshot',),
             fields={"status": "status", "payment_type": "payment_type"}, amount_field="total",
         )
         orders = load_order_relations(orders)
@@ -1351,9 +1411,19 @@ class OrdersView(APIView):
 
 
 class OrderDetailView(APIView):
+    @staticmethod
+    def _needs_digital_delivery(order: Order) -> bool:
+        return bool(
+            order.status in ('confirmed', 'shipped')
+            and order.ordered
+            and order.paid_total >= order.total
+            and order.items_snapshot
+            and all(row.get('is_digital') for row in order.items_snapshot)
+        )
+
     @extend_schema(responses={200: OrderSerializer, 404: OpenApiTypes.OBJECT})
     def get(self, request: Request, pk: int) -> Response:
-        if request.user.is_staff or request.user.is_superuser:
+        if request.user.is_staff or request.user.is_superuser or request.user.is_business_admin:
             orders = Order.objects.all().order_by('-created')
         else:
             orders = Order.objects.filter(user=request.user).order_by('-created')
@@ -1363,27 +1433,30 @@ class OrderDetailView(APIView):
                 {"detail": "This order isn’t available to your account."},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        if (
-            order.status in ("confirmed", "shipped")
-            and order.ordered
-            and order.paid_total >= order.total
-            and order.items_snapshot
-            and all(row.get("is_digital") for row in order.items_snapshot)
-        ):
-            now = timezone.now()
-            order.status = "delivered"
-            order.delivered_at = order.delivered_at or order.created or now
-            order.shipped_at = None
-            order.status_updated_at = now
-            events = list(order.tracking_events or [])
-            if not any(ev.get("status") == "delivered" for ev in events):
-                events.append({
-                    "status": "delivered",
-                    "description": "Instant digital fulfillment completed.",
-                    "timestamp": now.isoformat(),
-                })
-            order.tracking_events = events
-            order.save(update_fields=["status", "delivered_at", "shipped_at", "status_updated_at", "tracking_events", "updated"])
+        if self._needs_digital_delivery(order):
+            with transaction.atomic():
+                order = get_object_or_404(
+                    load_order_relations(orders.select_for_update(of=('self',))),
+                    pk=order.pk,
+                )
+                if self._needs_digital_delivery(order):
+                    now = timezone.now()
+                    order.status = 'delivered'
+                    order.delivered_at = order.delivered_at or order.created or now
+                    order.shipped_at = None
+                    order.status_updated_at = now
+                    events = list(order.tracking_events or [])
+                    if not any(event.get('status') == 'delivered' for event in events):
+                        events.append({
+                            'status': 'delivered',
+                            'description': 'Instant digital fulfillment completed.',
+                            'timestamp': now.isoformat(),
+                        })
+                    order.tracking_events = events
+                    order.save(update_fields=[
+                        'status', 'delivered_at', 'shipped_at', 'status_updated_at',
+                        'tracking_events', 'updated',
+                    ])
         return Response(order_data(order))
 
 
@@ -1430,6 +1503,16 @@ class DigitalDownloadView(APIView):
         item = matches[0] if len(matches) == 1 else None
         if not item:
             raise Http404
+        try:
+            return self._stream_asset(item, product_pk)
+        except Exception:
+            logger.exception('Purchased digital asset retrieval failed for order %s', order.pk)
+            return Response(
+                {'detail': 'Your download is temporarily unavailable. Please try again shortly.'},
+                status=503,
+            )
+
+    def _stream_asset(self, item: dict[str, Any], product_pk: int) -> FileResponse | Response:
         product = Product.objects.filter(pk=product_pk).first()
         from django.core.files.storage import default_storage
         from urllib.parse import urlparse
@@ -1439,7 +1522,9 @@ class DigitalDownloadView(APIView):
         if item_download and not item_download.startswith("/api/"):
             candidates.append(item_download)
         prod_download = (product.digital_file_url or "").strip() if product and product.is_digital else ''
-        if prod_download and prod_download not in candidates:
+        # Only legacy purchases without a recorded asset may use the current file.
+        # A missing paid edition/variant must never silently become another file.
+        if prod_download and not item_download and not item.get('variant'):
             candidates.append(prod_download)
 
         bucket = getattr(settings, "MINIO_BUCKET_NAME", "commerce-images")
@@ -1498,8 +1583,8 @@ class DigitalDownloadView(APIView):
 
 class OrderTrackingView(APIView):
     @extend_schema(responses={200: OrderTrackingSerializer}, description="Get recorded order and store-scoped fulfillment milestones with official carrier tracking links.")
-    def get(self, request, pk):
-        if request.user.is_staff or request.user.is_superuser:
+    def get(self, request: Request, pk: int) -> Response:
+        if request.user.is_staff or request.user.is_superuser or request.user.is_business_admin:
             orders = Order.objects.all()
         else:
             orders = Order.objects.filter(user=request.user)
@@ -1522,7 +1607,7 @@ class OrderTrackingView(APIView):
             'order_id': order.pk,
             'reference': order.orderId,
             'status': order.status,
-            'carrier': order.carrier or 'USPS',
+            'carrier': order.carrier or '',
             'tracking_number': order.tracking_number or '',
             'tracking_url': order.tracking_url or '',
             'shipped_at': order.shipped_at,
@@ -1641,6 +1726,7 @@ class OrderRefundView(APIView):
             "order": order.pk,
             "status": refund.status,
             "is_pending": refund.status == Refund.STATUS_PENDING,
+            "is_editable": refund.status == Refund.STATUS_PENDING and not refund.provider_reference,
             "reason": reason_code,
             "other_reason": other_reason,
             "reason_display": refund.reason,
@@ -1824,6 +1910,11 @@ class OrderRefundView(APIView):
                     "detail": "There is no pending refund request to edit for this order. Only pending requests can be modified."
                 }
             )
+
+        if refund.provider_reference:
+            raise ValidationError({
+                "detail": "This refund is already processing with the payment provider and can no longer be edited."
+            })
 
         serializer = RefundRequestSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
@@ -3002,6 +3093,9 @@ def complete_stripe_checkout(
         paid_amount=paid_amount + int(wallet_deduction_val * 100),
         wallet_paid_amount=wallet_deduction_val,
     )
+    intent = session.get("payment_intent")
+    if isinstance(intent, str) and intent:
+        Order.objects.filter(pk=order.pk).update(stripe_payment_intent=intent)
     if attempt:
         attempt.status = "completed"
         attempt.save(update_fields=["status", "updated"])
@@ -3187,8 +3281,21 @@ class StripeWebhookView(APIView):
         if not isinstance(event, dict):
             return Response({'detail': 'Invalid payment notification.'}, status=400)
 
+        try:
+            return self._process_event(event)
+        except ValidationError:
+            logger.warning('Verified payment notification failed settlement validation')
+            return Response({'detail': 'Invalid payment notification.'}, status=400)
+        except Exception:
+            logger.exception('Verified payment notification processing failed')
+            return Response({'detail': 'Payment update will be retried.'}, status=503)
+
+    def _process_event(self, event: dict[str, Any]) -> Response:
         event_type = event.get("type", "")
-        data_object = event.get("data", {}).get("object", {})
+        data = event.get('data')
+        if not isinstance(data, dict) or not isinstance(data.get('object'), dict):
+            return Response({'detail': 'Invalid payment notification.'}, status=400)
+        data_object = data['object']
 
         if event_type == "checkout.session.completed":
             session = data_object
@@ -3203,6 +3310,25 @@ class StripeWebhookView(APIView):
                         from payment.models import CheckoutAttempt
                         attempt = CheckoutAttempt.objects.filter(session_id=session.get("id")).first()
                         complete_stripe_checkout(user, session, attempt)
+
+        elif event_type in {
+            "charge.refunded",
+            "refund.created",
+            "refund.updated",
+            "refund.failed",
+            "charge.dispute.created",
+            "charge.dispute.updated",
+            "charge.dispute.closed",
+        }:
+            from payment.provider_events import reconcile_event
+
+            try:
+                reconcile_event(event_type, data_object)
+            except Exception:
+                logger.exception("Payment adjustment reconciliation failed")
+                return Response(
+                    {"detail": "Payment update will be retried."}, status=503
+                )
 
         elif event_type == "checkout.session.expired":
             session = data_object

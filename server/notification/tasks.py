@@ -15,7 +15,7 @@ from notification.models import Notification, NotificationDelivery, PushDevice
 logger = logging.getLogger(__name__)
 
 
-def _deliver_email(delivery):
+def _deliver_email(delivery: NotificationDelivery) -> None:
     message = EmailMessage(
         delivery.subject,
         delivery.body,
@@ -53,7 +53,7 @@ def _firebase_app():
         )
 
 
-def _deliver_push(delivery):
+def _deliver_push(delivery: NotificationDelivery) -> dict[str, int]:
     if not getattr(settings, "FCM_ENABLED", False):
         raise RuntimeError("FCM is disabled; the queued push delivery cannot be sent.")
 
@@ -127,8 +127,17 @@ def _deliver_push(delivery):
                 error_code or error.__class__.__name__,
             )
 
+        delivery.metadata = {**metadata, "pending_tokens": failed_tokens + pending_tokens[start + len(batch):]}
+        if not NotificationDelivery.objects.filter(
+            pk=delivery.pk, status=delivery.status, attempts=delivery.attempts,
+        ).update(metadata=delivery.metadata, updated_at=timezone.now()):
+            raise RuntimeError('Push delivery lease has been superseded.')
+
     delivery.metadata = {**metadata, "pending_tokens": failed_tokens}
-    delivery.save(update_fields=["metadata", "updated_at"])
+    if not NotificationDelivery.objects.filter(
+        pk=delivery.pk, status=delivery.status, attempts=delivery.attempts,
+    ).update(metadata=delivery.metadata, updated_at=timezone.now()):
+        raise RuntimeError('Push delivery lease has been superseded.')
     if failed_tokens:
         raise RuntimeError(
             f"FCM delivery failed for {len(failed_tokens)} device(s); will retry."
@@ -137,7 +146,7 @@ def _deliver_push(delivery):
 
 
 @shared_task(name="notification.tasks.deliver_notification_task")
-def deliver_notification_task(delivery_id):
+def deliver_notification_task(delivery_id: int) -> dict[str, str | int]:
     now = timezone.now()
     with transaction.atomic():
         delivery = NotificationDelivery.objects.select_for_update().get(pk=delivery_id)
@@ -182,19 +191,25 @@ def deliver_notification_task(delivery_id):
             delivery.status = NotificationDelivery.STATUS_PENDING
             delivery.available_at = now + timedelta(seconds=delay)
             delivery.last_error = str(error)[:4000]
-        delivery.save(
-            update_fields=[
-                "status",
-                "available_at",
-                "last_error",
-                "updated_at",
-            ]
+        updated = NotificationDelivery.objects.filter(
+            pk=delivery.pk, status=NotificationDelivery.STATUS_PROCESSING,
+            attempts=delivery.attempts,
+        ).update(
+            status=delivery.status, available_at=delivery.available_at,
+            last_error=delivery.last_error, updated_at=timezone.now(),
         )
+        if not updated:
+            return {"status": "stale", "attempts": delivery.attempts}
         return {"status": delivery.status, "attempts": delivery.attempts}
 
     delivery.status = NotificationDelivery.STATUS_SENT
     delivery.last_error = ""
-    delivery.save(update_fields=["status", "last_error", "updated_at"])
+    updated = NotificationDelivery.objects.filter(
+        pk=delivery.pk, status=NotificationDelivery.STATUS_PROCESSING,
+        attempts=delivery.attempts,
+    ).update(status=delivery.status, last_error='', updated_at=timezone.now())
+    if not updated:
+        return {"status": "stale", "attempts": delivery.attempts}
     if (
         delivery.channel == NotificationDelivery.CHANNEL_EMAIL
         and delivery.notification_id

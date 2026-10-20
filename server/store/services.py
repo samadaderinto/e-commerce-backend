@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 import logging
 
 from django.conf import settings
 from django.db import models, transaction
-from django.db.models import DecimalField, ExpressionWrapper, F, Q, Sum
+from django.db.models import DecimalField, ExpressionWrapper, F, Q, QuerySet, Sum
 from django.utils import timezone
 from nanoid import generate
 
@@ -51,6 +51,85 @@ def get_or_create_merchant_wallet(user: Any) -> MerchantWallet:
     """Retrieves or creates a singleton MerchantWallet for the given user."""
     wallet, _ = MerchantWallet.objects.get_or_create(user=user)
     return wallet
+
+
+def merchant_earnings_release_at(
+    order: Any,
+    store_id: int | None,
+    original_hold: datetime | None = None,
+) -> datetime | None:
+    """Physical proceeds wait for recorded delivery; digital proceeds use sale time.
+
+    A missing store link cannot establish which shipment earned an orphaned row,
+    so all physical shipments on that order must pass their return windows.
+    """
+    if order is None:
+        return original_hold
+    window = timedelta(days=getattr(settings, 'REFUND_WINDOW_DAYS', 7))
+    sale_hold = (order.created or timezone.now()) + window
+    release_at = max(sale_hold, original_hold) if original_hold else sale_hold
+    if order.items_snapshot:
+        physical_stores = {
+            row.get('store') or store_id for row in order.items_snapshot
+            if not row.get('is_digital')
+            and (
+                store_id is None or not row.get('store')
+                or str(row.get('store')) == str(store_id)
+            )
+        }
+    elif order.cart_id:
+        items = CartItem.objects.filter(cart_id=order.cart_id, product__is_digital=False)
+        if store_id is not None:
+            items = items.filter(product__store_id=store_id)
+        physical_stores = set(items.values_list('product__store_id', flat=True))
+        if not physical_stores and not CartItem.objects.filter(cart_id=order.cart_id).exists():
+            physical_stores = {store_id}
+    else:
+        # Missing historical composition is not proof of digital fulfillment.
+        physical_stores = {store_id}
+    deliveries = {
+        str(fulfillment.store_id): fulfillment.delivered_at
+        for fulfillment in order.fulfillments.all()
+    }
+    for physical_store in physical_stores:
+        delivered_at = deliveries.get(str(physical_store)) or order.delivered_at
+        if delivered_at is None:
+            return None
+        release_at = max(release_at, delivered_at + window)
+    return release_at
+
+
+def merchant_sale_is_pending(sale: StoreEarningsLedger, now: datetime) -> bool:
+    if sale.order_id and sale.order.payment_disputed:
+        return True
+    if not sale.order_id and sale.available_at is None:
+        return sale.status == StoreEarningsLedger.STATUS_PENDING
+    release_at = merchant_earnings_release_at(sale.order, sale.store_id, sale.available_at)
+    return release_at is None or release_at > now
+
+
+def pending_merchant_ledger_net(ledger: QuerySet[StoreEarningsLedger]) -> Decimal:
+    """Group orphaned same-order rows so a refund is deducted only once."""
+    groups: dict[tuple[int | None, int | None], Decimal] = {}
+    now = timezone.now()
+    sales = ledger.filter(entry_type=StoreEarningsLedger.TYPE_SALE).select_related(
+        'order',
+    ).prefetch_related('order__fulfillments')
+    for sale in sales:
+        if merchant_sale_is_pending(sale, now):
+            key = (sale.order_id, sale.store_id)
+            groups[key] = groups.get(key, Decimal('0.00')) + sale.net_amount
+    pending = Decimal('0.00')
+    for (order_id, store_id), net in groups.items():
+        refunds = (
+            ledger.filter(
+                order_id=order_id, store_id=store_id,
+                entry_type=StoreEarningsLedger.TYPE_REFUND,
+            ).aggregate(net=Sum('net_amount'))['net'] or Decimal('0.00')
+            if order_id is not None else Decimal('0.00')
+        )
+        pending += max(Decimal('0.00'), net + refunds)
+    return pending
 
 
 def calculate_store_tier(
@@ -182,8 +261,6 @@ def record_order_earnings_for_merchant(order: Any) -> list[StoreEarningsLedger]:
     if not order or not order.ordered or order.paid_total <= 0:
         return []
 
-    refund_window = getattr(settings, "REFUND_WINDOW_DAYS", 7)
-    available_at = (order.created or timezone.now()) + timedelta(days=refund_window)
     default_fee_rate = getattr(
         settings, "PLATFORM_FEE_PERCENT", Decimal("4.00")
     ) / Decimal("100.0")
@@ -255,7 +332,8 @@ def record_order_earnings_for_merchant(order: Any) -> list[StoreEarningsLedger]:
 
         # Check if order is already past refund window (e.g. backdated in tests or delayed processing)
         now = timezone.now()
-        is_cleared = available_at <= now
+        available_at = merchant_earnings_release_at(order, store.pk)
+        is_cleared = available_at is not None and available_at <= now
         entry_status = (
             StoreEarningsLedger.STATUS_AVAILABLE
             if is_cleared
@@ -290,39 +368,53 @@ def record_order_earnings_for_merchant(order: Any) -> list[StoreEarningsLedger]:
 
 
 @transaction.atomic
-def settle_pending_merchant_earnings() -> int:
+def settle_pending_merchant_earnings(user: Any = None) -> int:
     """
-    Finds all StoreEarningsLedger entries currently in PENDING status whose holding period
-    has elapsed (available_at <= now), moves the net amount from pending_balance to
-    available_balance in each merchant's wallet, and updates the entry status to AVAILABLE.
+    Recheck delivery evidence, including rows cleared under the old sale-only rule.
+    Recalculate each affected wallet once to avoid double-crediting funds already
+    exposed by a dashboard recalculation before the settlement worker ran.
     """
     now = timezone.now()
-    pending_entries = StoreEarningsLedger.objects.select_for_update(of=('self',)).filter(
-        status=StoreEarningsLedger.STATUS_PENDING,
-        available_at__lte=now,
-    ).filter(models.Q(order__isnull=True) | models.Q(order__paid_total__gt=0)).select_related('wallet')
+    eligible_wallets = MerchantWallet.objects.all()
+    if user is not None:
+        eligible_wallets = eligible_wallets.filter(user=user)
+    # Financial mutations take wallet locks before ledger locks. A payout request
+    # settles only its own wallet, so it cannot invert cross-merchant lock order.
+    wallet_ids = list(eligible_wallets.order_by('pk').values_list('pk', flat=True))
+    list(MerchantWallet.objects.select_for_update().filter(pk__in=wallet_ids).order_by('pk'))
+    pending_entries = (
+        StoreEarningsLedger.objects.select_for_update(of=("self",))
+        .filter(
+            entry_type=StoreEarningsLedger.TYPE_SALE,
+            wallet_id__in=wallet_ids,
+            status__in=[StoreEarningsLedger.STATUS_PENDING, StoreEarningsLedger.STATUS_AVAILABLE],
+        )
+        .filter(
+            models.Q(order__isnull=True)
+            | models.Q(order__paid_total__gt=0)
+        )
+        .select_related("wallet", "order")
+        .prefetch_related('order__fulfillments')
+    )
 
     count = 0
-    wallet_adjustments: dict[int, Decimal] = {}
+    wallets: dict[int, MerchantWallet] = {}
 
     for entry in pending_entries:
-        entry.status = StoreEarningsLedger.STATUS_AVAILABLE
-        entry.cleared_at = now
-        entry.save(update_fields=['status', 'cleared_at', 'updated'])
+        pending = merchant_sale_is_pending(entry, now)
+        target = StoreEarningsLedger.STATUS_PENDING if pending else StoreEarningsLedger.STATUS_AVAILABLE
+        release_at = merchant_earnings_release_at(entry.order, entry.store_id, entry.available_at)
+        if entry.status == StoreEarningsLedger.STATUS_PENDING and not pending:
+            count += 1
+        if entry.status != target or entry.available_at != release_at:
+            entry.status = target
+            entry.available_at = release_at
+            entry.cleared_at = None if pending else now
+            entry.save(update_fields=['status', 'available_at', 'cleared_at', 'updated'])
+        wallets[entry.wallet_id] = entry.wallet
 
-        if entry.order_id:
-            refunded_net = StoreEarningsLedger.objects.filter(order_id=entry.order_id, store=entry.store, entry_type=StoreEarningsLedger.TYPE_REFUND).aggregate(total=Sum('net_amount'))['total'] or Decimal('0.00')
-        else:
-            refunded_net = Decimal('0.00')
-        remaining_net = max(Decimal('0.00'), entry.net_amount + refunded_net)
-        wallet_adjustments[entry.wallet_id] = wallet_adjustments.get(entry.wallet_id, Decimal('0.00')) + remaining_net
-        count += 1
-
-    for wallet_id, amount in wallet_adjustments.items():
-        wallet = MerchantWallet.objects.select_for_update().get(pk=wallet_id)
-        wallet.pending_balance = max(Decimal('0.00'), wallet.pending_balance - amount)
-        wallet.available_balance = wallet.available_balance + amount
-        wallet.save(update_fields=['pending_balance', 'available_balance', 'updated'])
+    for wallet in wallets.values():
+        calculate_merchant_financials(wallet.user)
 
     return count
 
@@ -334,7 +426,7 @@ def process_refund_deduction(order: Any, refund_amount: Decimal | None = None, s
     """
     from payment.models import Order
 
-    entries = StoreEarningsLedger.objects.select_for_update(of=('self',)).filter(
+    entries = StoreEarningsLedger.objects.filter(
         order=order,
         entry_type=StoreEarningsLedger.TYPE_SALE,
     ).exclude(status=StoreEarningsLedger.STATUS_REVERSED)
@@ -342,7 +434,9 @@ def process_refund_deduction(order: Any, refund_amount: Decimal | None = None, s
     if store:
         entries = entries.filter(store=store)
 
-    entries = list(entries)
+    wallet_ids = list(entries.order_by().values_list('wallet_id', flat=True).distinct())
+    list(MerchantWallet.objects.select_for_update().filter(pk__in=wallet_ids).order_by('pk'))
+    entries = list(entries.select_for_update(of=('self',)))
     from rest_framework.exceptions import ValidationError
     if refund_amount is not None and store is None and len({entry.store_id for entry in entries}) > 1:
         raise ValidationError({'store': 'Partial refunds across multiple stores require explicit store attribution.'})
@@ -392,7 +486,7 @@ def request_merchant_payout(
         raise ValidationError({'amount': 'Enter a positive payout amount.'})
     if store and (store.user_id != user.pk or store.is_official):
         raise ValidationError({'store': 'Choose one of your merchant stores.'})
-    settle_pending_merchant_earnings()
+    settle_pending_merchant_earnings(user=user)
     wallet, _ = MerchantWallet.objects.select_for_update().get_or_create(user=user)
     calculate_merchant_financials(user)
     wallet.refresh_from_db()
@@ -510,6 +604,28 @@ def process_payout_status_change(
     wallet_obj = MerchantWallet.objects.select_for_update().get(pk=wallet.pk) if wallet else None
 
     if action == "approve":
+        if wallet_obj:
+            # Available funds already deduct ALL pending reservations, including
+            # this payout. Zero is fully funded; negative means a refund or other
+            # adjustment has invalidated the reservation pool.
+            financials = calculate_merchant_financials(wallet_obj.user)
+            if Decimal(financials['available_balance']) < Decimal('0.00'):
+                raise ValidationError({
+                    'detail': 'Payout reservations exceed cleared funds. Resolve refunds or release other pending payouts before approving this payout.'
+                })
+            wallet_obj.refresh_from_db()
+        if (
+            wallet_obj
+            and StoreEarningsLedger.objects.filter(
+                wallet=wallet_obj,
+                order__payment_disputed=True,
+            ).exists()
+        ):
+            raise ValidationError(
+                {
+                    "detail": "Resolve active payment disputes before approving this payout."
+                }
+            )
         if payout.payout_method == StorePayout.METHOD_STRIPE_CONNECT:
             if (
                 not wallet
@@ -602,26 +718,7 @@ def calculate_store_financials(store: Store, days: int = 30) -> dict:
         gross = ledger.aggregate(total=Sum("gross_amount"))["total"] or Decimal("0")
         fee = ledger.aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
         net = ledger.aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
-        pending = Decimal("0")
-        now = timezone.now()
-        pending_sales = ledger.filter(
-            entry_type=StoreEarningsLedger.TYPE_SALE,
-        ).filter(
-            models.Q(available_at__gt=now)
-            | models.Q(
-                available_at__isnull=True, status=StoreEarningsLedger.STATUS_PENDING
-            )
-        )
-        for sale in pending_sales:
-            refunds = (
-                ledger.filter(
-                    order_id=sale.order_id, entry_type=StoreEarningsLedger.TYPE_REFUND
-                ).aggregate(total=Sum("net_amount"))["total"]
-                or Decimal("0")
-                if sale.order_id
-                else Decimal("0")
-            )
-            pending += max(Decimal("0"), sale.net_amount + refunds)
+        pending = pending_merchant_ledger_net(ledger)
         cleared = net - pending
         payout_ledger = StoreEarningsLedger.objects.filter(
             wallet__user=store.user,
@@ -685,15 +782,20 @@ def calculate_store_financials(store: Store, days: int = 30) -> dict:
     fee_percent = Decimal('0.00') if is_official else getattr(settings, 'PLATFORM_FEE_PERCENT', Decimal('4.00'))
 
     refund_window = getattr(settings, 'REFUND_WINDOW_DAYS', 7)
-    cutoff = timezone.now() - timedelta(days=refund_window)
+    now = timezone.now()
+    cleared_ids = [
+        order.pk for order in sales_orders.prefetch_related('fulfillments')
+        if (release_at := merchant_earnings_release_at(order, store.pk)) is not None
+        and release_at <= now and not order.payment_disputed
+    ]
 
-    in_review_orders = sales_orders.filter(created__gt=cutoff)
+    in_review_orders = sales_orders.exclude(pk__in=cleared_ids)
     in_review_items = CartItem.objects.filter(product__store=store, cart__in=in_review_orders.values('cart_id'))
     in_review_totals = in_review_items.aggregate(value=Sum(line_value))
     in_review_gross = in_review_totals['value'] or Decimal('0.00')
     in_review_net = (in_review_gross * (Decimal('1.00') - fee_rate)).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
-    cleared_orders = sales_orders.filter(created__lte=cutoff)
+    cleared_orders = sales_orders.filter(pk__in=cleared_ids)
     cleared_items = CartItem.objects.filter(product__store=store, cart__in=cleared_orders.values('cart_id'))
     cleared_totals = cleared_items.aggregate(value=Sum(line_value))
     cleared_gross = cleared_totals['value'] or Decimal('0.00')
@@ -757,10 +859,33 @@ def calculate_merchant_financials(user: Any) -> dict:
         total_payouts_completed += Decimal(fin['payouts_completed'])
         total_payouts_pending += Decimal(fin['payouts_pending'])
 
+    # Historical hard deletions left wallet-owned records without a store.
+    # Keep those earnings and reservations in the authoritative wallet totals.
+    orphaned = StoreEarningsLedger.objects.filter(wallet=wallet, store__isnull=True)
+    orphaned_earnings = orphaned.filter(
+        entry_type__in=[StoreEarningsLedger.TYPE_SALE, StoreEarningsLedger.TYPE_REFUND],
+    ).filter(Q(order__isnull=True) | Q(order__paid_total__gt=0))
+    orphaned_totals = orphaned_earnings.aggregate(
+        gross=Sum('gross_amount'), fee=Sum('fee_amount'), net=Sum('net_amount'),
+    )
+    orphaned_net = orphaned_totals['net'] or Decimal('0.00')
+    orphaned_pending = pending_merchant_ledger_net(orphaned_earnings)
+    total_gross += orphaned_totals['gross'] or Decimal('0.00')
+    total_fee += orphaned_totals['fee'] or Decimal('0.00')
+    total_net += orphaned_net
+    total_in_review += orphaned_pending
+    total_cleared += orphaned_net - orphaned_pending
+    orphaned_payouts = orphaned.filter(entry_type=StoreEarningsLedger.TYPE_PAYOUT)
+    total_payouts_completed += abs(orphaned_payouts.filter(
+        status=StoreEarningsLedger.STATUS_COMPLETED,
+    ).aggregate(net=Sum('net_amount'))['net'] or Decimal('0.00'))
+    total_payouts_pending += abs(orphaned_payouts.filter(
+        status=StoreEarningsLedger.STATUS_PENDING,
+    ).aggregate(net=Sum('net_amount'))['net'] or Decimal('0.00'))
+
     payout_references = StoreEarningsLedger.objects.filter(
         wallet=wallet,
         entry_type=StoreEarningsLedger.TYPE_PAYOUT,
-        store__isnull=False,
     ).values('reference')
     unified_payouts = StorePayout.objects.filter(
         wallet=wallet,
@@ -814,15 +939,63 @@ def get_store_user_role(store: Store, user: Any) -> str | None:
     """
     if not user or not getattr(user, 'is_authenticated', False):
         return None
-    if getattr(user, 'is_superuser', False) or (getattr(user, 'is_staff', False) and store.is_official):
+    if (
+        (getattr(user, 'is_superuser', False) or getattr(user, 'is_business_admin', False))
+        and store.is_official
+    ):
         return 'owner'
     if store.user_id == user.id:
         return 'owner'
     from store.models import StoreTeamMember
-    membership = StoreTeamMember.objects.filter(store=store, user=user).first()
+    membership = StoreTeamMember.objects.filter(store=store, user=user, status=StoreTeamMember.STATUS_ACTIVE).first()
     if membership:
         return membership.role
+    # Check if there is an unlinked pending invitation for this user's email
+    user_email = getattr(user, 'email', None)
+    if user_email:
+        pending = StoreTeamMember.objects.filter(
+            store=store,
+            invited_email__iexact=user_email.strip().lower(),
+            status=StoreTeamMember.STATUS_PENDING,
+        ).first()
+        if pending:
+            with transaction.atomic():
+                pending.user = user
+                pending.status = StoreTeamMember.STATUS_ACTIVE
+                pending.save(update_fields=['user', 'status', 'updated'])
+            return pending.role
     return None
+
+
+@transaction.atomic
+def link_pending_store_team_invitations(user: Any) -> int:
+    """
+    When a user registers, verifies their email, or signs in, automatically
+    link any pending store team invitations matching their canonical email.
+    """
+    if not user or not getattr(user, 'email', None):
+        return 0
+    from store.models import StoreTeamMember
+    pending = StoreTeamMember.objects.select_for_update().filter(
+        invited_email__iexact=user.email.strip().lower(),
+        status=StoreTeamMember.STATUS_PENDING,
+    ).filter(Q(user__isnull=True) | Q(user=user)).order_by('store_id', 'pk')
+    count = 0
+    for member in pending:
+        already_linked = StoreTeamMember.objects.filter(
+            store_id=member.store_id, user=user,
+        ).exclude(pk=member.pk).exists()
+        if already_linked:
+            # Older invitation flows could leave a pending row beside an active
+            # membership. Preserve the assigned role instead of crashing login
+            # or letting an obsolete invitation replace it.
+            member.delete()
+            continue
+        member.user = user
+        member.status = StoreTeamMember.STATUS_ACTIVE
+        member.save(update_fields=['user', 'status', 'updated'])
+        count += 1
+    return count
 
 
 def can_manage_products(store: Store, user: Any) -> bool:
@@ -836,6 +1009,8 @@ def can_manage_orders(store: Store, user: Any) -> bool:
 
 
 def can_manage_team(store: Store, user: Any) -> bool:
+    if (getattr(user, 'is_superuser', False) or getattr(user, 'is_business_admin', False)) and store.is_official:
+        return True
     role = get_store_user_role(store, user)
     return role in ('owner', 'store_admin')
 

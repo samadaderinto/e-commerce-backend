@@ -260,7 +260,13 @@ class EdgeCaseAuditTests(TestCase):
 
     @patch('stripe.Transfer.create')
     def test_bank_payout_does_not_use_stripe_even_when_connected(self, transfer: Any) -> None:
+        from store.models import StoreEarningsLedger
+
         wallet = MerchantWallet.objects.create(user=self.seller, stripe_account_id='acct_test')
+        StoreEarningsLedger.objects.create(
+            wallet=wallet, store=self.store, gross_amount=5, net_amount=5,
+            status=StoreEarningsLedger.STATUS_AVAILABLE,
+        )
         payout = StorePayout.objects.create(wallet=wallet, store=self.store, amount=5, reference='edge-bank', payout_method='bank_transfer')
         process_payout_status_change(payout, 'approve', self.seller)
         transfer.assert_not_called()
@@ -276,12 +282,17 @@ class EdgeCaseAuditTests(TestCase):
     @patch('stripe.Transfer.create')
     def test_stripe_payout_requires_connected_account_payouts_enabled(self, transfer: Any) -> None:
         from unittest.mock import patch as mock_patch
+        from store.models import StoreEarningsLedger
 
         wallet = MerchantWallet.objects.create(
             user=self.seller,
             stripe_account_id='acct_test_pending',
             stripe_details_submitted=True,
             stripe_payouts_enabled=True,
+        )
+        StoreEarningsLedger.objects.create(
+            wallet=wallet, store=self.store, gross_amount=5, net_amount=5,
+            status=StoreEarningsLedger.STATUS_AVAILABLE,
         )
         payout = StorePayout.objects.create(
             wallet=wallet,

@@ -32,6 +32,18 @@ class CatalogPaginationTests(TestCase):
         ])
         self.client = APIClient()
 
+    def test_extreme_page_is_rejected_instead_of_overflowing_database(self) -> None:
+        response = self.client.get('/api/v1/products/?page=999999999999999999999999999999')
+        self.assertEqual(response.status_code, 400)
+
+    def test_valid_page_beyond_catalog_returns_empty_without_offset_query(self) -> None:
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get('/api/v1/products/?page=2147483647')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['results'], [])
+        self.assertEqual(response.data['count'], 60)
+        self.assertFalse(any('OFFSET' in query['sql'].upper() for query in queries))
+
     def test_page_ids_are_sorted_before_model_hydration(self) -> None:
         expected = list(Product.objects.order_by('price', '-pk').values_list('pk', flat=True)[24:48])
         with CaptureQueriesContext(connection) as queries:

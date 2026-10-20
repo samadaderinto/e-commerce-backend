@@ -14,7 +14,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { FormEvent, useState, useEffect, useRef, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Ban, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Package, Pin, Plus, Printer, RotateCcw, Search, Settings, Share2, Shield, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Trash2, Truck, Upload, UserCheck, UserPlus, Users, WalletCards, X } from 'lucide-react';
+import { Archive, ArrowDownToLine, ArrowLeft, ArrowRight, ArrowUpRight, Ban, Bell, ChartNoAxesCombined, Check, CheckCheck, ChevronLeft, ChevronRight, CircleHelp, Clock, Eye, FileText, Heart, Inbox, LayoutDashboard, Mail, Package, Pin, Plus, Printer, RotateCcw, Search, Settings, Share2, Shield, ShieldCheck, ShoppingBag, Star, Store as StoreIcon, Trash2, Truck, Upload, UserCheck, UserPlus, Users, WalletCards, X } from 'lucide-react';
 import { api, categories, money } from '@/lib/api';
 import type { Dashboard, MerchantProduct, MerchantRefund, MerchantRefundItem, NotificationCounts, NotificationItem, Page, ProductVariant, Store, StoreEarningsLedger, StorePayout, TrackingEvent, StoreProfile, StoreTeamMember, StoreTeamRole } from '@/lib/types';
 import { useShop } from './providers';
@@ -732,7 +732,7 @@ function MerchantDashboard({ store }: { store: Store }) {
         </select>
       </div>
 
-      {stats.isFetching && !stats.isLoading && <Loading compact />}
+      {stats.isFetching && !stats.isLoading && <Loading compact overlay />}
 
       {stats.isLoading ? (
         <Loading />
@@ -960,7 +960,7 @@ function MerchantDashboard({ store }: { store: Store }) {
                   View all orders <ArrowRight size={16} />
                 </Link>
               </div>
-              {orders.isFetching && !orders.isLoading && <Loading compact />}
+              {orders.isFetching && !orders.isLoading && <Loading compact overlay />}
               {orders.isLoading ? (
                 <Loading />
               ) : orders.error ? (
@@ -991,7 +991,7 @@ function MerchantDashboard({ store }: { store: Store }) {
                   {payouts.data?.length || 0} payout requests
                 </span>
               </div>
-              {payouts.isFetching && !payouts.isLoading && <Loading compact />}
+              {payouts.isFetching && !payouts.isLoading && <Loading compact overlay />}
               {payouts.isLoading ? (
                 <Loading />
               ) : payouts.error ? (
@@ -1376,7 +1376,7 @@ function parseCsvRows(text: string): string[][] {
         setOrdering('-updated');
         setOffset(0);
       }}>Reset all filters</button>
-      {products.isFetching && !products.isLoading && <Loading compact />}
+      {products.isFetching && !products.isLoading && <Loading compact overlay />}
 
       {products.isLoading ? (
         <Loading />
@@ -1837,8 +1837,8 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
 
     let fileUrl = form.digital_file_url || data?.digital_file_url || '';
     if (digital && !fileUrl && digitalFile) {
-      // Use a temporary valid placeholder while we upload the digital file to MinIO
-      fileUrl = `https://minio.local/pending-asset-${Date.now()}`;
+      // Use a temporary valid placeholder while we upload the digital file to media storage
+      fileUrl = `https://storage.local/pending-asset-${Date.now()}`;
     }
     const isImage = isDigitalImage(digitalFile, fileUrl);
 
@@ -1873,7 +1873,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       client.setQueryData<MerchantProduct>(['merchant-product', store.id, String(targetId)], result);
       setSavedProductId(targetId);
 
-      // Direct file upload to MinIO for cover image
+      // Direct file upload to media storage for cover image
       if (coverFile) {
         const coverForm = new FormData();
         coverForm.append('image', coverFile);
@@ -1882,7 +1882,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         setCoverFile(null);
       }
 
-      // Direct file upload to MinIO for digital download
+      // Direct file upload to media storage for digital download
       if (digital && digitalFile) {
         const assetForm = new FormData();
         assetForm.append('file', digitalFile);
@@ -2163,8 +2163,8 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           <div className="upload-file-icon-box"><FileText size={22} /></div>
           <div className="upload-preview-meta">
             <strong>{digitalFile.name}</strong>
-            <span>{(digitalFile.size / (1024 * 1024)).toFixed(2)} MB · Uploads to MinIO storage</span>
-            <span className="upload-preview-badge">Ready to upload</span>
+            <span>{(digitalFile.size / (1024 * 1024)).toFixed(2)} MB · Ready to upload</span>
+            <span className="upload-preview-badge">Pending save</span>
           </div>
           <button
             type="button"
@@ -2190,7 +2190,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
           <div className="upload-preview-meta">
             <strong>Active digital product file</strong>
             <span style={{ fontSize: '11px', color: 'var(--muted)', wordBreak: 'break-all' }}>{data.digital_file_url}</span>
-            <span className="upload-preview-badge">Stored in MinIO</span>
+            <span className="upload-preview-badge">Active asset</span>
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
             <a href={`/api/stores/${store.id}/products/${id}/digital-file`} target="_blank" rel="noopener noreferrer" download className="button secondary compact" title="Test file download">
@@ -2206,7 +2206,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
         <label className="upload-dropzone">
           <div className="upload-dropzone-icon"><FileText size={20} /></div>
           <span className="upload-dropzone-text">Click or drag digital file to upload</span>
-          <span className="upload-dropzone-sub">PDF, ZIP, EPUB, MP3, MP4, PNG, JPG up to 50 MB · Saved directly to MinIO storage</span>
+          <span className="upload-dropzone-sub">PDF, ZIP, EPUB, MP3, MP4, PNG, JPG up to 50 MB · Direct secure upload</span>
           <input type="file" accept=".pdf,.zip,.epub,.mp3,.mp4,.mobi,.rar,.txt,.doc,.docx,.png,.jpg,.jpeg,.webp,.svg,.avif" style={{ display: 'none' }} onChange={handleDigitalFileChange} />
         </label>
       )}
@@ -2502,7 +2502,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
   <p className="fine-print">
     {effectiveIsDigital && isImageDigitalAsset
       ? 'Your digital artwork file is automatically used as the watermarked storefront cover image. You can optionally upload a custom promotional cover below.'
-      : 'Upload a primary cover image for your product (stored directly on MinIO). Gallery photos and variant mapping can be managed below after saving.'}
+      : 'Upload a primary cover image for your product. Gallery photos and variant mapping can be managed below after saving.'}
   </p>
 
   {coverPreview ? (
@@ -2518,9 +2518,9 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       <div className="upload-preview-meta">
         <strong>{coverFile?.name || 'Selected cover photo'}</strong>
         <span>
-          {coverFile ? `${(coverFile.size / 1024).toFixed(1)} KB` : ''} · Direct MinIO upload
+          {coverFile ? `${(coverFile.size / 1024).toFixed(1)} KB` : ''} · Ready to upload
         </span>
-        <span className="upload-preview-badge">Ready to upload</span>
+        <span className="upload-preview-badge">Pending save</span>
       </div>
       <button
         type="button"
@@ -2581,7 +2581,7 @@ function ProductEditor({ store, id }: { store: Store; id: string }) {
       </div>
       <span className="upload-dropzone-text">Click or drag image to upload cover photo</span>
       <span className="upload-dropzone-sub">
-        PNG, JPG, or WEBP up to 5 MB · Saved directly to MinIO storage
+        PNG, JPG, or WEBP up to 5 MB · High-resolution cover photo
       </span>
       <input
         type="file"
@@ -2768,7 +2768,7 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
         await api(`${base}/images`, 'POST', form);
         uploaded++;
       }
-      notify(`${uploaded} image${uploaded === 1 ? '' : 's'} uploaded to MinIO storage`);
+      notify(`${uploaded} image${uploaded === 1 ? '' : 's'} uploaded successfully`);
     } catch (error) {
       notify(`${uploaded} of ${files.length} images uploaded. ${(error as Error).message}`, true);
     } finally {
@@ -2812,7 +2812,7 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
       const form = new FormData();
       form.append('file', file);
       await api(`${base}/digital-file`, 'POST', form);
-      notify('Digital product asset uploaded to MinIO storage');
+      notify('Digital product asset uploaded successfully');
       await Promise.all([
         client.invalidateQueries({ queryKey: ['merchant-product'] }),
         client.invalidateQueries({ queryKey: ['merchant-products'] }),
@@ -2832,7 +2832,7 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
       <div className="section-heading">
         <h2>Image gallery</h2>
         <label className="button secondary upload-label">
-          <Upload size={17} />{uploading ? 'Uploading to MinIO…' : 'Upload gallery images'}
+          <Upload size={17} />{uploading ? 'Uploading…' : 'Upload gallery images'}
           <input type="file" multiple accept="image/jpeg,image/png,image/webp" disabled={uploading} onChange={uploadImages} />
         </label>
       </div>
@@ -2877,7 +2877,7 @@ function ProductAssets({ store, product }: { store: Store; product: MerchantProd
             <div className="digital-asset-card-title">
               <div className="upload-file-icon-box"><FileText size={20} /></div>
               <div>
-                <h3>Digital Product Asset (MinIO Storage)</h3>
+                <h3>Digital Product Asset</h3>
                 <p style={{ margin: 0, fontSize: '11px', color: 'var(--muted)' }}>
                   {product.digital_file_url ? 'Customers receive instant download access upon purchase.' : 'No digital file uploaded yet.'}
                 </p>
@@ -3608,7 +3608,7 @@ function MerchantOrders({
         )}
       </div>
 
-      {orders.isFetching && !orders.isLoading && <Loading compact />}
+      {orders.isFetching && !orders.isLoading && <Loading compact overlay />}
 
       {orders.isLoading ? (
         <Loading />
@@ -4087,7 +4087,7 @@ function MerchantRefunds({
         )}
       </div>
 
-      {refunds.isFetching && !refunds.isLoading && <Loading compact />}
+      {refunds.isFetching && !refunds.isLoading && <Loading compact overlay />}
 
       {refunds.isLoading ? (
         <Loading />
@@ -4877,7 +4877,7 @@ function MerchantNotifications({ store }: { store: Store }) {
         { key: 'state', label: 'State', options: [{ value: 'unread', label: 'Unread' }, { value: 'read', label: 'Read' }, { value: 'archived', label: 'Archived' }] },
         { key: 'category', label: 'Category', options: ['order', 'refund', 'payout', 'wallet', 'store', 'affiliates', 'account', 'general'].map(value => ({ value, label: value })) },
       ]} />
-      {notifications.isFetching && !notifications.isLoading && <Loading compact />}
+      {notifications.isFetching && !notifications.isLoading && <Loading compact overlay />}
 
       {notifications.isLoading ? (
         <Loading />
@@ -5000,6 +5000,7 @@ function MerchantTeam({ store }: { store: Store }) {
   const [inviteRole, setInviteRole] = useState<'store_admin' | 'catalog_manager' | 'fulfillment_specialist'>('catalog_manager');
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<number | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<StoreTeamMember | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -5007,9 +5008,10 @@ function MerchantTeam({ store }: { store: Store }) {
   const inviteDialogRef = useDialogFocus(inviteOpen, () => setInviteOpen(false));
   const deleteDialogRef = useDialogFocus(Boolean(deleteTarget), () => setDeleteTarget(null));
 
+  const filters = useCollectionFilters();
   const team = useQuery({
-    queryKey: ['store-team', store.id],
-    queryFn: () => api<StoreTeamMember[]>(`stores/${store.id}/team`),
+    queryKey: ['store-team', store.id, filters.query],
+    queryFn: () => api<Page<StoreTeamMember>>(`stores/${store.id}/team?paginated=1&${filters.query}`),
   });
 
   const currentUserRole: StoreTeamRole = store.user_role || 'owner';
@@ -5030,10 +5032,25 @@ function MerchantTeam({ store }: { store: Store }) {
       setInviteRole('catalog_manager');
       setInviteOpen(false);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to add team member.';
+      let message = err instanceof Error ? err.message : 'Failed to add team member.';
+      message = message.replace(/^(?:email|detail|error|non_field_errors):\s*/i, '');
       setInviteError(message);
     } finally {
       setInviting(false);
+    }
+  }
+
+  async function handleResendInvite(member: StoreTeamMember) {
+    setResendingId(member.id);
+    try {
+      await api<{ detail: string }>(`stores/${store.id}/team/${member.id}/resend`, 'POST');
+      notify(`Invitation email resent to ${member.email}.`);
+    } catch (err: unknown) {
+      let message = err instanceof Error ? err.message : 'Failed to resend invitation.';
+      message = message.replace(/^(?:email|detail|error|non_field_errors):\s*/i, '');
+      notify(message, true);
+    } finally {
+      setResendingId(null);
     }
   }
 
@@ -5080,9 +5097,9 @@ function MerchantTeam({ store }: { store: Store }) {
             borderRadius: 999,
             fontSize: '0.8rem',
             fontWeight: 600,
-            background: 'rgba(217, 119, 6, 0.15)',
-            color: '#b45309',
-            border: '1px solid rgba(217, 119, 6, 0.3)',
+            background: 'rgba(245, 158, 11, 0.15)',
+            color: '#d97706',
+            border: '1px solid rgba(245, 158, 11, 0.35)',
           }}
         >
           <Shield size={13} />
@@ -5104,7 +5121,7 @@ function MerchantTeam({ store }: { store: Store }) {
             fontWeight: 600,
             background: 'rgba(99, 102, 241, 0.15)',
             color: '#6366f1',
-            border: '1px solid rgba(99, 102, 241, 0.3)',
+            border: '1px solid rgba(99, 102, 241, 0.35)',
           }}
         >
           <ShieldCheck size={13} />
@@ -5126,7 +5143,7 @@ function MerchantTeam({ store }: { store: Store }) {
             fontWeight: 600,
             background: 'rgba(14, 165, 233, 0.15)',
             color: '#0284c7',
-            border: '1px solid rgba(14, 165, 233, 0.3)',
+            border: '1px solid rgba(14, 165, 233, 0.35)',
           }}
         >
           <Package size={13} />
@@ -5147,7 +5164,7 @@ function MerchantTeam({ store }: { store: Store }) {
           fontWeight: 600,
           background: 'rgba(16, 185, 129, 0.15)',
           color: '#059669',
-          border: '1px solid rgba(16, 185, 129, 0.3)',
+          border: '1px solid rgba(16, 185, 129, 0.35)',
         }}
       >
         <Truck size={13} />
@@ -5206,6 +5223,19 @@ function MerchantTeam({ store }: { store: Store }) {
         </div>
       </div>
 
+      <CollectionFilters
+        filters={filters}
+        label="team members"
+        fields={[
+          { key: 'role', label: 'Role', options: [
+            { value: 'store_admin', label: 'Store administrator' },
+            { value: 'catalog_manager', label: 'Catalog manager' },
+            { value: 'fulfillment_specialist', label: 'Fulfillment specialist' },
+          ] },
+          { key: 'start_date', label: 'Joined from', type: 'date' },
+          { key: 'end_date', label: 'Joined until', type: 'date' },
+        ]}
+      />
       {team.isLoading ? (
         <Loading />
       ) : team.error ? (
@@ -5227,26 +5257,38 @@ function MerchantTeam({ store }: { store: Store }) {
                 <tr>
                   <td>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div
-                        style={{
-                          width: 36,
-                          height: 36,
-                          borderRadius: '50%',
-                          background: 'rgba(217, 119, 6, 0.2)',
-                          color: '#b45309',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontWeight: 700,
-                          fontSize: '0.88rem',
-                        }}
-                      >
-                        <Shield size={18} />
-                      </div>
+                      {store.owner_avatar_url ? (
+                        <ResponsiveMediaImage
+                          src={store.owner_avatar_url}
+                          alt={store.owner_name || 'Primary Store Owner'}
+                          style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' }}
+                          sizes="36px"
+                          width={72}
+                          height={72}
+                        />
+                      ) : (
+                        <div
+                          style={{
+                            width: 36,
+                            height: 36,
+                            borderRadius: '50%',
+                            background: 'rgba(245, 158, 11, 0.15)',
+                            color: '#d97706',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 700,
+                            fontSize: '0.88rem',
+                            border: '1px solid rgba(245, 158, 11, 0.3)',
+                          }}
+                        >
+                          <Shield size={18} />
+                        </div>
+                      )}
                       <div>
-                        <strong>Primary Store Owner</strong>
+                        <strong>{store.owner_name || 'Primary Store Owner'}</strong>
                         <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
-                          Full ownership & financial controls
+                          {store.owner_email || 'Full ownership & financial controls'}
                         </div>
                       </div>
                     </div>
@@ -5259,103 +5301,151 @@ function MerchantTeam({ store }: { store: Store }) {
                   </td>
                 </tr>
 
-                {(team.data || []).map((member) => (
-                  <tr key={member.id}>
-                    <td>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        {member.avatar_url ? (
-                          <ResponsiveMediaImage
-                            src={member.avatar_url}
-                            alt={member.first_name || member.email}
-                            style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' }}
-                            sizes="36px"
-                            width={72}
-                            height={72}
-                          />
-                        ) : (
-                          <div
-                            style={{
-                              width: 36,
-                              height: 36,
-                              borderRadius: '50%',
-                              background: 'var(--soft)',
-                              color: 'var(--ink)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 700,
-                              fontSize: '0.85rem',
-                              border: '1px solid var(--line)',
-                            }}
-                          >
-                            {(member.first_name?.[0] || member.email[0]).toUpperCase()}
-                          </div>
-                        )}
-                        <div>
-                          <strong>
-                            {member.first_name || member.last_name
-                              ? `${member.first_name || ''} ${member.last_name || ''}`.trim()
-                              : member.email.split('@')[0]}
-                          </strong>
-                          <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
-                            {member.email}
+                {(team.data?.results || []).map((member) => {
+                  const isPending = member.status === 'pending';
+                  return (
+                    <tr key={member.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          {member.avatar_url ? (
+                            <ResponsiveMediaImage
+                              src={member.avatar_url}
+                              alt={member.first_name || member.email}
+                              style={{ width: 36, height: 36, borderRadius: '50%', objectFit: 'cover' }}
+                              sizes="36px"
+                              width={72}
+                              height={72}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width: 36,
+                                height: 36,
+                                borderRadius: '50%',
+                                background: isPending ? 'rgba(245, 158, 11, 0.15)' : 'var(--soft)',
+                                color: isPending ? 'var(--amber, #d97706)' : 'var(--ink)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 700,
+                                fontSize: '0.85rem',
+                                border: isPending ? '1px solid rgba(245, 158, 11, 0.35)' : '1px solid var(--line)',
+                              }}
+                            >
+                              {isPending ? (
+                                <Mail size={16} />
+                              ) : (
+                                (member.first_name?.[0] || member.email[0]).toUpperCase()
+                              )}
+                            </div>
+                          )}
+                          <div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <strong>
+                                {member.first_name || member.last_name
+                                  ? `${member.first_name || ''} ${member.last_name || ''}`.trim()
+                                  : member.email.split('@')[0]}
+                              </strong>
+                              {isPending && (
+                                <span
+                                  className="badge"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 4,
+                                    padding: '2px 8px',
+                                    borderRadius: 999,
+                                    fontSize: '0.72rem',
+                                    fontWeight: 600,
+                                    background: 'rgba(245, 158, 11, 0.15)',
+                                    color: 'var(--amber, #d97706)',
+                                    border: '1px solid rgba(245, 158, 11, 0.35)',
+                                  }}
+                                >
+                                  <Clock size={11} />
+                                  Pending Registration
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>
+                              {member.email}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </td>
-                    <td>{getRoleBadge(member.role)}</td>
-                    <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
-                      {activityDate(member.created)}
-                    </td>
-                    <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
-                      {member.invited_by_email || 'Store Owner'}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                        {(isOwner || (currentUserRole === 'store_admin' && member.role !== 'store_admin')) && (
-                          <select
-                            aria-label={`Change role for ${member.email}`}
-                            value={member.role}
-                            onChange={(e) =>
-                              handleRoleChange(
-                                member.id,
-                                e.target.value as 'store_admin' | 'catalog_manager' | 'fulfillment_specialist'
-                              )
-                            }
-                            style={{
-                              fontSize: '0.78rem',
-                              padding: '0.3rem 0.5rem',
-                              borderRadius: 6,
-                              border: '1px solid var(--line)',
-                              background: 'var(--paper)',
-                              color: 'var(--ink)',
-                            }}
-                          >
-                            {isOwner && <option value="store_admin">Store Admin</option>}
-                            <option value="catalog_manager">Catalog Manager</option>
-                            <option value="fulfillment_specialist">Fulfillment Specialist</option>
-                          </select>
-                        )}
-                        {(isOwner || (currentUserRole === 'store_admin' && member.role !== 'store_admin')) && (
-                          <button
-                            className="icon-button"
-                            title={`Remove ${member.email}`}
-                            aria-label={`Remove ${member.email}`}
-                            style={{ color: 'var(--red)' }}
-                            onClick={() => setDeleteTarget(member)}
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>{getRoleBadge(member.role)}</td>
+                      <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
+                        {activityDate(member.created)}
+                      </td>
+                      <td style={{ fontSize: '0.82rem', color: 'var(--muted)' }}>
+                        {member.invited_by_email || 'Store Owner'}
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                          {isPending && (
+                            <button
+                              type="button"
+                              className="button secondary"
+                              style={{
+                                fontSize: '0.75rem',
+                                padding: '0.25rem 0.55rem',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                              }}
+                              title={`Resend invitation to ${member.email}`}
+                              disabled={resendingId === member.id}
+                              onClick={() => handleResendInvite(member)}
+                            >
+                              <Mail size={12} />
+                              {resendingId === member.id ? 'Resending...' : 'Resend Invite'}
+                            </button>
+                          )}
+                          {(isOwner || (currentUserRole === 'store_admin' && member.role !== 'store_admin')) && (
+                            <select
+                              aria-label={`Change role for ${member.email}`}
+                              value={member.role}
+                              onChange={(e) =>
+                                handleRoleChange(
+                                  member.id,
+                                  e.target.value as 'store_admin' | 'catalog_manager' | 'fulfillment_specialist'
+                                )
+                              }
+                              style={{
+                                fontSize: '0.78rem',
+                                padding: '0.3rem 0.5rem',
+                                borderRadius: 6,
+                                border: '1px solid var(--line)',
+                                background: 'var(--paper)',
+                                color: 'var(--ink)',
+                              }}
+                            >
+                              {isOwner && <option value="store_admin">Store Admin</option>}
+                              <option value="catalog_manager">Catalog Manager</option>
+                              <option value="fulfillment_specialist">Fulfillment Specialist</option>
+                            </select>
+                          )}
+                          {(isOwner || (currentUserRole === 'store_admin' && member.role !== 'store_admin')) && (
+                            <button
+                              className="icon-button"
+                              title={isPending ? `Revoke invitation for ${member.email}` : `Remove ${member.email}`}
+                              aria-label={isPending ? `Revoke invitation for ${member.email}` : `Remove ${member.email}`}
+                              style={{ color: 'var(--red)' }}
+                              onClick={() => setDeleteTarget(member)}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
 
-                {(team.data || []).length === 0 && (
+                {(team.data?.results || []).length === 0 && (
                   <tr>
                     <td colSpan={5} style={{ textAlign: 'center', padding: '2rem 1rem', color: 'var(--muted)' }}>
-                      No delegated team members yet. Click &quot;Invite team member&quot; to add staff.
+                      {filters.active ? 'No team members match these filters. Reset filters to see everyone.' : 'No delegated team members yet. Invite a team member to add staff.'}
                     </td>
                   </tr>
                 )}
@@ -5364,6 +5454,8 @@ function MerchantTeam({ store }: { store: Store }) {
           </div>
         </div>
       )}
+
+      <CollectionPagination filters={filters} count={team.data?.count || 0} />
 
       {/* Invite Member Dialog */}
       {inviteOpen && (
@@ -5399,7 +5491,7 @@ function MerchantTeam({ store }: { store: Store }) {
                   onChange={(e) => setInviteEmail(e.target.value)}
                 />
                 <span style={{ fontSize: '0.78rem', color: 'var(--muted)', marginTop: 4, display: 'block' }}>
-                  The member must have an existing ProAce user account registered with this email.
+                  If they already have an account, they&apos;ll be added immediately. Otherwise, an invitation email with a signup link will be sent.
                 </span>
               </Field>
 
@@ -5528,7 +5620,7 @@ function MerchantTeam({ store }: { store: Store }) {
         </div>
       )}
 
-      {/* Remove Member Confirmation Dialog */}
+      {/* Remove Member / Revoke Invitation Confirmation Dialog */}
       {deleteTarget && (
         <div className="dialog-backdrop">
           <section
@@ -5540,8 +5632,14 @@ function MerchantTeam({ store }: { store: Store }) {
           >
             <div className="admin-dialog-head">
               <div>
-                <span className="eyebrow" style={{ color: 'var(--red)' }}>REMOVE MEMBER</span>
-                <h2 id="remove-title">Remove {deleteTarget.email}?</h2>
+                <span className="eyebrow" style={{ color: 'var(--red)' }}>
+                  {deleteTarget.status === 'pending' ? 'REVOKE INVITATION' : 'REMOVE MEMBER'}
+                </span>
+                <h2 id="remove-title">
+                  {deleteTarget.status === 'pending'
+                    ? `Revoke invitation for ${deleteTarget.email}?`
+                    : `Remove ${deleteTarget.email}?`}
+                </h2>
               </div>
               <button
                 className="icon-button"
@@ -5553,8 +5651,17 @@ function MerchantTeam({ store }: { store: Store }) {
             </div>
 
             <div style={{ padding: '1rem 0', color: 'var(--muted)', fontSize: '0.9rem', lineHeight: 1.5 }}>
-              Are you sure you want to remove <strong>{deleteTarget.email}</strong> from the <strong>{store.name}</strong> team?
-              They will immediately lose access to this store&apos;s workspace and dashboard.
+              {deleteTarget.status === 'pending' ? (
+                <>
+                  Are you sure you want to revoke the team invitation for <strong>{deleteTarget.email}</strong>?
+                  Their signup invitation link will be invalidated immediately.
+                </>
+              ) : (
+                <>
+                  Are you sure you want to remove <strong>{deleteTarget.email}</strong> from the <strong>{store.name}</strong> team?
+                  They will immediately lose access to this store&apos;s workspace and dashboard.
+                </>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: '1rem' }}>
@@ -5572,7 +5679,13 @@ function MerchantTeam({ store }: { store: Store }) {
                 disabled={deleting}
                 onClick={handleRemoveMember}
               >
-                {deleting ? 'Removing...' : 'Remove Member'}
+                {deleting
+                  ? deleteTarget.status === 'pending'
+                    ? 'Revoking...'
+                    : 'Removing...'
+                  : deleteTarget.status === 'pending'
+                    ? 'Revoke Invitation'
+                    : 'Remove Member'}
               </button>
             </div>
           </section>

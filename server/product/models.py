@@ -1,4 +1,5 @@
 from decimal import Decimal
+import uuid
 from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -218,3 +219,27 @@ class ProductModerationEvent(models.Model):
     action = models.CharField(max_length=10, choices=[('block', 'Block'), ('unblock', 'Unblock'), ('restore', 'Restore')])
     reason = models.TextField()
     created = models.DateTimeField(auto_now_add=True)
+
+
+class SearchIndexJob(models.Model):
+    """Durable search intent; targets deliberately survive product deletion."""
+
+    INDEX_PRODUCT = "index_product"
+    INDEX_STORE = "index_store"
+    DELETE_PRODUCT = "delete_product"
+
+    action = models.CharField(max_length=20, choices=[
+        (INDEX_PRODUCT, "Index product"),
+        (INDEX_STORE, "Index store products"),
+        (DELETE_PRODUCT, "Delete product"),
+    ])
+    target_id = models.PositiveBigIntegerField()
+    revision = models.UUIDField(default=uuid.uuid4, editable=False)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["action", "target_id"], name="search_job_action_target_unique"
+            ),
+        ]

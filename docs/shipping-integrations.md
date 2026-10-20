@@ -137,7 +137,7 @@ flowchart TD
 
 ### 2. Geographic Data Dictionaries
 
-The centralized data dictionary is located in [`client/src/lib/geo.ts`](file:///Users/samad/Documents/GitHub/e-commerce-backend/client/src/lib/geo.ts):
+The centralized data dictionary is located in [`client/src/lib/geo.ts`](../client/src/lib/geo.ts):
 
 - **ISO 3166-1 Alpha-2 Catalog**: Contains all major internationally recognized countries with standard English nomenclature and 2-letter codes.
 - **US Subdivisions (59 Regions)**:

@@ -21,7 +21,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 
 from core.models import User
-from store.models import Store
+from store.models import Store, StoreTeamMember
 from notification.models import Notification
 from notification.models import PushDevice
 from notification.serializers import NotificationCountSerializer, NotificationSerializer
@@ -134,7 +134,10 @@ def create_notification(
     stores = Store.objects.filter(pk__in=ids)
     order = target if target and target._meta.model_name == "order" else getattr(target, "order", None)
     if order is not None and order.user_id != recipient.pk and not (recipient.is_superuser or recipient.is_business_admin):
-        scope = models.Q(user=recipient)
+        scope = models.Q(user=recipient) | models.Q(
+            team_members__user=recipient,
+            team_members__status=StoreTeamMember.STATUS_ACTIVE,
+        )
         if recipient.is_staff:
             scope |= models.Q(assigned_staff=recipient) | models.Q(is_official=True)
         stores = stores.filter(scope)

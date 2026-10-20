@@ -68,7 +68,7 @@ jobs:
         run: pipenv run coverage report --show-missing
 
       - name: Storefront API integration tests
-        run: pipenv run python manage.py test storefront --settings=codematics.storefront_settings --noinput
+        run: pipenv run python manage.py test storefront --settings=codematics.test_settings --noinput
 
   frontend:
     name: Next.js Build & Verification

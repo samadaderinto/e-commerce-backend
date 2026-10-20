@@ -11,14 +11,36 @@ from notification.models import Notification
 from notification.realtime import publish
 from payment.models import Order
 from product.models import Product
-from store.models import Store
+from store.models import Store, StoreTeamMember
 
 
 def operators(store: Store | None = None, admins_only: bool = False) -> QuerySet[User]:
     roles = Q(is_superuser=True) | Q(is_business_admin=True)
     if not admins_only:
-        roles |= Q(is_staff=True) if store is None or store.is_official else Q(is_staff=True, assigned_stores=store)
+        roles |= (
+            Q(is_staff=True)
+            if store is None
+            else Q(is_staff=True, assigned_stores=store)
+        )
     return User.objects.filter(roles, is_active=True).distinct()
+
+
+def store_recipients(store: Store, *, inventory: bool = False) -> list[User]:
+    roles = [StoreTeamMember.ROLE_STORE_ADMIN]
+    roles.append(
+        StoreTeamMember.ROLE_CATALOG_MANAGER
+        if inventory
+        else StoreTeamMember.ROLE_FULFILLMENT_SPECIALIST
+    )
+    members = User.objects.filter(
+        is_active=True,
+        store_team_memberships__store=store,
+        store_team_memberships__status=StoreTeamMember.STATUS_ACTIVE,
+        store_team_memberships__role__in=roles,
+    )
+    return list(
+        {user.pk: user for user in [store.user, *operators(store), *members]}.values()
+    )
 
 
 def send(recipients: Iterable[User], event: str, title: str, target: Model, data: dict[str, Any]) -> None:
@@ -72,8 +94,9 @@ def inventory_changed(sender: type[Model], instance: Product, created: bool, raw
     low = not instance.is_digital and instance.available <= 5 and (
         created or (old and (old["available"] > 5 or (old["available"] > 0 and instance.available == 0)))
     )
-    recipients = {user.pk: user for user in operators(instance.store)}
-    recipients[instance.store.user_id] = instance.store.user
+    recipients = {
+        user.pk: user for user in store_recipients(instance.store, inventory=True)
+    }
     for user_id in recipients:
         publish(user_id, {"event": "inventory.changed", "data": {"store_id": instance.store_id, "product_id": instance.pk}})
     if low:
@@ -97,7 +120,7 @@ def order_changed(sender: type[Model], instance: Order, created: bool, raw: bool
     recipients = {user.pk: user for user in operators(admins_only=True)}
     scoped_ids = {user_id: set(ids) for user_id in recipients}
     for store in stores:
-        for user in [store.user, *operators(store)]:
+        for user in store_recipients(store):
             recipients[user.pk] = user
             scoped_ids.setdefault(user.pk, set()).add(store.pk)
     event = "order_placed" if created else "shipping_updated"
@@ -122,3 +145,59 @@ def assignment_changed(sender: type[Model], instance: Store, action: str, revers
     ids = set(pk_set or instance.assigned_staff.values_list("pk", flat=True))
     for user_id in ids | {instance.user_id}:
         publish(user_id, {"event": "store.changed", "data": {"store_id": instance.pk}})
+
+
+@receiver(pre_save, sender=StoreTeamMember)
+def remember_membership_role(
+    sender: type[Model], instance: StoreTeamMember, **kwargs: Any
+) -> None:
+    instance._previous_membership = (
+        sender.objects.filter(pk=instance.pk).values("role", "status", "user_id").first()
+        if instance.pk
+        else None
+    )
+
+
+@receiver(post_save, sender=StoreTeamMember)
+@receiver(post_delete, sender=StoreTeamMember)
+def membership_notice(
+    sender: type[Model], instance: StoreTeamMember, signal: Any, **kwargs: Any
+) -> None:
+    if kwargs.get("raw"):
+        return
+    if not instance.user:
+        return
+    removed = signal is post_delete
+    origin = kwargs.get("origin")
+    if removed and (isinstance(origin, User) or getattr(origin, "model", None) is User):
+        return
+    if (
+        not removed
+        and not kwargs.get("created")
+        and getattr(instance, "_previous_membership", None) == {
+            "role": instance.role,
+            "status": instance.status,
+            "user_id": instance.user_id,
+        }
+    ):
+        return
+    from notification.views import create_notification
+
+    description = (
+        f"Your access to {instance.store.name} was removed."
+        if removed
+        else f"Your role at {instance.store.name} is now {instance.get_role_display()}."
+    )
+    create_notification(
+        instance.user,
+        "Store team access changed",
+        target=instance.store,
+        description=description,
+        data={
+            "event": "store_team_access_changed",
+            "store_id": instance.store_id,
+            # Creation already has the invitation's HTML email; keep its inbox/push.
+            "email": not kwargs.get("created", False),
+        },
+        event_key=f"team:{instance.pk}:{instance.updated}:{instance.role}:{instance.status}:{removed}",
+    )

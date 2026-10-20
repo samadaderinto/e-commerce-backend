@@ -4,6 +4,8 @@ from core.access import IsBusinessAdmin, is_admin, is_backoffice
 from datetime import datetime, timedelta
 import logging
 from typing import Any
+from urllib.parse import urlencode
+from uuid import uuid4
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
@@ -18,7 +20,7 @@ from django.utils import timezone
 from rest_framework import mixins, serializers, status, viewsets
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.pagination import LimitOffsetPagination
 from rest_framework.permissions import BasePermission, IsAdminUser, IsAuthenticated
@@ -35,13 +37,29 @@ from store.models import (
     StoreInfo, StorePayout, StoreTeamMember,
 )
 from store.serializers import (
-    MerchantRefundQuerySerializer, MerchantRefundSerializer,
-    MerchantTrackingSerializer, DashboardQuerySerializer, InventorySerializer, MerchantImageSerializer,
-    MerchantPayoutCreateSerializer, MerchantProductSerializer, MerchantSpecificationSerializer,
-    MerchantWalletSerializer, PayoutCreateSerializer, ScheduleSerializer,
-    StoreAddressSerializer, StoreEarningsLedgerSerializer, StoreInfoSerializer,
-    StoreBrandingImageSerializer, StoreOnboardingSerializer, StorePayoutSerializer, StoreSerializer,
-    StoreTeamMemberSerializer, StoreTeamMemberInviteSerializer, StoreTeamMemberUpdateSerializer,
+    MerchantRefundQuerySerializer,
+    MerchantRefundSerializer,
+    MerchantTrackingSerializer,
+    DashboardQuerySerializer,
+    InventorySerializer,
+    MerchantImageSerializer,
+    MerchantPayoutCreateSerializer,
+    MerchantProductSerializer,
+    MerchantSpecificationSerializer,
+    MerchantWalletSerializer,
+    PayoutCreateSerializer,
+    ScheduleSerializer,
+    StoreAddressSerializer,
+    StoreEarningsLedgerSerializer,
+    StoreInfoSerializer,
+    StoreBrandingImageSerializer,
+    StoreOnboardingSerializer,
+    StorePayoutSerializer,
+    StoreSerializer,
+    StoreTeamMemberSerializer,
+    StoreTeamMemberInviteSerializer,
+    StoreTeamMemberUpdateSerializer,
+    StoreTeamQuerySerializer,
 )
 from store.services import (
     calculate_merchant_financials, calculate_store_financials,
@@ -55,9 +73,30 @@ from utils.digital_previews import is_image_digital_asset
 logger = logging.getLogger(__name__)
 
 
+class InvitationDeliveryUnavailable(APIException):
+    status_code = 503
+    default_detail = "Unable to queue the invitation email. Please try again."
+    default_code = "invitation_unavailable"
+
+
 class MerchantPagination(LimitOffsetPagination):
     default_limit = 20
     max_limit = 100
+
+
+def merchant_date_boundary(value: str, field: str, *, end: bool = False) -> datetime:
+    """Accept ISO dates/timestamps and reject malformed listing boundaries."""
+    try:
+        day = parse_date(value)
+        boundary = (
+            datetime.combine(day, datetime.max.time() if end else datetime.min.time())
+            if day is not None else parse_datetime(value)
+        )
+        if boundary is None:
+            raise ValueError
+        return timezone.make_aware(boundary) if timezone.is_naive(boundary) else boundary
+    except (ValueError, TypeError, OverflowError) as error:
+        raise ValidationError({field: 'Enter a valid ISO date or timestamp.'}) from error
 
 
 def invalidate_store_products(store):
@@ -196,18 +235,29 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
 
     def get_queryset(self):
         user = self.request.user
-        if is_backoffice(user):
-            # Strict separation: Admins and Staff never have access to a third-party seller's internal dashboard.
-            # Proace Official Stores exception: all staff members and admins automatically have access to official stores.
-            return Store.objects.filter(is_official=True).order_by('-created', '-pk')
+        if not user or not user.is_authenticated:
+            return Store.objects.none()
+        from store.services import link_pending_store_team_invitations
+        # Refresh invitations at store selection, rather than scanning on every order query.
+        if self.action in {'list', 'retrieve'}:
+            link_pending_store_team_invitations(user)
+        if is_admin(user):
+            # Platform administrators (superusers and business admins) oversee official company stores,
+            # as well as any stores they personally own or are explicitly added to.
+            return Store.objects.filter(
+                Q(is_official=True) | Q(user=user) | Q(team_members__user=user, team_members__status=StoreTeamMember.STATUS_ACTIVE)
+            ).distinct().order_by('-created', '-pk')
+        # Staff members and merchant users: access is strictly granted through ownership
+        # or explicit store team membership. Staff members do NOT automatically access official
+        # stores; administrators must explicitly add staff members through the store's team.
         return Store.objects.filter(
-            Q(user=user) | Q(team_members__user=user),
-            is_official=False,
+            Q(user=user) | Q(team_members__user=user, team_members__status=StoreTeamMember.STATUS_ACTIVE),
         ).distinct().order_by('-created', '-pk')
 
     @extend_schema(responses={204: None})
     @action(detail=True, methods=['delete'], url_path='delete')
-    def delete_store(self, request, pk=None):
+    @transaction.atomic
+    def delete_store(self, request: Request, pk: str | None = None) -> Response:
         store = self.get_object()
         if store.is_official:
             if not is_admin(request.user):
@@ -215,6 +265,25 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         else:
             if store.user_id != request.user.id and not request.user.is_superuser:
                 raise PermissionDenied('Only the primary store owner can delete this store.')
+        # Use the same wallet lock as earnings/payout mutations before checking history.
+        if store.user_id:
+            type(store.user).objects.select_for_update().get(pk=store.user_id)
+            MerchantWallet.objects.select_for_update().filter(user_id=store.user_id).first()
+        store = Store.objects.select_for_update().get(pk=store.pk)
+        if (
+            store.ledger_entries.exists() or store.payouts.exists()
+            or store.orderfulfillment_set.exists()
+        ):
+            raise ValidationError({
+                'detail': 'Stores with earnings or payout history cannot be deleted. Unpublish their products instead.'
+            })
+        products = list(Product.objects.select_for_update().filter(store=store))
+        if any(product.is_blocked for product in products):
+            raise ValidationError(
+                {
+                    "detail": "Resolve blocked product reviews before deleting this store."
+                }
+            )
         store.delete()
         return Response(status=204)
 
@@ -228,6 +297,13 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             'detail': 'Staff-to-store assignment is deprecated. All authenticated staff have global backoffice access and automatic access to all official stores.',
             'staff_ids': [],
         })
+
+    def perform_update(self, serializer: StoreSerializer) -> None:
+        if not can_manage_team(serializer.instance, self.request.user):
+            raise PermissionDenied(
+                "Only store owners and administrators can edit store settings."
+            )
+        serializer.save()
 
     def get_serializer_class(self):
         return StoreOnboardingSerializer if self.action in {'create', 'create_store'} else StoreSerializer
@@ -259,13 +335,21 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     def create_store(self, request):
         return self.create(request)
 
+    @extend_schema(methods=['GET'], responses=StoreInfoSerializer)
+    @extend_schema(methods=['PATCH'], request=StoreInfoSerializer, responses=StoreInfoSerializer)
     @action(detail=True, methods=['get', 'patch'])
-    def profile(self, request, pk=None):
+    def profile(self, request: Request, pk: str | None = None) -> Response:
+        store = self.get_object()
+        profile = StoreInfo.objects.filter(store=store).order_by('pk').first()
+        if request.method == 'GET':
+            return Response(StoreInfoSerializer(profile, context={'store': store}).data if profile else {})
+        if not can_manage_team(store, request.user):
+            raise PermissionDenied(
+                "Only store owners and administrators can edit the store profile."
+            )
         with transaction.atomic():
-            store = self.get_queryset().select_for_update().get(pk=self.get_object().pk)
+            store = Store.objects.select_for_update().get(pk=store.pk)
             profile = StoreInfo.objects.filter(store=store).order_by('pk').first()
-            if request.method == 'GET':
-                return Response(StoreInfoSerializer(profile, context={'store': store}).data if profile else {})
             serializer = StoreInfoSerializer(profile, data=request.data, partial=True, context={'store': store})
             serializer.is_valid(raise_exception=True)
             serializer.save(store=store)
@@ -290,6 +374,10 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         kind: str | None = None,
     ) -> Response:
         store = self.get_object()
+        if not can_manage_team(store, request.user):
+            raise PermissionDenied(
+                "Only store owners and administrators can edit store branding."
+            )
         if kind not in {'avatar', 'banner'}:
             raise ValidationError({'detail': 'Choose an avatar or banner image.'})
         image = None
@@ -298,7 +386,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             serializer.is_valid(raise_exception=True)
             image = serializer.validated_data['image']
         with transaction.atomic():
-            self.get_queryset().select_for_update().get(pk=store.pk)
+            Store.objects.select_for_update().get(pk=store.pk)
             profile = StoreInfo.objects.filter(store=store).order_by('pk').first()
             if profile is None:
                 profile = StoreInfo(store=store)
@@ -444,15 +532,19 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             logging.getLogger(__name__).exception('Stripe Connect status refresh failed for store %s', store.pk)
             raise ValidationError({'detail': 'Unable to refresh Stripe payout status. Please try again shortly.'}) from exc
 
+    @extend_schema(methods=['GET'], responses=StoreAddressSerializer)
+    @extend_schema(methods=['PUT'], request=StoreAddressSerializer, responses=StoreAddressSerializer)
     @action(detail=True, methods=['get', 'put'], url_path='pickup-address')
-    def pickup_address(self, request, pk=None):
+    def pickup_address(self, request: Request, pk: str | None = None) -> Response:
+        store = self.get_object()
+        address = StoreAddress.objects.filter(store=store, is_default=True).order_by('pk').first()
+        if request.method == 'GET':
+            return Response(StoreAddressSerializer(address).data if address else {})
+        if not can_manage_team(store, request.user):
+            raise PermissionDenied("Only store owners and store administrators can update pickup addresses.")
         with transaction.atomic():
-            store = self.get_queryset().select_for_update().get(pk=self.get_object().pk)
-            if request.method == 'PUT' and not can_manage_team(store, request.user):
-                raise PermissionDenied("Only store owners and store administrators can update pickup addresses.")
+            store = Store.objects.select_for_update().get(pk=store.pk)
             address = StoreAddress.objects.filter(store=store, is_default=True).order_by('pk').first()
-            if request.method == 'GET':
-                return Response(StoreAddressSerializer(address).data if address else {})
             serializer = StoreAddressSerializer(address, data=request.data)
             serializer.is_valid(raise_exception=True)
             StoreAddress.objects.filter(store=store, is_default=True).update(is_default=False)
@@ -460,9 +552,10 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         return Response(serializer.data)
 
     @extend_schema(
-        methods=['GET'],
+        methods=["GET"],
         responses=StoreTeamMemberSerializer(many=True),
-        description="List active store team members and their roles.",
+        parameters=[StoreTeamQuerySerializer],
+        description="List active store team members with search, role and date filters.",
     )
     @extend_schema(
         methods=['POST'],
@@ -471,17 +564,36 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         description="Invite/add a user as a store team member with a designated role.",
     )
     @action(detail=True, methods=['get', 'post'], url_path='team')
+    @transaction.atomic
     def team(self, request: Request, pk: str | None = None) -> Response:
         store = self.get_object()
+        if request.method == 'POST':
+            store = Store.objects.select_for_update().get(pk=store.pk)
         user_role = get_store_user_role(store, request.user)
         if not can_manage_team(store, request.user):
             raise PermissionDenied("Only store owners and store administrators can view or manage team members.")
 
         if request.method == 'GET':
             members = StoreTeamMember.objects.filter(store=store).select_related('user', 'invited_by').order_by('-created', 'pk')
-            return Response(StoreTeamMemberSerializer(members, many=True, context={'request': request}).data)
+            members = filter_records(
+                members,
+                request.query_params,
+                search_fields=("invited_email", "user__email", "user__first_name", "user__last_name"),
+            )
+            criteria = StoreTeamQuerySerializer(data=request.query_params)
+            criteria.is_valid(raise_exception=True)
+            role = criteria.validated_data.get("role")
+            if role:
+                members = members.filter(role=role)
+            count, page = record_page(members, request.query_params)
+            data = StoreTeamMemberSerializer(
+                page, many=True, context={"request": request}
+            ).data
+            if request.query_params.get("paginated") == "1":
+                return Response({"count": count, "results": data})
+            return Response(data)
 
-        # POST: Invite team member
+        # POST: Invite team member (does not require target user to be registered first)
         serializer = StoreTeamMemberInviteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data['email'].strip().lower()
@@ -490,25 +602,114 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
         from django.contrib.auth import get_user_model
         User = get_user_model()
         target_user = User.objects.filter(email__iexact=email).first()
-        if not target_user:
-            raise ValidationError({'email': 'No account was found with this email address. The user must register first.'})
 
-        if target_user.pk == store.user_id:
+        # Check if email belongs to the store owner
+        if target_user and target_user.pk == store.user_id:
+            raise ValidationError({'email': 'The store owner is already the primary administrator of this store.'})
+        if store.user and store.user.email and store.user.email.lower() == email:
             raise ValidationError({'email': 'The store owner is already the primary administrator of this store.'})
 
-        if StoreTeamMember.objects.filter(store=store, user=target_user).exists():
-            raise ValidationError({'email': 'This user is already a team member of this store.'})
+        # Check existing active or pending team membership
+        existing = StoreTeamMember.objects.filter(store=store).filter(
+            (Q(user=target_user) | Q(invited_email__iexact=email))
+            if target_user else Q(invited_email__iexact=email)
+        ).first()
+
+        if existing:
+            if existing.status == StoreTeamMember.STATUS_PENDING:
+                raise ValidationError({'email': 'An invitation is already pending for this email address.'})
+            raise ValidationError({'email': 'This user is already an active team member of this store.'})
 
         if user_role == StoreTeamMember.ROLE_STORE_ADMIN and role == StoreTeamMember.ROLE_STORE_ADMIN:
             raise PermissionDenied("Only the store owner can invite or appoint another Store Admin.")
 
+        import secrets
+        invite_token = secrets.token_urlsafe(32)
+        is_new_user = target_user is None
+        status_val = StoreTeamMember.STATUS_ACTIVE if target_user else StoreTeamMember.STATUS_PENDING
+
         member = StoreTeamMember.objects.create(
             store=store,
             user=target_user,
+            invited_email=email,
             role=role,
+            status=status_val,
+            invite_token=invite_token,
             invited_by=request.user,
         )
+
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+        query = urlencode({'email': email, 'invite': invite_token})
+        invite_url = f"{frontend_url}/register?{query}" if is_new_user else f"{frontend_url}/merchant"
+        inviter_name = f"{request.user.first_name} {request.user.last_name}".strip() or request.user.email.split('@')[0]
+        try:
+            from utils.functions import send_mail
+            send_mail(
+                'store-team-invitation',
+                email,
+                {
+                    'subject': f"You're invited to join {store.name} on ProAce",
+                    'store_name': store.name,
+                    'inviter_name': inviter_name,
+                    'role_display': member.get_role_display(),
+                    'is_new_user': is_new_user,
+                    'invite_url': invite_url,
+                },
+                recipient=target_user,
+            )
+        except Exception as exc:
+            logger.warning("Failed to dispatch team invitation email to %s: %s", email, exc)
+            raise InvitationDeliveryUnavailable() from None
+
         return Response(StoreTeamMemberSerializer(member, context={'request': request}).data, status=status.HTTP_201_CREATED)
+
+    @extend_schema(
+        methods=['POST'],
+        responses={200: StoreTeamMemberSerializer},
+        description="Resend team invitation email to a pending invitee.",
+    )
+    @action(detail=True, methods=['post'], url_path=r'team/(?P<member_pk>\d+)/resend')
+    @transaction.atomic
+    def resend_team_invitation(
+        self, request: Request, pk: str | None = None, member_pk: str | None = None
+    ) -> Response:
+        store = self.get_object()
+        if not can_manage_team(store, request.user):
+            raise PermissionDenied("Only store owners and store administrators can manage team members.")
+
+        member = get_object_or_404(StoreTeamMember.objects.select_related('user'), pk=member_pk, store=store)
+        if member.status != StoreTeamMember.STATUS_PENDING:
+            raise ValidationError({'detail': 'Only pending invitations can be resent.'})
+
+        email = member.email
+        frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+        is_new_user = member.user is None
+        query = urlencode({'email': email, 'invite': member.invite_token})
+        invite_url = f"{frontend_url}/register?{query}" if is_new_user else f"{frontend_url}/merchant"
+        inviter_name = f"{request.user.first_name} {request.user.last_name}".strip() or request.user.email.split('@')[0]
+        try:
+            from utils.functions import send_mail
+            send_mail(
+                'store-team-invitation',
+                email,
+                {
+                    'subject': f"Reminder: You're invited to join {store.name} on ProAce",
+                    'store_name': store.name,
+                    'inviter_name': inviter_name,
+                    'role_display': member.get_role_display(),
+                    'is_new_user': is_new_user,
+                    'invite_url': invite_url,
+                },
+                recipient=member.user,
+                delivery_key=f"store-team-resend:{member.pk}:{uuid4().hex}",
+            )
+        except Exception as exc:
+            logger.warning("Failed to resend team invitation email to %s: %s", email, exc)
+            raise InvitationDeliveryUnavailable() from None
+        return Response({
+            'detail': 'Invitation email resent successfully.',
+            'member': StoreTeamMemberSerializer(member, context={'request': request}).data,
+        })
 
     @extend_schema(
         methods=['PATCH'],
@@ -519,10 +720,13 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     @extend_schema(
         methods=['DELETE'],
         responses={204: None},
-        description="Remove a team member from this store.",
+        description="Remove a team member or revoke an invitation.",
     )
     @action(detail=True, methods=['patch', 'delete'], url_path=r'team/(?P<member_pk>\d+)')
-    def team_member_detail(self, request: Request, pk: str | None = None, member_pk: str | None = None) -> Response:
+    @transaction.atomic
+    def team_member_detail(
+        self, request: Request, pk: str | None = None, member_pk: str | None = None
+    ) -> Response:
         store = self.get_object()
         user_role = get_store_user_role(store, request.user)
         if not can_manage_team(store, request.user):
@@ -530,7 +734,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
 
         member = get_object_or_404(StoreTeamMember.objects.select_related('user'), pk=member_pk, store=store)
 
-        if member.user_id == request.user.pk:
+        if member.user_id and member.user_id == request.user.pk:
             raise PermissionDenied("You cannot modify or remove your own team membership.")
 
         if user_role == StoreTeamMember.ROLE_STORE_ADMIN and member.role == StoreTeamMember.ROLE_STORE_ADMIN:
@@ -728,32 +932,16 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
 
         days = request.query_params.get('days')
         if days:
-            try:
-                num_days = int(days)
-                if num_days > 0:
-                    orders = orders.filter(created__gte=timezone.now() - timedelta(days=num_days))
-            except (ValueError, TypeError):
-                pass
+            num_days = serializers.IntegerField(min_value=1, max_value=365000).run_validation(days)
+            orders = orders.filter(created__gte=timezone.now() - timedelta(days=num_days))
 
         date_from = str(request.query_params.get('date_from') or '').strip()
         if date_from:
-            dt_from = parse_datetime(date_from)
-            if not dt_from:
-                d_from = parse_date(date_from)
-                if d_from:
-                    dt_from = timezone.make_aware(datetime.combine(d_from, datetime.min.time()))
-            if dt_from:
-                orders = orders.filter(created__gte=dt_from)
+            orders = orders.filter(created__gte=merchant_date_boundary(date_from, 'date_from'))
 
         date_to = str(request.query_params.get('date_to') or '').strip()
         if date_to:
-            dt_to = parse_datetime(date_to)
-            if not dt_to:
-                d_to = parse_date(date_to)
-                if d_to:
-                    dt_to = timezone.make_aware(datetime.combine(d_to, datetime.max.time()))
-            if dt_to:
-                orders = orders.filter(created__lte=dt_to)
+            orders = orders.filter(created__lte=merchant_date_boundary(date_to, 'date_to', end=True))
 
         ordering = str(request.query_params.get('ordering') or '-created').strip()
         allowed_orderings = {
@@ -891,32 +1079,16 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
 
         days = request.query_params.get("days")
         if days:
-            try:
-                num_days = int(days)
-                if num_days > 0:
-                    refunds = refunds.filter(created__gte=timezone.now() - timedelta(days=num_days))
-            except (ValueError, TypeError):
-                pass
+            num_days = serializers.IntegerField(min_value=1, max_value=365000).run_validation(days)
+            refunds = refunds.filter(created__gte=timezone.now() - timedelta(days=num_days))
 
         date_from = str(request.query_params.get("date_from") or request.query_params.get("start_date") or "").strip()
         if date_from:
-            dt_from = parse_datetime(date_from)
-            if not dt_from:
-                d_from = parse_date(date_from)
-                if d_from:
-                    dt_from = timezone.make_aware(datetime.combine(d_from, datetime.min.time()))
-            if dt_from:
-                refunds = refunds.filter(created__gte=dt_from)
+            refunds = refunds.filter(created__gte=merchant_date_boundary(date_from, 'date_from'))
 
         date_to = str(request.query_params.get("date_to") or request.query_params.get("end_date") or "").strip()
         if date_to:
-            dt_to = parse_datetime(date_to)
-            if not dt_to:
-                d_to = parse_date(date_to)
-                if d_to:
-                    dt_to = timezone.make_aware(datetime.combine(d_to, datetime.max.time()))
-            if dt_to:
-                refunds = refunds.filter(created__lte=dt_to)
+            refunds = refunds.filter(created__lte=merchant_date_boundary(date_to, 'date_to', end=True))
 
         ordering = str(request.query_params.get("ordering") or "-created").strip()
         allowed_orderings = {
@@ -962,36 +1134,48 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
             elif order and order.address_snapshot:
                 customer_name = f"{order.address_snapshot.get('first_name', '')} {order.address_snapshot.get('last_name', '')}".strip()
 
-            data.append({
-                "id": refund.id,
-                "order": order.id if order else None,
-                "order_reference": order.orderId if order else "",
-                "customer_email": refund.email,
-                "customer_name": customer_name,
-                "status": refund.status,
-                "refund_type": refund.refund_type,
-                "reason": refund.reason,
-                "processing_reason": refund.processing_reason or "",
-                "amount": str(amount),
-                "total_order_refund_amount": str(refund.refund_amount),
-                "items": [
-                    {
-                        "product": item.get("product"),
-                        "title": item.get("title", ""),
-                        "image": item.get("image", ""),
-                        "quantity": item.get("quantity", 1),
-                        "unit_price": str(item.get("unit_price", "0.00")),
-                        "line_total": str(item.get("line_total") or (Decimal(str(item.get("unit_price", "0.00"))) * int(item.get("quantity", 1)))),
-                        "is_digital": bool(item.get("is_digital", False)),
-                        "variant": item.get("variant"),
-                    }
-                    for item in store_items
-                ],
-                "processed_at": refund.processed_at.isoformat() if refund.processed_at else None,
-                "processed_by_email": refund.processed_by.email if refund.processed_by else None,
-                "created": refund.created.isoformat() if refund.created else None,
-                "updated": refund.updated.isoformat() if refund.updated else None,
-            })
+            data.append(
+                {
+                    "id": refund.id,
+                    "order": order.id if order else None,
+                    "order_reference": order.orderId if order else "",
+                    "customer_email": refund.email,
+                    "customer_name": customer_name,
+                    "status": refund.status,
+                    "refund_type": refund.refund_type,
+                    "reason": refund.reason,
+                    "processing_reason": refund.processing_reason or "",
+                    "amount": str(amount),
+                    "total_order_refund_amount": str(amount),
+                    "items": [
+                        {
+                            "product": item.get("product"),
+                            "title": item.get("title", ""),
+                            "image": item.get("image", ""),
+                            "quantity": item.get("quantity", 1),
+                            "unit_price": str(item.get("unit_price", "0.00")),
+                            "line_total": str(
+                                item.get("line_total")
+                                or (
+                                    Decimal(str(item.get("unit_price", "0.00")))
+                                    * int(item.get("quantity", 1))
+                                )
+                            ),
+                            "is_digital": bool(item.get("is_digital", False)),
+                            "variant": item.get("variant"),
+                        }
+                        for item in store_items
+                    ],
+                    "processed_at": refund.processed_at.isoformat()
+                    if refund.processed_at
+                    else None,
+                    "processed_by_email": refund.processed_by.email
+                    if refund.processed_by
+                    else None,
+                    "created": refund.created.isoformat() if refund.created else None,
+                    "updated": refund.updated.isoformat() if refund.updated else None,
+                }
+            )
         return self.get_paginated_response(data)
 
     @action(
@@ -1100,7 +1284,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                     "orderId": order.orderId,
                     "carrier": fulfillment.carrier,
                     "tracking_number": fulfillment.tracking_number or "",
-                    "tracking_url": order.tracking_url or "",
+                    "tracking_url": self.store_tracking_url(order, store),
                     "store_name": store.name,
                     "subject": f"Order #{order.orderId} Has Shipped",
                 },
@@ -1217,18 +1401,48 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
                 day=TruncDate('created')).values('day').annotate(count=Count('pk', distinct=True))}
             top_products = items.values('product_id', 'product__title').annotate(
                 units=Sum('quantity')).order_by('-units', 'product_id')[:10]
-            return Response({
-                'period': {'from': start, 'to': today, 'days': days, 'time_zone': query.validated_data['time_zone']},
-                'inventory': inventory,
-                'orders': {'total': orders.count(), 'by_status': list(orders.order_by().values('status').annotate(count=Count('pk', distinct=True)))},
-                'sales': {'units': totals['units'] or 0,
-                          'estimated_item_value': format(totals['value'] or Decimal('0'), '.2f'),
-                          'basis': 'Current item prices for confirmed, shipped, delivered and picked-up orders. Excludes coupons, tax, shipping and fees; not payout revenue.'},
-                'wallet': financials,
-                'orders_by_day': [{'date': start + timedelta(days=i), 'count': trend.get(start + timedelta(days=i), 0)} for i in range(days)],
-                'top_products': list(top_products),
-                'low_stock_products': list(products.filter(available__lte=threshold).order_by('available', 'pk').values('id', 'title', 'available')[:20]),
-            })
+            return Response(
+                {
+                    "period": {
+                        "from": start,
+                        "to": today,
+                        "days": days,
+                        "time_zone": query.validated_data["time_zone"],
+                    },
+                    "inventory": inventory,
+                    "orders": {
+                        "total": orders.count(),
+                        "by_status": list(
+                            orders.order_by()
+                            .values("status")
+                            .annotate(count=Count("pk", distinct=True))
+                        ),
+                    },
+                    "sales": {
+                        "units": totals["units"] or 0,
+                        "estimated_item_value": format(
+                            totals["value"] or Decimal("0"), ".2f"
+                        ),
+                        "basis": "Current item prices for confirmed, shipped, delivered and picked-up orders. Excludes coupons, tax, shipping and fees; not payout revenue.",
+                    },
+                    "wallet": financials
+                    if can_manage_financials(store, request.user)
+                    else {},
+                    "orders_by_day": [
+                        {
+                            "date": start + timedelta(days=i),
+                            "count": trend.get(start + timedelta(days=i), 0),
+                        }
+                        for i in range(days)
+                    ],
+                    "top_products": list(top_products),
+                    "low_stock_products": list(
+                        products.filter(available__lte=threshold)
+                        .order_by("available", "pk")
+                        .values("id", "title", "available")[:20]
+                    ),
+                }
+            )
 
     @action(detail=False, methods=['get'], url_path='wallet')
     def merchant_wallet(self, request):
@@ -1348,7 +1562,7 @@ class StoreViewSet(mixins.CreateModelMixin, mixins.ListModelMixin,
     def payouts(self, request: Request, pk: str | None = None) -> Response:
         store = self.get_object()
         if request.method == 'GET':
-            if not can_manage_team(store, request.user):
+            if not can_manage_financials(store, request.user):
                 raise PermissionDenied("You do not have permission to view payouts for this store.")
             payouts = filter_records(
                 store.payouts.order_by("-created", "-pk"), request.query_params,
@@ -1732,7 +1946,16 @@ class MerchantProductViewSet(viewsets.ModelViewSet):
         from uuid import uuid4
 
         safe_name = f"digital_products/{product.store_id}/{product.id}/{uuid4().hex[:12]}_{file_obj.name}"
-        saved_path = default_storage.save(safe_name, file_obj)
+        try:
+            saved_path = default_storage.save(safe_name, file_obj)
+        except Exception:
+            logger.exception("Digital file upload failed for product %s", product.pk)
+            return Response(
+                {
+                    "detail": "Unable to upload this file right now. Please try again shortly."
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
         # Store the stable object key. Signed URLs are generated only after an
         # authenticated purchase or a backoffice audit request.
         file_url = saved_path

@@ -16,6 +16,7 @@ services:
         required: false
     environment: &app_environment
       DJANGO_SETTINGS_MODULE: codematics.storefront_settings
+      LOCAL_VISION_URL: ${CONTAINER_LOCAL_VISION_URL:-http://visual-recognition:8010}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
       SECRET_KEY: ${SECRET_KEY:-local-container-secret-change-me}
       ALLOWED_HOSTS: ${ALLOWED_HOSTS:-127.0.0.1,localhost},api,client,nginx
@@ -45,7 +46,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local}
       DB_REQUIRE_SSL: 'false'
       CACHE_URL: redis://redis:6379/0
-      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-false}
+      OBJECT_STORAGE_ENABLED: ${OBJECT_STORAGE_ENABLED:-true}
       MINIO_ENDPOINT_URL: ${CONTAINER_MINIO_ENDPOINT_URL:-http://minio:9000}
       MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://127.0.0.1:9000}
       MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-commerce-images}
@@ -78,7 +79,6 @@ services:
     volumes:
       - .:/app:cached
       - media-data:/app/media
-      - prometheus-multiproc:/tmp/prometheus
     depends_on:
       minio-init:
         condition: service_completed_successfully
@@ -104,13 +104,15 @@ services:
     restart: unless-stopped
     ports:
       - '${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_PORT:-8080}:8080'
+      - '${CLIENT_BIND_ADDRESS:-127.0.0.1}:${CLIENT_PORT:-3000}:8081'
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/upstream.docker.conf:/etc/nginx/upstream.conf:ro
-      - ./nginx/allowed-ips.conf:/etc/nginx/allowed-ips.conf:ro
+      - ${NGINX_ALLOWED_IPS_FILE:-./nginx/allowed-ips.conf}:/etc/nginx/allowed-ips.conf:ro
       - ./nginx/blocked-ips.conf:/etc/nginx/blocked-ips.conf:ro
       - ./nginx/suspected-ips.conf:/etc/nginx/suspected-ips.conf:ro
       - ./nginx/trusted-proxies.conf:/etc/nginx/trusted-proxies.conf:ro
+      - ./nginx/trusted-protocol-proxies.conf:/etc/nginx/trusted-protocol-proxies.conf:ro
     depends_on:
       api:
         condition: service_healthy
@@ -120,6 +122,30 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+
+  visual-recognition:
+    profiles: ['vision']
+    build:
+      context: .
+      dockerfile: vision/Dockerfile
+    restart: unless-stopped
+    init: true
+    environment:
+      VISION_THREADS: '2'
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      HF_HUB_DISABLE_TELEMETRY: '1'
+    volumes:
+      - vision-models:/models
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    healthcheck:
+      test: ['CMD', 'python', '-c', "from urllib.request import urlopen; urlopen('http://localhost:8010/health', timeout=3).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 180s
 
   notification-stream:
     <<: *app
@@ -151,6 +177,7 @@ services:
     ports: []
     environment:
       <<: *app_environment
+      PROMETHEUS_MULTIPROC_DIR: ''
       RUN_MIGRATIONS: 'false'
       RUN_COLLECTSTATIC: 'false'
       DEFAULT_ADMIN_EMAIL: ''
@@ -184,6 +211,7 @@ services:
     ports: []
     environment:
       <<: *app_environment
+      PROMETHEUS_MULTIPROC_DIR: ''
       RUN_MIGRATIONS: 'false'
       RUN_COLLECTSTATIC: 'false'
     depends_on:
@@ -281,6 +309,7 @@ services:
       retries: 18
 
 volumes:
+  vision-models:
   media-data:
   redis-data:
   postgres-data:

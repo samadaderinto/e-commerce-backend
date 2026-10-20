@@ -77,6 +77,7 @@ import {
   VerifiedBadge,
 } from "./ui";
 import { useShop } from "./providers";
+import { useVisualSearch } from "./visual-search-context";
 
 const categoryIcons = [
   Headphones,
@@ -110,10 +111,15 @@ const categoryIcons = [
   Wrench,
 ];
 
-export function HomePage() {
+export function HomePage(): JSX.Element {
+  const { user } = useShop();
   const products = useQuery({
-    queryKey: ["products", "home"],
+    queryKey: ["products", "home", user?.id],
     queryFn: () => api<Page<Product>>("products?ordering=-sales"),
+  });
+  const deals = useQuery({
+    queryKey: ["products", "home-deals", user?.id],
+    queryFn: () => api<Page<Product>>("products?deals=true&ordering=-discount"),
   });
   return (
     <>
@@ -177,6 +183,11 @@ export function HomePage() {
           <Loading cards />
         ) : products.error ? (
           <ErrorState error={products.error} retry={() => products.refetch()} />
+        ) : !products.data?.results.length ? (
+          <Empty
+            title="New finds are on their way"
+            text="There are no products available right now. Please check back soon."
+          />
         ) : (
           <ProductGrid products={products.data?.results.slice(0, 8) || []} />
         )}
@@ -216,12 +227,17 @@ export function HomePage() {
             See all deals <ArrowRight size={17} />
           </Link>
         </div>
-        {products.data && (
-          <ProductGrid
-            products={products.data.results
-              .filter((product) => product.discount > 0)
-              .slice(0, 4)}
+        {deals.isLoading ? (
+          <Loading cards />
+        ) : deals.error ? (
+          <ErrorState error={deals.error} retry={() => deals.refetch()} />
+        ) : !deals.data?.results.length ? (
+          <Empty
+            title="No deals right now"
+            text="Check back soon for new offers, or browse the full collection."
           />
+        ) : (
+          <ProductGrid products={deals.data.results.slice(0, 4)} />
         )}
       </section>
     </>
@@ -231,10 +247,60 @@ export function HomePage() {
 export function ShopPage() {
   const params = useSearchParams();
   const { user } = useShop();
+  const { session, switchItem, clearVisualSearch, isAnalyzing: isVisualAnalyzing } = useVisualSearch();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const query = params.toString();
+
+  const isVisualActive = params.get('visual') === '1' && Boolean(session?.analysis);
+
+  // Filter visual search results by category, deals, price range, and ordering if active
+  const visualResults = session?.analysis?.results || [];
+  let visualFilteredResults = visualResults;
+  const currentCategory = params.get('category');
+  if (currentCategory) {
+    visualFilteredResults = visualFilteredResults.filter(
+      (r) => r.product.category === currentCategory
+    );
+  }
+  if (params.get('deals')) {
+    visualFilteredResults = visualFilteredResults.filter((r) => r.product.discount > 0);
+  }
+  const minPrice = params.get('min_price');
+  if (minPrice && !isNaN(Number(minPrice))) {
+    visualFilteredResults = visualFilteredResults.filter(
+      (r) => Number(r.product.sale_price) >= Number(minPrice)
+    );
+  }
+  const maxPrice = params.get('max_price');
+  if (maxPrice && !isNaN(Number(maxPrice))) {
+    visualFilteredResults = visualFilteredResults.filter(
+      (r) => Number(r.product.sale_price) <= Number(maxPrice)
+    );
+  }
+  const ordering = params.get('ordering');
+  if (ordering === 'price') {
+    visualFilteredResults = [...visualFilteredResults].sort(
+      (a, b) => Number(a.product.sale_price) - Number(b.product.sale_price)
+    );
+  } else if (ordering === '-price') {
+    visualFilteredResults = [...visualFilteredResults].sort(
+      (a, b) => Number(b.product.sale_price) - Number(a.product.sale_price)
+    );
+  } else if (ordering === '-discount') {
+    visualFilteredResults = [...visualFilteredResults].sort(
+      (a, b) => b.product.discount - a.product.discount
+    );
+  }
+  const visualProducts = visualFilteredResults.map((r) => r.product);
+  const visualSimilarityMap = Object.fromEntries(
+    visualFilteredResults.flatMap((r) =>
+      typeof r.similarity_score === 'number' ? [[r.product.id, r.similarity_score]] : []
+    )
+  );
+
   const products = useQuery({
     queryKey: ["products", query, user?.id],
+    enabled: !isVisualActive,
     placeholderData: (previousData, previousQuery) => {
       const previousParams = new URLSearchParams(String(previousQuery?.queryKey[1] ?? ""));
       return previousQuery?.queryKey[2] === user?.id
@@ -257,8 +323,8 @@ export function ShopPage() {
 
   const storeData = storeQuery.data;
   const storeProfile = storeData?.profile;
-  const firstProduct = products.data?.results?.[0];
-  const storeName = storeData?.name || firstProduct?.store_name || (storeId ? `Store #${storeId}` : null);
+  const firstProduct = isVisualActive ? visualProducts[0] : products.data?.results?.[0];
+  const storeName = storeId ? (storeData?.name || firstProduct?.store_name || `Store #${storeId}`) : null;
   const isOfficialStore = Boolean(storeData?.is_official ?? firstProduct?.is_official_store);
   const isPreview = Boolean(
     params.get('preview') === '1' ||
@@ -268,12 +334,21 @@ export function ShopPage() {
     (firstProduct && firstProduct.store_verified === false)
   );
 
-  const title = storeName
-    ? storeName
-    : params.get("search")
-      ? `Results for “${params.get("search")}”`
-      : category?.name ||
-        (params.has("deals") ? "Everyday deals" : "A world of good finds");
+  const displayProducts = isVisualActive ? visualProducts : (products.data?.results || []);
+  const displayCount = isVisualActive ? visualProducts.length : (products.data?.count ?? 0);
+  const hasCatalogFilters: boolean = [
+    'search', 'category', 'deals', 'min_price', 'max_price',
+    'is_digital', 'product_type', 'start_date', 'end_date',
+  ].some((key: string) => Boolean(params.get(key)));
+
+  const title = isVisualActive
+    ? (session?.lookTitle ? `Picture search: ${session.lookTitle}` : 'Picture search')
+    : storeName
+      ? storeName
+      : params.get("search")
+        ? `Results for “${params.get("search")}”`
+        : category?.name ||
+          (params.has("deals") ? "Everyday deals" : "A world of good finds");
 
   function update(key: string, value: string) {
     const next = new URLSearchParams(params);
@@ -314,6 +389,62 @@ export function ShopPage() {
           </>
         )}
       </div>
+
+      {isVisualActive && session?.analysis && (
+        <section className="visual-catalog-banner">
+          <div className="visual-catalog-banner-left">
+            {session.previewUrl && (
+              <div className="visual-catalog-preview-thumb">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={session.previewUrl} alt={session.lookTitle || 'Visual search look'} />
+              </div>
+            )}
+            <div className="visual-catalog-meta">
+              <div className="visual-catalog-tag">
+                <Sparkles size={13} />
+                <span>{session.analysis.method === 'preset_metadata' ? 'Curated example' : 'Local picture search'}</span>
+              </div>
+              <h3>{session.lookTitle || session.analysis.selected_item?.label || 'Visual Match'}</h3>
+              <p>
+                {session.analysis.message || 'Related catalog results. These are not verified identical photo matches.'}
+              </p>
+              {session.analysis.detected_items && session.analysis.detected_items.length > 0 && (
+                <div className="visual-catalog-detected-chips">
+                  <span className="visual-chips-label">
+                    {session.analysis.selection_required ? 'Possible items — choose one:' : 'Items:'}
+                  </span>
+                  {session.analysis.detected_items.map((item) => {
+                    const isSelected = item.id === (session.selectedItemId || session.analysis?.selected_item_id);
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`visual-item-chip ${isSelected ? 'active' : ''}`}
+                        onClick={() => switchItem(item)}
+                        disabled={isVisualAnalyzing}
+                      >
+                        <span>{item.label}</span>
+                        {isSelected && <Check size={11} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="visual-catalog-banner-actions">
+            <button
+              type="button"
+              className="button outline compact"
+              onClick={clearVisualSearch}
+              title="Clear visual search and browse full catalog"
+            >
+              <X size={14} />
+              <span>Clear</span>
+            </button>
+          </div>
+        </section>
+      )}
 
       {isPreview && (
         <div className="storefront-preview-banner">
@@ -550,7 +681,7 @@ export function ShopPage() {
             <p>Considered essentials. Unexpected favourites.</p>
           </div>
           <span className="result-total">
-            {products.data?.count ?? "…"} products
+            {isVisualActive ? `${displayCount} visual matches` : `${products.data?.count ?? "…"} products`}
           </span>
         </div>
       )}
@@ -702,8 +833,8 @@ export function ShopPage() {
               Filters
             </button>
             <span>
-              {category?.name || "All products"}{" "}
-              <span className="muted">/ {products.data?.count ?? 0} finds</span>
+              {category?.name || (isVisualActive ? "Visual matches" : "All products")}{" "}
+              <span className="muted">/ {displayCount} finds</span>
             </span>
             <label className="sort-control">
               Sort by{" "}
@@ -721,26 +852,39 @@ export function ShopPage() {
               </select>
             </label>
           </div>
-          {products.isFetching && !products.isLoading && <Loading compact />}
-          {products.isLoading ? (
+          {!isVisualActive && products.isFetching && !products.isLoading && <Loading compact overlay />}
+          {isVisualAnalyzing ? (
+            <Loading compact overlay />
+          ) : !isVisualActive && products.isLoading ? (
             <Loading cards />
-          ) : products.error ? (
+          ) : !isVisualActive && products.error ? (
             <ErrorState
               error={products.error}
               retry={() => products.refetch()}
             />
-          ) : !products.data?.results.length ? (
+          ) : !displayProducts.length ? (
             <Empty
-              title="No finds just yet"
-              text="Try a different search or give your filters a little more room."
+              title={isVisualActive && session?.analysis?.selection_required
+                ? 'Choose what to look for'
+                : isVisualActive && session?.analysis?.selected_item
+                  ? 'No matching products yet'
+                  : 'No finds just yet'}
+              text={isVisualActive
+                ? session?.analysis?.message || 'No related products were found. Try another photo or text search.'
+                : hasCatalogFilters
+                  ? 'No products match your search and filters. Clear them to see available listings.'
+                  : 'There are no products available here right now. Please check back soon.'}
+              label={isVisualActive ? 'Clear picture search' : hasCatalogFilters ? 'Clear search and filters' : 'Explore the shop'}
+              onAction={isVisualActive ? clearVisualSearch : hasCatalogFilters ? resetFilters : undefined}
             />
           ) : (
             <ProductGrid
-              products={products.data.results}
+              products={displayProducts}
               pinnedIds={storeId ? storeProfile?.pinned_products : undefined}
+              similarityMap={isVisualActive ? visualSimilarityMap : undefined}
             />
           )}
-          {products.data && products.data.pages! > 1 && (
+          {!isVisualActive && products.data && products.data.pages! > 1 && (
             <Pagination page={Number(params.get("page") || 1)} totalPages={products.data.pages!} onChange={page => update("page", String(page))} />
           )}
         </div>
@@ -755,13 +899,24 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
   const preview = params.get('preview') === '1' && Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
   const client = useQueryClient();
   const productQuery = useQuery({
-    queryKey: ["product", id, user?.id],
-    queryFn: () => api<Product>(`products/${id}`),
+    queryKey: ["product", id, user?.id, preview],
+    queryFn: () => api<Product>(`products/${id}${preview ? '?preview=1' : ''}`),
   });
+  const [reviewPage, setReviewPage] = useState<number>(1);
   const reviews = useQuery({
-    queryKey: ["reviews", id],
-    queryFn: () => api<Review[]>(`products/${id}/reviews`),
+    queryKey: ["reviews", id, user?.id, reviewPage],
+    queryFn: async (): Promise<Page<Review> & { own_review?: Review | null }> => {
+      const response = await api<Review[] | (Page<Review> & { own_review?: Review | null })>(
+        `products/${id}/reviews?paginated=1&limit=20&offset=${(reviewPage - 1) * 20}`
+      );
+      return Array.isArray(response) ? { count: response.length, results: response } : response;
+    },
   });
+  useEffect(() => {
+    if (!reviews.data) return;
+    const lastPage: number = Math.max(1, Math.ceil(reviews.data.count / 20));
+    if (reviewPage > lastPage) setReviewPage(lastPage);
+  }, [reviewPage, reviews.data]);
   const related = useQuery({
     queryKey: ["related", productQuery.data?.category],
     queryFn: () =>
@@ -810,6 +965,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
         }
       });
       eventSource.addEventListener('dropped', () => {
+        eventSource?.close();
         setIsDropLive(true);
         notify('🎉 The drop is now LIVE! Add to bag is unlocked.', false);
       });
@@ -1077,7 +1233,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             </span>
             <span style={{ color: "var(--line)" }}>•</span>
             <button className="text-button" onClick={openReviews}>
-              {reviews.data?.length || product.rating_count || 0} reviews
+              {product.rating_count || 0} reviews
             </button>
             {typeof product.sales === "number" && product.sales > 0 && (
               <>
@@ -1436,7 +1592,7 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
         <div className="tabs" role="tablist">
           {[
             ["details", "Product details"],
-            ["reviews", `Reviews (${reviews.data?.length || 0})`],
+            ["reviews", `Reviews (${product.rating_count || 0})`],
             ["delivery", "Delivery & returns"],
           ].map(([key, text]) => (
             <button
@@ -1557,8 +1713,8 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
                   <Loading />
                 ) : reviews.error ? (
                   <ErrorState error={reviews.error} />
-                ) : reviews.data?.length ? (
-                  reviews.data.map((item) => (
+                ) : reviews.data?.results.length ? (
+                  reviews.data.results.map((item) => (
                     <article className="review" key={item.id}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
                         <span className="review-stars">
@@ -1635,12 +1791,24 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
                   <p>No reviews yet. Be the first verified buyer to share your experience.</p>
                 )}
               </div>
+              {reviews.data && reviews.data.count > 20 && (
+                <Pagination
+                  page={reviewPage}
+                  totalPages={Math.ceil(reviews.data.count / 20)}
+                  onChange={setReviewPage}
+                />
+              )}
               {user ? (
                 (() => {
-                  const myReview = reviews.data?.find((r) => r.is_own_review);
+                  const myReview = reviews.data?.own_review ?? reviews.data?.results.find((r) => r.is_own_review);
                   return (
                     <form className="review-form" key={myReview?.id || "new-review"} onSubmit={review}>
                       <h3>{myReview ? "Edit your review" : "Write a review"}</h3>
+                      {myReview && !reviews.data?.results.some(item => item.id === myReview.id) && (
+                        <button type="button" className="button secondary" onClick={() => void deleteReview(myReview.id)}>
+                          Delete your review
+                        </button>
+                      )}
                       <p className="muted" style={{ fontSize: "12px", margin: "-6px 0 12px" }}>
                         Only verified buyers who purchased this item can leave a review. Submitting again updates your existing comment.
                       </p>
@@ -1707,20 +1875,31 @@ export function ProductPage({ id }: { id: string }): JSX.Element {
             Explore more <ArrowRight size={16} />
           </Link>
         </div>
-        <ProductGrid
-          products={
-            related.data?.results
-              .filter((item) => item.id !== product.id)
-              .slice(0, 4) || []
-          }
-        />
+        {related.isLoading ? (
+          <Loading cards />
+        ) : related.error ? (
+          <ErrorState error={related.error} retry={() => related.refetch()} />
+        ) : !related.data?.results.some((item: Product) => item.id !== product.id) ? (
+          <Empty
+            title="No related finds right now"
+            text="Explore the category to discover more products as they arrive."
+            href={`/shop?category=${product.category}`}
+            label="Explore category"
+          />
+        ) : (
+          <ProductGrid
+            products={related.data.results
+              .filter((item: Product) => item.id !== product.id)
+              .slice(0, 4)}
+          />
+        )}
       </section>
     </div>
   );
 }
 
-export function SavedPage() {
-  const { saved } = useShop();
+export function SavedPage(): JSX.Element {
+  const { saved, savedLoading, savedError, refreshSaved } = useShop();
   const filters = useCollectionFilters();
   const criteria = new URLSearchParams(filters.query);
   const search: string = (criteria.get('search') || '').toLowerCase();
@@ -1731,8 +1910,12 @@ export function SavedPage() {
     return `${product.title} ${product.brand || ''} ${product.store_name || ''}`.toLowerCase().includes(search)
       && (!category || product.category === category)
       && (!digital || Boolean(product.is_digital) === (digital === 'true'))
-      && (!type || product.product_type === type);
+      && (!type || (product.product_type || 'standard') === type);
   });
+  useEffect(() => {
+    const lastOffset: number = Math.max(0, Math.floor((items.length - 1) / 20) * 20);
+    if (filters.offset > lastOffset) filters.setOffset(lastOffset);
+  }, [items.length, filters.offset, filters.setOffset]);
   return (
     <div className="container section">
       <div className="section-heading">
@@ -1740,7 +1923,9 @@ export function SavedPage() {
           <span className="eyebrow green">KEEP THE GOOD FINDS CLOSE</span>
           <h1>Saved for later</h1>
         </div>
-        <span className="muted">{saved.length} favourites</span>
+        <span className="muted">
+          {savedLoading ? 'Loading favourites…' : savedError ? 'Saved items unavailable' : `${saved.length} favourites`}
+        </span>
       </div>
       <CollectionFilters filters={filters} label="saved products" fields={[
         { key: 'category', label: 'Category', options: categories.map(category => ({ value: category.key, label: category.name })) },
@@ -1750,7 +1935,11 @@ export function SavedPage() {
       {filters.active && (
         <CollectionCount count={items.length} label="saved items" />
       )}
-      {items.length ? (
+      {savedLoading ? (
+        <Loading cards />
+      ) : savedError ? (
+        <ErrorState error={savedError} retry={refreshSaved} />
+      ) : items.length ? (
         <>
           <ProductGrid products={items.slice(filters.offset, filters.offset + 20)} />
           <CollectionPagination filters={filters} count={items.length} />

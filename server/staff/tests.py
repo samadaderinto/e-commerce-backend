@@ -28,10 +28,15 @@ class StaffAdministrationTests(TestCase):
         self.client = APIClient()
 
     def test_staff_can_complete_and_decline_pending_payouts(self) -> None:
-        from store.models import Store, StorePayout
+        from store.models import MerchantWallet, Store, StoreEarningsLedger, StorePayout
 
         seller = User.objects.create_user(email='payout-owner@test.com', password='Test-password-123!')
         store = Store.objects.create(user=seller, name='Payout store')
+        wallet = MerchantWallet.objects.create(user=seller)
+        StoreEarningsLedger.objects.create(
+            wallet=wallet, store=store, gross_amount=50, net_amount=50,
+            status=StoreEarningsLedger.STATUS_AVAILABLE,
+        )
         self.client.force_authenticate(self.staff)
         for action, expected in [('approve', 'completed'), ('reject', 'rejected')]:
             payout = StorePayout.objects.create(store=store, amount='25.00', reference=f'STAFF-{action}')
@@ -924,6 +929,27 @@ class StaffEmergencyOperationsTests(TestCase):
         self.assertEqual(marketer_detail_resp.data["affiliate"]["referral_count"], 1)
         self.assertEqual(marketer_detail_resp.data["affiliate"]["rewarded_count"], 1)
         self.assertEqual(marketer_detail_resp.data["affiliate"]["credit_earned"], "25.00")
+
+    def test_dashboard_gross_revenue_redacted_for_staff_but_visible_to_admin(self) -> None:
+        admin_user = User.objects.create_superuser(email="superadmin.rev@example.com", password="PassWord123!")
+
+        # 1. Staff requests dashboard: gross_total and financials must be None
+        self.client.force_authenticate(self.staff)
+        staff_resp = self.client.get("/staffs/dashboard/")
+        self.assertEqual(staff_resp.status_code, 200)
+        self.assertIsNone(staff_resp.data["orders"]["gross_total"])
+        self.assertIsNone(staff_resp.data.get("financials"))
+        self.assertIsNone(staff_resp.data["referrals"]["rewarded_amount"])
+
+        # 2. Administrator requests dashboard: gross_total and financials must be present
+        self.client.force_authenticate(admin_user)
+        admin_resp = self.client.get("/staffs/dashboard/")
+        self.assertEqual(admin_resp.status_code, 200)
+        self.assertIsNotNone(admin_resp.data["orders"]["gross_total"])
+        self.assertIsNotNone(admin_resp.data.get("financials"))
+        self.assertIn("escrow_total", admin_resp.data["financials"])
+        self.assertIn("commission_earned", admin_resp.data["financials"])
+        self.assertIsNotNone(admin_resp.data["referrals"]["rewarded_amount"])
 
 
 @override_settings(ROOT_URLCONF=__name__)

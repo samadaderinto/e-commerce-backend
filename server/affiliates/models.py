@@ -93,6 +93,7 @@ class Referral(DatesMixin):
     STATUS_CHOICES = (
         (PENDING, "Pending"),
         (REWARDED, "Rewarded"),
+        ("reversed", "Reversed"),
     )
 
     marketer = models.ForeignKey(Marketer, on_delete=models.CASCADE, related_name="referrals")

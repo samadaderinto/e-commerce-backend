@@ -25,8 +25,12 @@ spec:
               mountPath: /etc/nginx
               readOnly: true
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health/ready/
               port: 8080
+              httpHeaders:
+                - name: Host
+                  value: localhost
           livenessProbe:
             tcpSocket:
               port: 8080

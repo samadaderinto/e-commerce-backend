@@ -19,6 +19,7 @@ from rest_framework.exceptions import ValidationError
 from core.models import User, UserWalletTransaction
 from core.services import credit_user_wallet
 from payment.models import WalletFundingAttempt
+from payment.compensation import create_settled_compensation_refund
 
 MAX_TOPUP = Decimal("25000.00")
 DAILY_TOPUP = Decimal("50000.00")
@@ -190,9 +191,8 @@ def confirm_funding(user: User, session_id: str, session: Any) -> WalletFundingA
             if not intent:
                 raise ValueError("Paid session has no payment intent.")
             stripe.api_key = settings.STRIPE_SECRET
-            stripe.Refund.create(
-                payment_intent=intent, idempotency_key=f"funding-refund-{session_id}"
-            )
+            if not create_settled_compensation_refund(intent, f'funding-refund-{session_id}'):
+                raise ValueError('Provider refund has not settled.')
             attempt.status = "refunded"
         except Exception as exc:
             attempt.failure_reason += f" Refund pending: {type(exc).__name__}."

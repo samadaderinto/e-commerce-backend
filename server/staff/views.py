@@ -3,6 +3,8 @@ from zoneinfo import ZoneInfo
 import logging
 from datetime import timedelta
 from decimal import Decimal
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,11 @@ from store.serializers import (
     StoreAddressSerializer, StorePayoutSerializer, StoreEarningsLedgerSerializer,
     MerchantStoreFinancialSummarySerializer,
 )
-from store.services import process_payout_status_change, process_refund_deduction
+from store.services import (
+    merchant_sale_is_pending,
+    process_payout_status_change,
+    process_refund_deduction,
+)
 from core.services import credit_user_wallet, get_or_create_user_wallet
 from core.models import UserWalletTransaction
 from payment.services import (
@@ -110,6 +116,100 @@ class BackofficePagination(LimitOffsetPagination):
 
 IsSuperuser = IsBusinessAdmin
 
+
+@dataclass
+class TreasuryEarnings:
+    marketplace_commission: Decimal = Decimal('0')
+    official_revenue: Decimal = Decimal('0')
+    escrow: Decimal = Decimal('0')
+
+    @property
+    def total(self) -> Decimal:
+        return self.marketplace_commission + self.official_revenue
+
+
+def treasury_earnings(*, include_pending: bool = False) -> TreasuryEarnings:
+    """Net each sale with its recorded refunds before applying clearance scope.
+
+    Fully refunded sales are marked reversed, but their completed adjustments
+    remain in the ledger. Retain both sides; ignore unrelated reversed entries
+    and payout movements, which are not additional revenue.
+    """
+    refunds = {
+        (row['order_id'], row['store_id']): (row['fee'], row['net'])
+        for row in StoreEarningsLedger.objects.filter(
+            entry_type=StoreEarningsLedger.TYPE_REFUND,
+            status=StoreEarningsLedger.STATUS_COMPLETED,
+            order_id__isnull=False,
+        ).values('order_id', 'store_id').annotate(
+            fee=Sum('fee_amount'), net=Sum('net_amount'),
+        )
+    }
+    totals = TreasuryEarnings()
+    now = timezone.now()
+    sales = StoreEarningsLedger.objects.filter(
+        entry_type=StoreEarningsLedger.TYPE_SALE,
+    ).select_related('order', 'store').prefetch_related('order__fulfillments')
+    for sale in sales:
+        key = (sale.order_id, sale.store_id)
+        adjustment = refunds.pop(key, None)
+        sale_status = sale.status
+        if sale_status == StoreEarningsLedger.STATUS_REVERSED and adjustment is None:
+            continue
+        fee = sale.fee_amount + (adjustment[0] if adjustment else Decimal('0'))
+        net = sale.net_amount + (adjustment[1] if adjustment else Decimal('0'))
+        if sale_status == StoreEarningsLedger.STATUS_PENDING or merchant_sale_is_pending(sale, now):
+            totals.escrow += net
+            if not include_pending:
+                continue
+        elif sale_status not in {
+            StoreEarningsLedger.STATUS_AVAILABLE,
+            StoreEarningsLedger.STATUS_COMPLETED,
+            StoreEarningsLedger.STATUS_REVERSED,
+        }:
+            continue
+        if sale.store and sale.store.is_official:
+            totals.official_revenue += net
+        else:
+            totals.marketplace_commission += fee
+    return totals
+
+
+def historical_top_stores() -> list[dict[str, Any]]:
+    """Count each recorded order/store once; use carts only for legacy orders."""
+    counts: dict[int, int] = {}
+    orders = Order.objects.filter(
+        ordered=True, status__in=['confirmed', 'shipped', 'delivered', 'picked up'],
+    ).only('items_snapshot', 'cart_id').prefetch_related('cart__cart_items__product')
+    for order in orders.iterator(chunk_size=500):
+        store_ids: set[int] = set()
+        if order.items_snapshot:
+            for item in order.items_snapshot:
+                store_id = item.get('store')
+                if isinstance(store_id, int) or (
+                    isinstance(store_id, str) and store_id.isdecimal()
+                ):
+                    store_ids.add(int(store_id))
+        elif order.cart_id:
+            store_ids = {
+                item.product.store_id for item in order.cart.cart_items.all()
+                if item.product.store_id is not None
+            }
+        for store_id in store_ids:
+            counts[store_id] = counts.get(store_id, 0) + 1
+    stores = list(
+        Store.objects.annotate(products=Count('product', distinct=True)).values(
+            'id', 'name', 'username', 'status', 'products',
+        )
+    )
+    for store in stores:
+        store['orders'] = counts.get(store['id'], 0)
+    return sorted(
+        stores,
+        key=lambda store: (-store['orders'], -store['products'], store['id']),
+    )[:10]
+
+
 class StaffViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAdminUser]
     pagination_class = BackofficePagination
@@ -155,10 +255,16 @@ class StaffViewSet(viewsets.GenericViewSet):
                 ordered=True,
                 status__in=["confirmed", "shipped", "delivered", "picked up"],
             )
-            order_total = paid_orders.aggregate(total=Sum("total"))["total"] or Decimal("0")
-            ledger = StoreEarningsLedger.objects.exclude(status=StoreEarningsLedger.STATUS_REVERSED)
-            escrow_total = ledger.filter(status=StoreEarningsLedger.STATUS_PENDING).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
-            commission_total = ledger.aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
+            admin = is_admin(request.user)
+
+            order_total = Decimal("0")
+            escrow_total = Decimal("0")
+            commission_total = Decimal("0")
+            if admin:
+                order_total = paid_orders.aggregate(total=Sum("total"))["total"] or Decimal("0")
+                earnings = treasury_earnings(include_pending=True)
+                escrow_total = earnings.escrow
+                commission_total = earnings.marketplace_commission
 
             return Response({
                 "period": {"from": start, "to": today, "days": days, "time_zone": query.validated_data["time_zone"]},
@@ -188,12 +294,12 @@ class StaffViewSet(viewsets.GenericViewSet):
                     "by_status": list(
                         orders.order_by().values("status").annotate(count=Count("pk")).order_by("status")
                     ),
-                    "gross_total": format(order_total, ".2f"),
+                    "gross_total": format(order_total, ".2f") if admin else None,
                 },
                 "financials": {
                     "escrow_total": format(escrow_total, ".2f"),
                     "commission_earned": format(commission_total, ".2f"),
-                },
+                } if admin else None,
                 "pending_actions": {
                     "withdrawals": StorePayout.objects.filter(status=StorePayout.STATUS_PENDING).count(),
                     "refunds": Refund.objects.filter(status=Refund.STATUS_PENDING).count(),
@@ -216,27 +322,13 @@ class StaffViewSet(viewsets.GenericViewSet):
                     "rewarded_amount": format(
                         Referral.objects.filter(status=Referral.REWARDED).aggregate(total=Sum("reward_amount"))["total"] or 0,
                         ".2f",
-                    ),
+                    ) if admin else None,
                 },
                 "recent_orders": BackofficeOrderSerializer(
                     Order.objects.select_related("user").order_by("-created", "-pk")[:10],
                     many=True,
                 ).data,
-                "top_stores": list(
-                    Store.objects.annotate(
-                        products=Count("product", distinct=True),
-                        orders=Count(
-                            "product__cartitem__cart__order",
-                            filter=Q(
-                                product__cartitem__cart__order__ordered=True,
-                                product__cartitem__cart__order__status__in=["confirmed", "shipped", "delivered", "picked up"],
-                            ),
-                            distinct=True,
-                        ),
-                    )
-                    .order_by("-orders", "-products", "pk")
-                    .values("id", "name", "username", "status", "products", "orders")[:10]
-                ),
+                "top_stores": historical_top_stores(),
                 "scopes": {
                     "orders": f"Last {days} days",
                     "top_stores": "All-time completed orders",
@@ -769,7 +861,14 @@ class StaffViewSet(viewsets.GenericViewSet):
         )
         if action_type == "approve":
             refund = process_order_refund(refund, request.user, reason=reason)
-            return Response({"detail": "Refund approved and processed.", "refund": RefundsSerializer(refund).data})
+            return Response(
+                {
+                    "detail": "Refund is processing with the payment provider."
+                    if refund.status == Refund.STATUS_PENDING
+                    else "Refund approved and processed.",
+                    "refund": RefundsSerializer(refund).data,
+                }
+            )
         else:
             refund = decline_order_refund(refund, request.user, reason=reason)
             return Response({"detail": "Refund request declined.", "refund": RefundsSerializer(refund).data})
@@ -826,15 +925,10 @@ class StaffViewSet(viewsets.GenericViewSet):
     @action(detail=False, methods=["get"], url_path="commission-wallet")
     @extend_schema(parameters=[ListingQuerySerializer], responses=dict)
     def commission_wallet(self, request: Request) -> Response:
-        commission_earned = StoreEarningsLedger.objects.filter(
-            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
-            store__is_official=False,
-        ).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
-        official_store_earned = StoreEarningsLedger.objects.filter(
-            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
-            store__is_official=True,
-        ).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
-        earned = commission_earned + official_store_earned
+        earnings = treasury_earnings()
+        commission_earned = earnings.marketplace_commission
+        official_store_earned = earnings.official_revenue
+        earned = earnings.total
         withdrawn = PlatformCommissionWithdrawal.objects.exclude(status=PlatformCommissionWithdrawal.STATUS_FAILED).aggregate(total=Sum("amount"))["total"] or Decimal("0")
         rows = filter_records(
             PlatformCommissionWithdrawal.objects.select_related('requested_by').order_by('-created', '-pk'),
@@ -874,15 +968,7 @@ class StaffViewSet(viewsets.GenericViewSet):
         amount = serializer.validated_data['amount']
         # Serialize platform withdrawals to prevent concurrent double-withdrawals
         User.objects.select_for_update().order_by('pk').first()
-        commission_earned = StoreEarningsLedger.objects.filter(
-            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
-            store__is_official=False,
-        ).aggregate(total=Sum("fee_amount"))["total"] or Decimal("0")
-        official_store_earned = StoreEarningsLedger.objects.filter(
-            status__in=[StoreEarningsLedger.STATUS_AVAILABLE, StoreEarningsLedger.STATUS_COMPLETED],
-            store__is_official=True,
-        ).aggregate(total=Sum("net_amount"))["total"] or Decimal("0")
-        earned = commission_earned + official_store_earned
+        earned = treasury_earnings().total
         reserved = PlatformCommissionWithdrawal.objects.exclude(status=PlatformCommissionWithdrawal.STATUS_FAILED).aggregate(total=Sum("amount"))["total"] or Decimal("0")
         if amount > earned - reserved:
             return Response({'amount': 'Amount exceeds available platform treasury funds.'}, status=400)

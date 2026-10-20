@@ -478,12 +478,20 @@ CELERY_TASK_ROUTES = {
     "product.tasks.delete_product_task": {
         "queue": CELERY_TASK_DEFAULT_QUEUE,
     },
+    "product.tasks.recover_search_index_jobs": {
+        "queue": CELERY_TASK_DEFAULT_QUEUE,
+    },
 }
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TIME_LIMIT = 120
 CELERY_TASK_IGNORE_RESULT = True
 CELERY_BEAT_SCHEDULE = {
+    "recover-search-index-jobs": {
+        "task": "product.tasks.recover_search_index_jobs",
+        "schedule": timedelta(seconds=60),
+    },
+    "publish-due-products": {"task": "store.publish_due_products_task", "schedule": timedelta(seconds=30)},
     "recover-wallet-funding": {"task": "payment.recover_wallet_funding", "schedule": timedelta(seconds=60)},
     "recover-checkout-attempts": {"task": "payment.recover_checkout_attempts", "schedule": timedelta(seconds=60)},
     "recover-notification-deliveries": {

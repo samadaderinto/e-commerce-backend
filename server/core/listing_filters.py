@@ -1,5 +1,6 @@
 """Validated collection criteria applied before pagination and serialization."""
 from datetime import date, datetime, time, timedelta, timezone
+import json
 from typing import Any, Mapping, TypeVar
 
 from django.db.models import Model, Q, QuerySet
@@ -32,7 +33,7 @@ class ListingQuerySerializer(serializers.Serializer):
     min_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, required=False)
     max_amount = serializers.DecimalField(max_digits=15, decimal_places=2, min_value=0, required=False)
     limit = serializers.IntegerField(min_value=1, max_value=100, default=20)
-    offset = serializers.IntegerField(min_value=0, default=0)
+    offset = serializers.IntegerField(min_value=0, max_value=2_147_483_647, default=0)
 
     def validate_end_date(self, value: date) -> date:
         if value == date.max:
@@ -51,6 +52,7 @@ def filter_records(
     params: Mapping[str, str],
     *,
     search_fields: tuple[str, ...] = (),
+    json_search_fields: tuple[str, ...] = (),
     fields: Mapping[str, str] | None = None,
     date_field: str = "created",
     amount_field: str | None = None,
@@ -61,10 +63,15 @@ def filter_records(
     if criteria.get("record_id"):
         records = records.filter(pk=criteria["record_id"])
     search = criteria["search"].strip()
-    if search and search_fields:
+    if search and (search_fields or json_search_fields):
         condition = Q()
         for field in search_fields:
             condition |= Q(**{f"{field}__icontains": search})
+        escaped_search = json.dumps(search, ensure_ascii=True)[1:-1]
+        for field in json_search_fields:
+            condition |= Q(**{f"{field}__icontains": search})
+            if escaped_search != search:
+                condition |= Q(**{f"{field}__icontains": escaped_search})
         records = records.filter(condition).distinct()
     for parameter, field in (fields or {}).items():
         value = params.get(parameter, "")
@@ -91,4 +98,7 @@ def record_page(records: QuerySet[Record], params: Mapping[str, str]) -> tuple[i
     query.is_valid(raise_exception=True)
     offset = query.validated_data["offset"]
     limit = query.validated_data["limit"]
-    return records.count(), records[offset:offset + limit]
+    count = records.count()
+    if offset >= count:
+        return count, records.none()
+    return count, records[offset:offset + limit]

@@ -34,11 +34,13 @@ Keep source, search cache mode, dataset, warmup, concurrency and benchmark durat
 
 All generated raw metrics, trial overrides and reports belong under Git-ignored `qa-reports/performance-testing/`. Run load tests sequentially; run functional checks separately so they do not distort benchmark CPU/memory. These local results include Docker/host contention and are not production capacity estimates.
 
-### Authenticated stream contention result
+### Stream capacity
 
-A local follow-up compared 2 processes × 32 threads with 2 × 8 under 8 and 20 authenticated SSE connections plus 25 catalog clients. With 20 requested streams, 2 × 32 established all 20 and completed 974 catalog requests without errors. The 2 × 8 candidate established at most 13, recorded 16 stream-read timeouts across reconnect attempts, and timed out 51 of 1,099 catalog requests (4.64%). Its aggregate p95 was misleadingly low because timeout requests fell beyond p95; p99 exceeded five seconds. Keep the global 2 × 32 default. Short anonymous-only or successful-only latency improvements must not override stream admission/reliability failures.
-
-This exploratory test reused one demo shopper across independent authenticated connections, not 20 distinct users. It exercised real Redis-backed SSE and PostgreSQL/Redis/Elasticsearch readiness I/O, not live carrier/payment providers, long-duration token refresh, or production hardware. It did not publish business events or submit checkout/shipping quotes. Compare a dedicated stream process or async streaming stack in a separately scoped deployment trial before lowering request thread capacity. Generated evidence is in Git-ignored `qa-reports/performance-testing/load/stream-worker-trial-2026-10-16.*`.
+Long-lived SSE connections occupy finite worker/thread slots. Size the dedicated
+stream process independently and measure stream admission, reconnect errors,
+interactive request latency, and database connections together. Successful-only
+latency can hide timeouts; report all attempts and errors. Separate process
+isolation does not make WSGI streaming unlimited.
 
 ## Local Celery worker memory
 
@@ -71,13 +73,9 @@ equally warmed workers; old process age can inflate memory comparisons. Controll
 local indexing jobs do not establish real email/push provider latency or inbox
 delivery. Generated profiles belong under `qa-reports/performance-testing/volume/`.
 
-The 2026-10-16 local 7→2→7→2 trial used identical 35-job warm-ups and three
-100-job indexing bursts per pool. In the warm-cache control/final runs, median
-warmed worker memory fell from 539.1 to 202.7 MiB (62.4%). Median burst throughput
-was 83.3 versus 91.9 jobs/second, and the median of burst p95 publish-to-start
-delays was 922 versus 941 ms. All 1,340 benchmark index operations were confirmed
-across four trials, with no benchmark failures. These short local indexing
-results support the local default, not a general production speedup or memory SLA.
+Measure equally warmed pools using the same job mix. Record aggregate worker
+memory, queue delay, throughput, failures, and provider response time. Indexing
+throughput alone is not evidence of email/push delivery capacity.
 
 Order-list endpoints batch their related data per selected page. Customer history
 loads its refunds and store fulfillments in two additional queries and joins the
@@ -123,11 +121,9 @@ endpoint confirms push availability. Recipient checks, registration ownership an
 unsubscribe-on-unmount behavior remain intact. No private-data cache or freshness
 settings were changed.
 
-Production-build Chrome checks with mocked API data on 2026-10-15 measured decoded
-JavaScript response bodies after each cold-context route settled: Home and Shop
-fell from 1,146,414 to 672,802 bytes (41.3%), Cart to 763,249 (33.4%), and payouts to
-782,743 (31.7%). These are uncompressed code-size measurements, not network latency,
-Core Web Vitals or production p95 claims. More chunk requests are expected.
+Measure frontend code size separately from network latency and Core Web Vitals.
+Record cold/warm navigation waterfalls on representative devices; a smaller
+bundle does not by itself establish API throughput.
 
 Run the split-route browser regression against a production server:
 
@@ -138,3 +134,54 @@ E2E_BASE_URL=http://127.0.0.1:3001 npx playwright test --config client/playwrigh
 Generated before/after profiles belong in the ignored
 `qa-reports/performance-testing/load/` directory. Continue with real-device request
 waterfalls and navigation timings before changing cache staleness or adding caches.
+
+## Preparing a volume dataset
+
+Use the canonical development seeder without clearing the database:
+
+```sh
+docker compose -f server/compose.yaml exec -T api python manage.py populate_fake_data --scale huge --products 6000 --orders 4000 --users 1000 --stores 50 --reviews 3000 --seed 20261020
+```
+
+This appends 6,000 products and 4,000 orders, plus supporting records. Known demo
+accounts/scenarios may be reused or refreshed. Preserve the existing technical
+admin password. The command refuses production mode and rebuilds search after
+commit. Check actual counts and indexing completion before benchmarking; never
+generate data during a timed load run.
+
+Record the final table counts, eligible public product count, database size,
+index size, and endpoint query distribution. A large total count is not the
+same as a large working set: repeated first-page cache hits can hide database cost.
+
+## Planning a 5,000 requests/second test
+
+5,000 requests/second is a throughput target, not 5,000 simultaneous users or
+5,000 open connections. Define an acceptable p95/p99, error budget, duration,
+and endpoint mix before selecting a configuration.
+
+The existing runner is closed-loop and controls concurrent workers:
+
+```sh
+npm run test:load -- --url http://127.0.0.1:3000 --concurrency 100 --duration 60
+```
+
+Its concurrency setting does not request a fixed arrival rate and cannot certify
+a 5,000 RPS target merely by using a large worker count. For rate-target testing,
+use an open-loop arrival-rate generator with enough independent load-generation
+capacity. Record offered, achieved, and dropped requests separately.
+
+Start with smoke/warmup traffic, then increase offered rates in measured steps
+until latency/error limits fail. Measure the real browser-facing proxy path as
+well as the direct API path; separate anonymous cached catalog, search,
+authenticated reads, writes, and SSE scenarios. Do not include real payment,
+carrier-purchase, or email operations in synthetic load.
+
+Run the generator on another machine when measuring server capacity. Track CPU,
+memory/swap, network, API queueing, PostgreSQL connections/locks/slow queries,
+Redis, Elasticsearch, and worker backlogs. Include unsuccessful requests in
+latency/error reporting. Do not weaken normal authentication, ownership, stock,
+or financial controls to improve a benchmark.
+
+A 10,000-record addition prepares volume only. Capacity is established by a
+sustained representative run on the intended hardware, not by record count,
+thread count, or a short cache-hit spike.

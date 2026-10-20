@@ -8,6 +8,7 @@ from celery import shared_task
 from core.services import credit_user_wallet
 from core.models import User
 from payment.models import CheckoutAttempt, Order
+from payment.compensation import create_settled_compensation_refund
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +40,10 @@ def compensate_checkout(attempt: CheckoutAttempt, session: Any, reason: str) -> 
         try:
             if not attempt.payment_intent:
                 raise ValueError('Paid session has no payment intent.')
-            stripe.Refund.create(payment_intent=attempt.payment_intent,
-                                 idempotency_key=f'failed-checkout-{attempt.checkout_key}')
+            if not create_settled_compensation_refund(
+                attempt.payment_intent, f'failed-checkout-{attempt.checkout_key}',
+            ):
+                raise ValueError('Provider refund has not settled.')
         except Exception as exc:
             attempt.status = 'refund_pending'
             attempt.expires_at = timezone.now()

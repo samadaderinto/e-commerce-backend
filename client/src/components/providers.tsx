@@ -20,6 +20,7 @@ import { api, ApiError, cancelPendingApiRequests } from '@/lib/api';
 import { clearSignedInSession } from '@/lib/session-cache';
 import type { Cart, CartLine, Product, User } from '@/lib/types';
 import type { SocialCredential } from '@/lib/social-auth';
+import { VisualSearchProvider } from './visual-search-context';
 
 type SocialLoginPayload = SocialCredential & { referral_code?: string };
 import { presentNotificationOnce } from '@/lib/notification-presentation';
@@ -32,6 +33,9 @@ type Context = {
   cartLoading: boolean;
   cartError: Error | null;
   saved: Product[];
+  savedLoading: boolean;
+  savedError: Error | null;
+  refreshSaved: () => Promise<void>;
   notify: (message: string, error?: boolean) => void;
   add: (product: Product, quantity?: number) => Promise<void>;
   setQuantity: (product: Product, quantity: number) => Promise<void>;
@@ -74,7 +78,11 @@ function ShopProvider({ children }: { children: ReactNode }) {
       if (Array.isArray(stored)) {
         setGuest(
           stored
-            .filter((item) => item?.product?.id && item.quantity > 0)
+            .filter((item) => (
+              item?.product?.id &&
+              item.quantity > 0 &&
+              item.product.product_type !== 'affiliate_clickbank'
+            ))
             .map((item) => (item.product.is_digital ? { ...item, quantity: 1 } : item))
         );
       }
@@ -216,7 +224,10 @@ function ShopProvider({ children }: { children: ReactNode }) {
     };
   }, [user?.id, user?.must_change_password, client]);
 
-  async function add(product: Product, quantity = 1) {
+  async function add(product: Product, quantity = 1): Promise<void> {
+    if (product.product_type === 'affiliate_clickbank') {
+      throw new Error('This partner listing uses the vendor checkout. Open its official partner link.');
+    }
     if (user && !consumer) {
       throw new Error('Administrative accounts cannot shop.');
     }
@@ -328,6 +339,10 @@ function ShopProvider({ children }: { children: ReactNode }) {
         ),
       ]
     : guestSaved;
+
+  async function refreshSaved(): Promise<void> {
+    if (consumer) await savedQuery.refetch();
+  }
 
   async function toggleSave(product: Product) {
     if (user && !consumer) {
@@ -474,6 +489,9 @@ function ShopProvider({ children }: { children: ReactNode }) {
         cartLoading: session.isLoading || (!!user && cartQuery.isLoading),
         cartError: cartQuery.error,
         saved,
+        savedLoading: !ready || session.isLoading || (consumer && savedQuery.isLoading),
+        savedError: consumer ? savedQuery.error : null,
+        refreshSaved,
         notify,
         add,
         setQuantity,
@@ -515,7 +533,9 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={client}>
       <ThemeProvider>
-        <ShopProvider>{children}</ShopProvider>
+        <ShopProvider>
+          <VisualSearchProvider>{children}</VisualSearchProvider>
+        </ShopProvider>
       </ThemeProvider>
     </QueryClientProvider>
   );

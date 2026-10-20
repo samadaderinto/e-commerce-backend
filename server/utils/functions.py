@@ -49,6 +49,7 @@ def send_mail(
     data: Optional[dict[str, Any]] = None,
     recipient: Optional[Any] = None,
     notification: Notification | None = None,
+    delivery_key: str = "",
 ) -> None:
     context = dict(data or {})
     if recipient is None:
@@ -87,6 +88,7 @@ def send_mail(
         notification=notification,
         reply_to=reply_to,
         is_html=True,
+        delivery_key=delivery_key,
     )
 
 

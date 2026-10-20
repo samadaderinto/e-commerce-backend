@@ -185,9 +185,13 @@ class TransactionalEmailTests(TestCase):
         self.assertEqual(NotificationDelivery.objects.filter(recipient=self.owner).count(), 2)
 
     def test_payout_decisions_send_one_html_email(self) -> None:
-        from store.models import MerchantWallet, StorePayout
+        from store.models import MerchantWallet, StoreEarningsLedger, StorePayout
 
         wallet = MerchantWallet.objects.create(user=self.owner)
+        StoreEarningsLedger.objects.create(
+            wallet=wallet, store=self.store, gross_amount=20, net_amount=20,
+            status=StoreEarningsLedger.STATUS_AVAILABLE,
+        )
         for action in ["approve", "reject"]:
             payout = StorePayout.objects.create(store=self.store, wallet=wallet, amount=10, reference=action)
             with self.deliver_callbacks():

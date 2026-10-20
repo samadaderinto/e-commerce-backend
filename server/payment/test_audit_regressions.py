@@ -761,6 +761,7 @@ class AuditRegressionTests(TestCase):
     def test_legacy_over_limit_payment_is_refunded_without_credit(
         self, refund: Mock
     ) -> None:
+        refund.return_value = {'id': 're_over_limit', 'status': 'succeeded'}
         credit_user_wallet(
             self.buyer, Decimal("50000"), "Daily deposits", source="deposit"
         )
@@ -782,6 +783,7 @@ class AuditRegressionTests(TestCase):
     def test_failed_funding_refund_remains_durable_until_recovery(
         self, refund: Mock
     ) -> None:
+        refund.return_value = {'id': 're_pending_recovery', 'status': 'succeeded'}
         credit_user_wallet(
             self.buyer, Decimal("50000"), "Daily deposits", source="deposit"
         )
@@ -826,6 +828,7 @@ class AuditRegressionTests(TestCase):
     def test_funding_currency_mismatch_is_refunded_not_credited(
         self, refund: Mock
     ) -> None:
+        refund.return_value = {'id': 're_currency', 'status': 'succeeded'}
         session = self.funding_session()
         session["currency"] = "eur"
         self.assertEqual(

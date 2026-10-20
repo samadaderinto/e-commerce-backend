@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useRef, useState, FormEvent, ReactNode } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Activity, Archive, ArrowRight, ArrowUpRight, Bell, Camera, ChartNoAxesCombined, CheckCheck, ChevronDown, DollarSign, Heart, Inbox, Landmark, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Store as StoreIcon, Truck, UserRound, UsersRound, X } from 'lucide-react';
+import { Activity, Archive, ArrowRight, ArrowUpRight, Bell, Camera, ChartNoAxesCombined, CheckCheck, ChevronDown, DollarSign, Heart, Inbox, Landmark, LoaderCircle, LogOut, Menu, Plus, RotateCcw, Search, Settings, ShieldCheck, ShoppingBag, Sparkles, Store as StoreIcon, Truck, Upload, UserRound, UsersRound, X } from 'lucide-react';
 import { api, categories } from '@/lib/api';
 import type { NotificationCounts, NotificationItem, Page, Store, User } from '@/lib/types';
 import { fetchPushDeviceStatus, getFirebaseMessaging, pushDeviceChangeEvent, registerPushDevice, unregisterPushDevice } from '@/lib/firebase-messaging';
@@ -16,7 +16,7 @@ import { useShop } from './providers';
 import { ThemeToggle } from './theme';
 import { business, contactLinks } from '@/lib/business';
 import { ResponsiveMediaImage } from './ui';
-import { VisualSearchModal } from './visual-search-modal';
+import { useVisualSearch } from './visual-search-context';
 
 export function Shell({ children }: { children: ReactNode }) {
   const { user, cart, sessionLoading } = useShop();
@@ -24,7 +24,9 @@ export function Shell({ children }: { children: ReactNode }) {
   const params = useSearchParams();
   const merchant = path.startsWith('/merchant');
   const [search, setSearch] = useState('');
-  const [visualSearchOpen, setVisualSearchOpen] = useState(false);
+  const { uploadAndReroute, error: visualError, isAnalyzing: isVisualAnalyzing } = useVisualSearch();
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
   const [menu, setMenu] = useState(false);
   const router = useRouter();
   function submit(event: FormEvent<HTMLFormElement>): void {
@@ -144,7 +146,18 @@ export function Shell({ children }: { children: ReactNode }) {
           <Link href="/" className="wordmark" aria-label="ProAce home">
             proace<span>®</span>
           </Link>
-          <form className="search-box" onSubmit={submit}>
+          <form
+            className="search-box"
+            onSubmit={submit}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+              e.preventDefault();
+              const file = e.dataTransfer.files?.[0];
+              if (file && file.type.startsWith('image/')) {
+                uploadAndReroute(file);
+              }
+            }}
+          >
             <Search size={19} />
             <input
               aria-label="Search products"
@@ -152,14 +165,32 @@ export function Shell({ children }: { children: ReactNode }) {
               onChange={(event) => setSearch(event.target.value)}
               placeholder="What are you looking for?"
             />
+            <input
+              ref={cameraInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  uploadAndReroute(file);
+                }
+                e.target.value = '';
+              }}
+            />
             <button
               type="button"
               className="search-camera-btn"
-              onClick={() => setVisualSearchOpen(true)}
-              title="AI Visual Lens • Shop The Look"
-              aria-label="Search by image or shop the look"
+              onClick={() => cameraInputRef.current?.click()}
+              title="Search by image"
+              aria-label="Search by image"
+              disabled={isVisualAnalyzing}
             >
-              <Camera size={18} />
+              {isVisualAnalyzing ? (
+                <LoaderCircle size={18} className="animate-spin" />
+              ) : (
+                <Camera size={18} />
+              )}
             </button>
             <button type="submit" aria-label="Search">
               <ArrowUpRight size={19} />
@@ -279,7 +310,14 @@ export function Shell({ children }: { children: ReactNode }) {
         </div>
       )}
 
-      <main id="main">{children}</main>
+      <main id="main">
+        {visualError && (
+          <div className="container">
+            <p className="form-error" role="alert">{visualError}</p>
+          </div>
+        )}
+        {children}
+      </main>
 
       {!merchant && (
         <>
@@ -353,10 +391,6 @@ export function Shell({ children }: { children: ReactNode }) {
           </footer>
         </>
       )}
-      <VisualSearchModal
-        isOpen={visualSearchOpen}
-        onClose={() => setVisualSearchOpen(false)}
-      />
     </>
   );
 }
@@ -907,7 +941,12 @@ function AccountMenu() {
                             </div>
                             <div className="account-store-details">
                               <strong>{store.name}</strong>
-                              <small>@{store.username}</small>
+                              <small>
+                                @{store.username}
+                                {store.user_role && store.user_role !== 'owner' && (
+                                  <> · <span style={{ textTransform: 'capitalize' }}>{store.user_role.replace(/_/g, ' ')}</span></>
+                                )}
+                              </small>
                             </div>
                             <span className={`account-store-status ${store.status}`}>
                               {store.status}

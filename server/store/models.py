@@ -87,9 +87,25 @@ class StoreTeamMember(DatesMixin):
         (ROLE_FULFILLMENT_SPECIALIST, 'Fulfillment Specialist'),
     )
 
+    STATUS_PENDING = 'pending'
+    STATUS_ACTIVE = 'active'
+    STATUS_CHOICES = (
+        (STATUS_PENDING, 'Pending Invitation'),
+        (STATUS_ACTIVE, 'Active Member'),
+    )
+
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name='team_members')
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='store_team_memberships')
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='store_team_memberships',
+    )
+    invited_email = models.EmailField(blank=True, default='')
     role = models.CharField(max_length=30, choices=ROLE_CHOICES, default=ROLE_CATALOG_MANAGER)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    invite_token = models.CharField(max_length=64, blank=True, default='')
     invited_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -99,20 +115,42 @@ class StoreTeamMember(DatesMixin):
     )
 
     class Meta:
-        unique_together = ('store', 'user')
         ordering = ('-created', 'pk')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['store', 'user'],
+                condition=models.Q(user__isnull=False),
+                name='unique_store_team_member',
+            ),
+            models.UniqueConstraint(
+                fields=['store', 'invited_email'],
+                condition=models.Q(status='pending'),
+                name='unique_pending_store_invitation',
+            ),
+        ]
 
     def clean(self) -> None:
         super().clean()
         if self.store_id and self.user_id and self.store.user_id == self.user_id:
             raise ValidationError("Store owners cannot be added as team members of their own store.")
+        if self.store_id and not self.user_id and self.invited_email:
+            if self.store.user and self.store.user.email and self.store.user.email.lower() == self.invited_email.lower():
+                raise ValidationError("Store owners cannot be added as team members of their own store.")
 
     def save(self, *args, **kwargs) -> None:
+        if self.user and not self.invited_email:
+            self.invited_email = getattr(self.user, 'email', '')
         self.clean()
         super().save(*args, **kwargs)
 
+    @property
+    def email(self) -> str:
+        if self.user and getattr(self.user, 'email', None):
+            return self.user.email
+        return self.invited_email or ''
+
     def __str__(self) -> str:
-        return f"{getattr(self.user, 'email', self.user_id)} - {self.get_role_display()} ({getattr(self.store, 'name', self.store_id)})"
+        return f"{self.email} - {self.get_role_display()} ({getattr(self.store, 'name', self.store_id)})"
 
 
 class Schedule(DatesMixin):

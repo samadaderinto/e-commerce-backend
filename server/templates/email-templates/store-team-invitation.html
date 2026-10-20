@@ -1,0 +1,12 @@
+{% extends "email-templates/service-notification-base.html" %}
+{% block details %}
+  <p>You have been invited by <strong>{{ inviter_name }}</strong> to join the store team for <strong>{{ store_name }}</strong> on ProAce Commerce.</p>
+  <p>Your designated role is <strong>{{ role_display }}</strong>.</p>
+  {% if is_new_user %}
+    <p>To accept your invitation and access this store's workspace, please create your ProAce account using this email address.</p>
+  {% else %}
+    <p>Sign in to your ProAce account to access your new store workspace and start managing store operations.</p>
+  {% endif %}
+{% endblock %}
+{% block action_url %}{{ invite_url }}{% endblock %}
+{% block action_label %}{% if is_new_user %}Create Account & Join Team{% else %}Open Seller Workspace{% endif %}{% endblock %}

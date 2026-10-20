@@ -270,3 +270,27 @@ The production `.env.example` contains fictional format samples, including an in
 The stream image sets the Docker build argument `INSTALL_STREAM_POOL=true` to install `requirements-stream.txt`. Each stream worker uses a PostgreSQL pool capped at four physical sockets (`min_size=0`, acquisition timeout 3 seconds), returning connections after access checks instead of retaining one per SSE thread or reconnecting on every heartbeat. Install that requirements file explicitly when deploying the dedicated settings without Compose.
 
 The backend Compose stack now includes internal `notification-stream`; deploy it with `api`, `notification-worker` and `celery-beat` before recreating `client`. The HostGator helper builds/starts all four backend consumers. Browser traffic remains same-origin: only `/api/notifications/stream` is routed by Next.js to the internal stream process. `CONTAINER_NOTIFICATION_STREAM_URL` defaults to `http://notification-stream:8000/api/v1`; token refresh stays on the main API. The new service exposes only the stream and health routes, publishes no host port, uses normal JWT/access checks, runs no migrations, and isolates metrics files. Defaults are one process / 32 threads (`STREAM_WORKERS`, `STREAM_THREADS`); budget database connections across services. See [performance](performance.md) for limitations, verification and routing rollback. Migration `product.0015_catalog_pagination_indexes` must be applied through the API container; on a large production table, schedule index creation or use a reviewed concurrent-index rollout to avoid write-lock surprises.
+
+
+Before enabling production traffic, follow the [trusted ingress setup](infrastructure.md#storefront-gateway-and-trusted-ingress):
+Caddy must reach Nginx rather than bypass it, its peer IP/CIDR must be trusted for
+both real client IP and HTTPS protocol, and operator allowlists must contain the
+actual administrator/VPN addresses. Rebuild API, worker, scheduler, stream and
+client consumers, apply all migrations, then recreate Nginx after Next.js releases
+its former host port. Configure all refund/dispute event subscriptions listed in
+[backend reconciliation](backend.md#provider-adjustment-reconciliation).
+## Backup integrity and deployment verification
+
+The HostGator backup script requires Bash and pipeline failure propagation. It
+writes a restrictive temporary compressed archive, checks command success before
+publishing the final archive, and performs retention only after successful
+completion. Failed dumps must not print success or prune good prior backups.
+Validate restoration separately against a disposable destination; a successful
+backup command alone does not establish recoverability.
+
+The CI storefront test step uses `codematics.test_settings` so its cache and
+storage dependencies are isolated instead of assuming unprovisioned Redis/S3.
+Apply migrations before processing durable indexing jobs, and rebuild affected
+API/worker/scheduler consumers together. Generated QA reports remain ignored
+under `qa-reports/`. Measure provider delivery and capacity in the intended
+environment rather than inferring them from offline tests.

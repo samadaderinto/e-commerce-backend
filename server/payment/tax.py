@@ -696,12 +696,15 @@ class LocalTaxProvider:
 
         if has_db_jurisdictions:
             if zip_prefix:
+                postal_prefixes: list[str] = [
+                    zip_prefix[:length] for length in range(1, len(zip_prefix) + 1)
+                ]
                 jurisdiction_record = TaxJurisdiction.objects.filter(
                     country="US",
                     state=state_code,
-                    postal_code=zip_prefix,
+                    postal_code__in=postal_prefixes,
                     is_active=True,
-                ).first()
+                ).order_by('-postal_code', 'pk').first()
             if not jurisdiction_record:
                 jurisdiction_record = TaxJurisdiction.objects.filter(
                     country="US", state=state_code, postal_code="", is_active=True

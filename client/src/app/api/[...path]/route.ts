@@ -11,6 +11,18 @@ function getCandidateApis(route: string): string[] {
   return [proxyTarget(route, process.env.API_URL, process.env.NOTIFICATION_STREAM_URL)];
 }
 
+async function fetchAssetHeaders(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
+  const deadline = new AbortController();
+  const timer: ReturnType<typeof setTimeout> = setTimeout(() => deadline.abort(), 35000);
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.any([signal, deadline.signal]) });
+  } finally {
+    // Headers have arrived: successful body streaming follows client cancellation,
+    // not the deadline that protected opening the upstream connection.
+    clearTimeout(timer);
+  }
+}
+
 async function handler(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
@@ -18,7 +30,8 @@ async function handler(
   const started: number = performance.now();
   const isSecure =
     request.nextUrl.protocol === 'https:' ||
-    request.headers.get('x-forwarded-proto') === 'https';
+    (process.env.TRUSTED_EDGE_PROXY === 'true' &&
+      request.headers.get('x-forwarded-proto') === 'https');
 
   const options = {
     httpOnly: true,
@@ -64,7 +77,13 @@ async function handler(
   );
   const access = request.cookies.get('proace_access')?.value;
   const refresh = request.cookies.get('proace_refresh')?.value;
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = {
+    'X-Forwarded-Proto': isSecure ? 'https' : 'http',
+  };
+  if (process.env.TRUSTED_EDGE_PROXY === 'true') {
+    const clientAddress: string | null = request.headers.get('x-forwarded-for');
+    if (clientAddress) headers['X-Forwarded-For'] = clientAddress;
+  }
 
   if (request.headers.get('content-type')) {
     headers['Content-Type'] = request.headers.get('content-type')!;
@@ -89,6 +108,7 @@ async function handler(
   }
 
   const candidateApis = getCandidateApis(route);
+  const isAssetDownload: boolean = route.includes('downloads') || route.includes('digital-asset');
   let upstream: Response | undefined;
   let activeApi = candidateApis[0];
   let lastError: unknown;
@@ -103,20 +123,23 @@ async function handler(
         route.includes('downloads') ||
         route.includes('digital-asset');
 
-      const timeoutSignal = AbortSignal.any([
+      const timeoutSignal = isAssetDownload ? request.signal : AbortSignal.any([
         request.signal,
         AbortSignal.timeout(isLongRunningStream ? 35000 : 10000),
       ]);
 
       try {
-        upstream = await fetch(url, {
+        const init: RequestInit = {
           method: request.method,
           body: payload,
           headers,
           cache: 'no-store',
           redirect: 'manual',
           signal: timeoutSignal,
-        });
+        };
+        upstream = isAssetDownload
+          ? await fetchAssetHeaders(url, init, request.signal)
+          : await fetch(url, init);
         activeApi = baseApi;
         break;
       } catch (err) {
@@ -139,7 +162,7 @@ async function handler(
         renewed = await refreshOnce(`${authApi}:${refresh}`, async () => {
           const result = await fetch(`${authApi}/auth/refresh/`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...headers, Authorization: '', 'Content-Type': 'application/json' },
             body: JSON.stringify({ refresh }),
             cache: 'no-store',
             signal: AbortSignal.any([request.signal, AbortSignal.timeout(10000)]),
@@ -172,21 +195,24 @@ async function handler(
         headers.Authorization = `Bearer ${newAccess}`;
         const url = `${activeApi}/${route}/${request.nextUrl.search}`;
         const payload = typeof body === 'string' ? body : body ? body.slice(0) : undefined;
-        const retryTimeoutSignal =
+        const retryTimeoutSignal = isAssetDownload ? request.signal :
           route === 'notifications/stream' ||
           route.includes('downloads') ||
           route.includes('digital-asset')
             ? AbortSignal.any([request.signal, AbortSignal.timeout(300000)])
             : AbortSignal.any([request.signal, AbortSignal.timeout(10000)]);
 
-        upstream = await fetch(url, {
+        const init: RequestInit = {
           method: request.method,
           body: payload,
           headers,
           cache: 'no-store',
           redirect: 'manual',
           signal: retryTimeoutSignal,
-        });
+        };
+        upstream = isAssetDownload
+          ? await fetchAssetHeaders(url, init, request.signal)
+          : await fetch(url, init);
       }
     }
 

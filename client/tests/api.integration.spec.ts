@@ -1,13 +1,33 @@
 import { expect, test } from '@playwright/test';
+import { postAuthWithRetry } from './helpers/auth';
+
+// Real gateway authentication limits also apply to consecutive test projects.
+test.setTimeout(150000);
 
 const password = process.env.E2E_DEMO_PASSWORD || 'ProaceDemo2026!';
+
+test('opening authentication pages does not consume credential submission limits', async ({ request }) => {
+  for (let index: number = 0; index < 12; index += 1) {
+    const response = await request.get(index % 2 === 0 ? '/login' : '/register');
+    expect(response.status()).toBe(200);
+  }
+});
 
 test('shop search stays public in a browser with stale session cookies', async ({ page, context, baseURL }) => {
   await context.addCookies([
     { name: 'proace_access', value: 'invalid-access', url: baseURL!, httpOnly: true },
     { name: 'proace_refresh', value: 'invalid-refresh', url: baseURL!, httpOnly: true },
   ]);
-  await page.goto('/shop?search=xqzzzznosuchitem', { waitUntil: 'domcontentloaded' });
+  await Promise.all([
+    page.waitForResponse(response => {
+      const url: URL = new URL(response.url());
+      return url.pathname === '/api/products'
+        && url.searchParams.get('search') === 'xqzzzznosuchitem'
+        && response.request().method() === 'GET'
+        && response.status() === 200;
+    }),
+    page.goto('/shop?search=xqzzzznosuchitem', { waitUntil: 'domcontentloaded' }),
+  ]);
   await expect(page.getByRole('heading', { name: 'No finds just yet' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Something interrupted your visit' })).toHaveCount(0);
   const cookies = await context.cookies();
@@ -76,7 +96,7 @@ test('the Next.js proxy serves the Django catalog and protects private endpoints
 });
 
 test('login keeps tokens in HttpOnly cookies and returns the authenticated user', async ({ request, baseURL }) => {
-  const response = await request.post('/api/auth/login/', {
+  const response = await postAuthWithRetry(request, '/api/auth/login/', {
     headers: { origin: new URL(baseURL!).origin },
     data: { email: 'shopper@proace.local', password },
   });
@@ -103,7 +123,7 @@ test('login keeps tokens in HttpOnly cookies and returns the authenticated user'
 
 test('logout expires root-path auth cookies', async ({ request, baseURL }) => {
   const origin = new URL(baseURL!).origin;
-  const logout = await request.post('/api/auth/logout/', {
+  const logout = await postAuthWithRetry(request, '/api/auth/logout/', {
     headers: {
       origin,
       cookie: 'proace_access=expired-access; proace_refresh=expired-refresh',
@@ -117,7 +137,7 @@ test('logout expires root-path auth cookies', async ({ request, baseURL }) => {
 });
 
 test('notification stream refreshes stale access through the main authentication API', async ({ request, baseURL }) => {
-  const login = await request.post('/api/auth/login', {
+  const login = await postAuthWithRetry(request, '/api/auth/login', {
     headers: { origin: new URL(baseURL!).origin },
     data: { email: 'shopper@proace.local', password },
   });

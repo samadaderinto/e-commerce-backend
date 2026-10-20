@@ -63,15 +63,19 @@ def queue_email_delivery(
     recipient: Optional[Any] = None,
     reply_to: str = "",
     is_html: bool = False,
+    delivery_key: str = "",
 ) -> NotificationDelivery:
     if not recipient_email:
         raise ValueError("An email recipient is required.")
 
-    key = hashlib.sha256(
-        (f"notification:{notification.pk}:email" if notification else json.dumps(
-            [recipient_email, subject, body], ensure_ascii=False,
-        )).encode()
-    ).hexdigest()
+    content: list[str] = [recipient_email, subject, body]
+    if delivery_key:
+        content.append(delivery_key)
+    identity: str = (
+        f"notification:{notification.pk}:email"
+        if notification else json.dumps(content, ensure_ascii=False)
+    )
+    key = hashlib.sha256(identity.encode()).hexdigest()
     delivery, created = NotificationDelivery.objects.get_or_create(
         idempotency_key=key,
         defaults=dict(

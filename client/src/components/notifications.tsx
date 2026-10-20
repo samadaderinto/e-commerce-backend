@@ -147,9 +147,7 @@ export function NotificationsPage() {
     { id: 'payout', label: 'Payouts & Wallet', count: 0 },
   ];
 
-  const isBackoffice = Boolean(user?.is_staff || user?.is_superuser || user?.is_business_admin);
-  const rawStores = meta?.stores || [];
-  const storesList = isBackoffice ? rawStores.filter(s => s.is_official !== false) : rawStores;
+  const storesList = meta?.stores || [];
   const results = notificationsQuery.data?.results || [];
 
   const totalCount = notificationsQuery.data?.count || 0;

@@ -63,7 +63,7 @@ export function HelpPage() {
     ],
     [
       'How does the ProAce referral program work?',
-      `Join from My account → Affiliates & referrals, then share your invite link. Your first ${business.referralRewardLimit} referred customers who complete a successful order earn $${business.referralRewardAmount} each in non-withdrawable ProAce Wallet store credit. Further referrals are recorded without rewards. View referral history and spendable balance from your account.`,
+      `Join from My account → Affiliates & referrals, then share your invite link. Your first ${business.referralRewardLimit} referred customers who complete a successful order earn $${business.referralRewardAmount} each in non-withdrawable ProAce Wallet store credit. ${business.referralRewardPolicy} Further referrals are recorded without rewards. View referral history and spendable balance from your account.`,
     ],
     [
       'How do Curated Partner & ClickBank affiliate listings work?',
@@ -88,7 +88,7 @@ export function HelpPage() {
     ],
     [
       'How do seller payouts and escrow work?',
-      `Net sales from customer orders are held in a ${business.escrowReviewDays}-day buyer review escrow corresponding to the customer refund window. Once cleared, merchants can withdraw available funds across all their stores via Stripe Express or direct payout after a transparent ${business.standardCommissionPercent}% platform fee (${business.officialCommissionPercent}% for Official Partner stores).`,
+      `${business.escrowPolicy} Once cleared, merchants can withdraw available funds across all their stores via Stripe Express or direct payout after a transparent ${business.standardCommissionPercent}% platform fee (${business.officialCommissionPercent}% for Official Partner stores).`,
     ],
     [
       'Where can I manage my orders and downloads?',
@@ -244,8 +244,7 @@ export function PolicyPage({ type }: { type: string }) {
           <p>
             Standard merchants receive 96% of net sales after a transparent {business.standardCommissionPercent}% platform
             fee (Official Partner stores retain 100% of sales with {business.officialCommissionPercent}% commission). Net
-            earnings from customer orders are held in a {business.escrowReviewDays}-day buyer review escrow corresponding to
-            the return window before clearing into available payout balances.
+            earnings remain protected by buyer review escrow. {business.escrowPolicy}
           </p>
           <h2>Payment Methods</h2>
           <p>

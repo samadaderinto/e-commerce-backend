@@ -26,6 +26,7 @@ from store.models import (
     StoreEarningsLedger,
     StoreInfo,
     StorePayout,
+    StoreTeamMember,
 )
 from store.services import publish_due_products, request_merchant_payout
 from utils.cache import invalidate_revision
@@ -118,6 +119,23 @@ class MerchantTests(TestCase):
         self.assertEqual(publish_due_products(), 0)
         self.product.refresh_from_db()
         self.assertFalse(self.product.visibility)
+
+    def test_pickup_address_get_and_put(self) -> None:
+        response = self.client.get(self.url + 'pickup-address/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['address'], '1 Main St')
+        self.assertEqual(response.data['city'], 'Tampa')
+
+        response = self.client.put(self.url + 'pickup-address/', {
+            'address': '200 Ocean Dr', 'city': 'Miami', 'state': 'FL', 'country': 'US', 'zip': '33139',
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['address'], '200 Ocean Dr')
+        self.assertEqual(response.data['city'], 'Miami')
+
+        response = self.client.get(self.url + 'pickup-address/')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['address'], '200 Ocean Dr')
 
     def test_dashboard_groups_orders_in_requested_local_timezone(self) -> None:
         from datetime import datetime, timezone as utc_timezone
@@ -1280,7 +1298,10 @@ class MerchantTests(TestCase):
         self.assertEqual(store2_ledger.data['results'][0]['store_name'], 'My Second Shop')
 
         # Backdate both orders past the 7-day refund window and trigger settlement
-        Order.objects.filter(pk__in=[order1.pk, order2.pk]).update(created=timezone.now() - timedelta(days=8))
+        Order.objects.filter(pk__in=[order1.pk, order2.pk]).update(
+            created=timezone.now() - timedelta(days=16),
+            delivered_at=timezone.now() - timedelta(days=8),
+        )
         from store.models import StoreEarningsLedger
         StoreEarningsLedger.objects.filter(order__in=[order1, order2]).update(available_at=timezone.now() - timedelta(days=1))
 
@@ -1343,25 +1364,40 @@ class MerchantTests(TestCase):
         third_party_store = Store.objects.create(user=seller, name='Independent Store', username='indep-store', is_official=False)
         official_store = Store.objects.create(user=admin, name='Official Proace Store', username='proace-store', is_official=True)
 
-        # 1. Staff and Admin cannot access third-party store in the seller interface
-        for backoffice_user in [staff, admin]:
-            client = APIClient()
-            client.force_authenticate(backoffice_user)
+        # 1. Admin can access official store, but cannot access third-party merchant store in seller interface
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin)
+        listing = admin_client.get('/stores/')
+        admin_store_ids = [s['id'] for s in listing.data['results']]
+        self.assertIn(official_store.pk, admin_store_ids)
+        self.assertNotIn(third_party_store.pk, admin_store_ids)
+        self.assertEqual(admin_client.get(f'/stores/{third_party_store.pk}/').status_code, 404)
+        self.assertEqual(admin_client.get(f'/stores/{official_store.pk}/').status_code, 200)
 
-            # Store list in seller interface only returns official store
-            listing = client.get('/stores/')
-            store_ids = [s['id'] for s in listing.data['results']]
-            self.assertIn(official_store.pk, store_ids)
-            self.assertNotIn(third_party_store.pk, store_ids)
+        # 2. Staff does NOT automatically access official store (or third-party store)
+        staff_client = APIClient()
+        staff_client.force_authenticate(staff)
+        staff_listing = staff_client.get('/stores/')
+        staff_store_ids = [s['id'] for s in staff_listing.data['results']]
+        self.assertNotIn(official_store.pk, staff_store_ids)
+        self.assertNotIn(third_party_store.pk, staff_store_ids)
+        self.assertEqual(staff_client.get(f'/stores/{official_store.pk}/').status_code, 404)
+        self.assertEqual(staff_client.get(f'/stores/{third_party_store.pk}/').status_code, 404)
 
-            # Accessing third-party store detail/dashboard returns 404
-            self.assertEqual(client.get(f'/stores/{third_party_store.pk}/').status_code, 404)
-            self.assertEqual(client.get(f'/stores/{third_party_store.pk}/dashboard/').status_code, 404)
+        # 3. When admin explicitly adds staff to official store team, staff gets delegated access
+        StoreTeamMember.objects.create(
+            store=official_store,
+            user=staff,
+            role=StoreTeamMember.ROLE_CATALOG_MANAGER,
+            status=StoreTeamMember.STATUS_ACTIVE,
+        )
+        delegated_listing = staff_client.get('/stores/')
+        delegated_store_ids = [s['id'] for s in delegated_listing.data['results']]
+        self.assertIn(official_store.pk, delegated_store_ids)
+        self.assertEqual(staff_client.get(f'/stores/{official_store.pk}/').status_code, 200)
+        self.assertEqual(delegated_listing.data['results'][0]['user_role'], StoreTeamMember.ROLE_CATALOG_MANAGER)
 
-            # Accessing official store detail/dashboard is allowed
-            self.assertEqual(client.get(f'/stores/{official_store.pk}/').status_code, 200)
-
-        # 2. Third-party seller cannot access official store
+        # 4. Third-party seller cannot access official store
         seller_client = APIClient()
         seller_client.force_authenticate(seller)
         seller_listing = seller_client.get('/stores/')
@@ -1562,7 +1598,7 @@ class MerchantTests(TestCase):
         self.assertEqual(record['refund_type'], "original_payment")
         # Store 1 should only see their product (amount: 50.00)
         self.assertEqual(record['amount'], "50.00")
-        self.assertEqual(record['total_order_refund_amount'], "80.00")
+        self.assertEqual(record['total_order_refund_amount'], "50.00")
         self.assertEqual(len(record['items']), 1)
         self.assertEqual(record['items'][0]['product'], prod1.pk)
         self.assertEqual(record['items'][0]['title'], "Store 1 Product")

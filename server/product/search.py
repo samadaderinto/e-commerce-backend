@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from threading import Lock
 from typing import TYPE_CHECKING
 from typing import Any, Optional
@@ -9,7 +10,7 @@ from typing import Any, Optional
 from django.conf import settings
 from django.db import transaction
 
-from product.models import Product
+from product.models import Product, SearchIndexJob
 
 if TYPE_CHECKING:
     from elasticsearch import Elasticsearch
@@ -144,15 +145,12 @@ def ensure_products_index(es: Any = None) -> bool:
         _mapped_text_indices.add(mapping_key)
         return True
     except (BadRequestError, ApiError) as exc:
-        if (
-            "resource_already_exists_exception" in str(exc)
-            or getattr(exc, "status_code", None) == 400
-        ):
+        if "resource_already_exists_exception" in str(exc):
             return True
         raise
 
 
-def index_product(product_id: int) -> None:
+def index_product(product_id: int, *, strict: bool = False) -> None:
     if not enabled():
         return
     try:
@@ -169,14 +167,16 @@ def index_product(product_id: int) -> None:
             document=product_document(product),
         )
     except Product.DoesNotExist:
-        delete_product(product_id)
+        delete_product(product_id, strict=strict)
     except Exception:
         logger.exception(
             "Failed to index product in Elasticsearch", extra={"product_id": product_id}
         )
+        if strict:
+            raise
 
 
-def index_store_products(store_id: int) -> None:
+def index_store_products(store_id: int, *, strict: bool = False) -> None:
     if not enabled():
         return
     try:
@@ -204,9 +204,11 @@ def index_store_products(store_id: int) -> None:
             "Failed to reindex store products in Elasticsearch",
             extra={"store_id": store_id},
         )
+        if strict:
+            raise
 
 
-def delete_product(product_id: int) -> None:
+def delete_product(product_id: int, *, strict: bool = False) -> None:
     if not enabled():
         return
     try:
@@ -220,10 +222,17 @@ def delete_product(product_id: int) -> None:
             "Failed to delete product from Elasticsearch",
             extra={"product_id": product_id},
         )
+        if strict:
+            raise
 
 
 def schedule_index_product(product_id: int) -> None:
     if enabled():
+        SearchIndexJob.objects.update_or_create(
+            action=SearchIndexJob.INDEX_PRODUCT, target_id=product_id,
+            defaults={"revision": uuid.uuid4()},
+        )
+
         def enqueue() -> None:
             try:
                 from product.tasks import index_product_task
@@ -240,6 +249,11 @@ def schedule_index_product(product_id: int) -> None:
 
 def schedule_index_store_products(store_id: int) -> None:
     if enabled():
+        SearchIndexJob.objects.update_or_create(
+            action=SearchIndexJob.INDEX_STORE, target_id=store_id,
+            defaults={"revision": uuid.uuid4()},
+        )
+
         def enqueue() -> None:
             try:
                 from product.tasks import index_store_products_task
@@ -256,6 +270,11 @@ def schedule_index_store_products(store_id: int) -> None:
 
 def schedule_delete_product(product_id: int) -> None:
     if enabled():
+        SearchIndexJob.objects.update_or_create(
+            action=SearchIndexJob.DELETE_PRODUCT, target_id=product_id,
+            defaults={"revision": uuid.uuid4()},
+        )
+
         def enqueue() -> None:
             try:
                 from product.tasks import delete_product_task

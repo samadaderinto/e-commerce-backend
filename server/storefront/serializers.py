@@ -53,7 +53,7 @@ class PublicStoreSerializer(serializers.ModelSerializer):
         return PublicStoreAddressSerializer(addr).data if addr else None
 
     def get_product_count(self, obj):
-        return Product.objects.filter(store=obj, visibility=True).count()
+        return Product.objects.filter(store=obj, visibility=True, is_blocked=False).count()
 
     def get_seller_tier(self, obj):
         return calculate_store_tier(obj)
@@ -327,11 +327,18 @@ class ReviewSerializer(serializers.ModelSerializer):
             'comment': {'max_length': 1000},
         }
 
-    def validate_images(self, value):
+    def validate_images(self, value: list[str]) -> list[str]:
         if len(value) > 3:
             raise serializers.ValidationError('You can attach up to 3 photos with your review.')
         for image_url in value:
-            parsed_url = urlsplit(image_url)
+            try:
+                parsed_url = urlsplit(image_url)
+                # Accessing port validates nonnumeric and out-of-range ports.
+                parsed_url.port
+            except ValueError:
+                raise serializers.ValidationError(
+                    'Review photos must use a valid secure HTTPS image URL.'
+                ) from None
             if (
                 parsed_url.scheme.lower() != 'https'
                 or not parsed_url.hostname
@@ -379,6 +386,15 @@ class ReviewSerializer(serializers.ModelSerializer):
         return False
 
 
+class CartProductSerializer(CatalogSerializer):
+    """Render an already evaluated cart price, including unavailable rows."""
+
+    @extend_schema_field(OpenApiTypes.DECIMAL)
+    def get_sale_price(self, obj: Product) -> str:
+        price: Decimal = self.context['cart_unit_price']
+        return str(price)
+
+
 class CatalogPageSerializer(serializers.Serializer):
     count = serializers.IntegerField()
     page = serializers.IntegerField()
@@ -397,7 +413,7 @@ class CatalogQuerySerializer(serializers.Serializer):
         required=False,
         choices=['-created', 'price', '-price', '-average_rating', '-sales', '-discount'],
     )
-    page = serializers.IntegerField(required=False, min_value=1, default=1)
+    page = serializers.IntegerField(required=False, min_value=1, max_value=2_147_483_647, default=1)
 
 
 class AuthRequestSerializer(serializers.Serializer):
@@ -644,6 +660,29 @@ class PaymentSessionRequestSerializer(serializers.Serializer):
     session_id = serializers.CharField(max_length=255, allow_blank=False)
 
 
+class VisualSearchRequestSerializer(serializers.Serializer):
+    image = serializers.ImageField(required=False)
+    preset_id = serializers.CharField(max_length=80, required=False)
+    item_id = serializers.CharField(max_length=80, required=False)
+    query = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    category = serializers.ChoiceField(choices=['', *dict(Product.CATEGORIES_CHOICE)], required=False)
+    store_id = serializers.IntegerField(min_value=1, required=False)
+    focus_box = serializers.JSONField(required=False)
+
+    def validate_focus_box(self, value: Any) -> list[float]:
+        import math
+        try:
+            if not isinstance(value, list) or len(value) != 4:
+                raise ValueError()
+            box = [float(coordinate) for coordinate in value]
+            if (not all(math.isfinite(v) and 0 <= v <= 1 for v in box)
+                    or box[0] >= box[2] or box[1] >= box[3]):
+                raise ValueError()
+            return box
+        except (TypeError, ValueError):
+            raise serializers.ValidationError('Choose a valid normalized image crop.') from None
+
+
 class VisualSearchPaletteColorSerializer(serializers.Serializer):
     hex = serializers.CharField()
     name = serializers.CharField()
@@ -655,7 +694,7 @@ class VisualSearchDetectedItemSerializer(serializers.Serializer):
     id = serializers.CharField()
     label = serializers.CharField()
     category = serializers.CharField()
-    confidence = serializers.FloatField()
+    confidence = serializers.FloatField(allow_null=True)
     box = serializers.ListField(child=serializers.FloatField())
     dominant_colors = serializers.ListField(child=serializers.CharField())
     keywords = serializers.ListField(child=serializers.CharField(), required=False)
@@ -663,11 +702,14 @@ class VisualSearchDetectedItemSerializer(serializers.Serializer):
 
 class VisualSearchResultItemSerializer(serializers.Serializer):
     product = CatalogSerializer()
-    similarity_score = serializers.IntegerField()
+    similarity_score = serializers.IntegerField(allow_null=True)
     match_reasons = serializers.ListField(child=serializers.CharField())
 
 
 class VisualSearchResponseSerializer(serializers.Serializer):
+    selection_required = serializers.BooleanField(required=False, default=False)
+    method = serializers.ChoiceField(choices=['local_clip', 'preset_metadata'])
+    message = serializers.CharField()
     palette = VisualSearchPaletteColorSerializer(many=True)
     detected_items = VisualSearchDetectedItemSerializer(many=True)
     selected_item_id = serializers.CharField(allow_null=True)

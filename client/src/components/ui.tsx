@@ -18,6 +18,7 @@ import {
   ShoppingBag,
   Star,
   Pin,
+  Sparkles,
 } from "lucide-react";
 import { Product, SellerTier } from "@/lib/types";
 import { money } from "@/lib/api";
@@ -556,9 +557,11 @@ export function DropCountdown({
 export function ProductCard({
   product,
   isPinned = false,
+  similarityScore,
 }: {
   product: Product;
   isPinned?: boolean;
+  similarityScore?: number;
 }) {
   const { saved, toggleSave, notify, user } = useShop();
   const params = useSearchParams();
@@ -583,8 +586,13 @@ export function ProductCard({
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
           />
         </Link>
-        {(isPinned || isAffiliate || isSoldOut || (!isAffiliate && (isUpcomingDrop || product.flash_sale_end || product.discount > 0))) && (
+        {(typeof similarityScore === 'number' || isPinned || isAffiliate || isSoldOut || (!isAffiliate && (isUpcomingDrop || product.flash_sale_end || product.discount > 0))) && (
           <div className="product-badges">
+            {typeof similarityScore === 'number' && (
+              <span className="discount visual-match-score-badge">
+                <Sparkles size={11} /> Related result
+              </span>
+            )}
             {isPinned && (
               <span className="discount pinned-badge">
                 <Pin size={11} /> Pinned
@@ -663,9 +671,11 @@ export function ProductCard({
 export function ProductGrid({
   products,
   pinnedIds,
+  similarityMap,
 }: {
   products: Product[];
   pinnedIds?: number[];
+  similarityMap?: Record<number, number>;
 }) {
   return (
     <div className="product-grid">
@@ -674,6 +684,7 @@ export function ProductGrid({
           key={product.id}
           product={product}
           isPinned={Boolean(pinnedIds?.includes(product.id))}
+          similarityScore={similarityMap ? similarityMap[product.id] : undefined}
         />
       ))}
     </div>
@@ -684,10 +695,12 @@ export function Loading({
   cards = false,
   compact = false,
   fullPage = false,
+  overlay = false,
 }: {
   cards?: boolean;
   compact?: boolean;
   fullPage?: boolean;
+  overlay?: boolean;
 }): React.JSX.Element {
   return cards ? (
     <div className="product-grid" aria-label="Loading products">
@@ -700,7 +713,10 @@ export function Loading({
       ))}
     </div>
   ) : (
-    <div className={`loading${compact ? ' compact' : ''}${fullPage ? ' full-page' : ''}`} role="status">
+    <div
+      className={`loading${compact ? ' compact' : ''}${fullPage ? ' full-page' : ''}${overlay ? ' overlay' : ''}`}
+      role="status"
+    >
       <span className="spinner" />
       {compact ? <span className="sr-only">Updating results</span> : 'Loading…'}
     </div>
@@ -1084,8 +1100,8 @@ export function AddToBagButton({
   );
 }
 
-export function useDialogFocus(open: boolean, close: () => void) {
-  const ref = useRef<HTMLElement>(null);
+export function useDialogFocus<T extends HTMLElement = HTMLElement>(open: boolean, close: () => void) {
+  const ref = useRef<T>(null);
   const closeRef = useRef(close);
   closeRef.current = close;
 

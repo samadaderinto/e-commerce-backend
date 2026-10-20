@@ -21,13 +21,13 @@ www.{$PUBLIC_DOMAIN} {
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
 
-	@backend path /admin* /static* /media* /health/live/ /health/ready/
+	@backend path /static* /media* /health/live/ /health/ready/
 	handle @backend {
-		reverse_proxy api:8000
+		reverse_proxy nginx:8080
 	}
 
 	handle {
-		reverse_proxy client:3000
+		reverse_proxy nginx:8081
 	}
 
 	log {

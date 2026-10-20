@@ -141,13 +141,13 @@ Monitoring and operations files:
 
 ## Application Compose config
 
-`server/compose.yaml` starts four default services:
+`server/compose.yaml` defines the application services and their dependencies:
 
 - `nginx`: official `nginx:stable-alpine`; mounts pre-hardened configurations from `server/nginx/`; listens on `${NGINX_BIND_ADDRESS:-127.0.0.1}:${NGINX_PORT:-8080}:8080`; forwards upstream traffic to `http://api:8000`; health checks via `/health/live/`.
 - `api`: built from `server/Dockerfile`; exposes `${API_PORT:-8000}` on
   `${API_BIND_ADDRESS:-127.0.0.1}`; waits for healthy Postgres, Redis and
-  Elasticsearch; writes logs to stdout; mounts `media-data` and
-  `prometheus-multiproc`.
+  Elasticsearch; writes logs to stdout and uses object storage for application media.
+  Multiprocess metrics use a fresh private directory for each master lifecycle.
 - `redis`: official `redis:7.4-alpine`; enables append-only persistence and an
   RDB save rule; exposes `${REDIS_PORT:-6379}` locally; persists `redis-data`.
 - `postgres`: official `postgres:17-alpine`; exposes
@@ -175,7 +175,7 @@ Important API environment variables:
 | `OBSERVABILITY_TOKEN` | Bearer token for `/metrics/` and detailed health | generated/local placeholder |
 | `OTEL_TRACING_ENABLED` | Enables OTLP tracing | `false` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Trace exporter endpoint | `http://tempo:4318` |
-| `PROMETHEUS_MULTIPROC_DIR` | Gunicorn Prometheus multiprocess directory | `/tmp/prometheus` |
+| `PROMETHEUS_MULTIPROC_DIR` | Enables Gunicorn multiprocess metrics; entrypoint exports a fresh private lifecycle directory | API/stream: fresh `/tmp/proace-metrics.*`; worker/beat: disabled |
 | `RUN_MIGRATIONS` | Run migrations and configured default-account bootstrap at container startup | `true` for API; `false` for Celery worker and beat |
 | `RUN_COLLECTSTATIC` | Run collectstatic at container startup | `false` |
 | `ELASTICSEARCH_ENABLED` | Enables product search indexing/search | `true` in Compose |
@@ -341,8 +341,62 @@ Agent workflow: after verified implementation changes, agents automatically rebu
 Local backend Compose startup now starts MinIO and waits for `minio-init` to finish provisioning the media bucket and application credentials before starting API/worker/scheduler consumers. This also applies when starting a backend service individually without `--no-deps`; targeted `--no-deps` refreshes assume dependencies are already running. The initializer fails on required bucket/policy setup errors. Existing storage volumes are preserved.
 
 
-Notification remediation (11 October 2026): one canonical event identity per recipient, recipient-scoped multi-store associations, canonical categories and archived/list filters, selected-store refund reviewer routing, treasury/affiliate/review coverage, transactional inbox/outbox writes, credential outbox delivery, stable email/push queue keys and provider idempotency, shared SSE/FCM toast deduplication, and numeric order-detail links. Apply notification migrations before using the updated API and restart API, notification-worker and celery-beat together. Migration backfills do not send messages; duplicate legacy order-created notices are archived rather than deleted. Local test mode intentionally retains console email and disabled FCM; external provider delivery has not been verified. See the notification audit for channel policy and regression coverage.
+Notification events use one canonical identity per recipient, transactional inbox/outbox writes, recipient-scoped store associations, and stable delivery keys. API, worker and scheduler share the same schema and notification policy. Console email and disabled FCM are development settings, not evidence of external delivery.
 
 Email backend selection: use `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` for normal local development; use `EMAIL_BACKEND=notification.email_backend.ResendEmailBackend` for production or temporary local delivery testing. An explicit console backend overrides a configured Resend key. See [local and production email setup](getting-started.md#email-backend-local-development-and-resend-testing) for verified sender requirements, recreating services after environment changes, and returning to console mode.
 
 For effective API/worker backend checks and retry interpretation, see [notification worker settings](getting-started.md#notification-worker-settings-and-troubleshooting). Follow the [production transition](deployment.md#transitioning-notifications-from-local-to-production) to refresh all delivery processes, start the scheduler and avoid carrying a local console backend into production.
+
+
+## Storefront gateway and trusted ingress
+
+The server Compose Nginx service publishes `${CLIENT_PORT:-3000}` to its 8081
+storefront listener. The client container exposes 3000 only on the shared private
+network; direct host publishing would bypass gateway controls. Nginx routes the
+storefront, including same-origin `/api/*`, to Next.js. Next.js then calls the
+private Django/notification-stream services. API request limits exclude static
+frontend assets. Nginx's 8080 listener remains the direct backend gateway.
+The tighter authentication budget applies to POST/PUT/PATCH/DELETE authentication
+requests. GET navigation to sign-in/register pages uses normal browsing limits,
+so opening those screens does not consume credential-submission attempts.
+Recreate both Compose services after upgrading this topology (the old client
+must release its published port before recreating Nginx).
+
+Backoffice paths `/admin`, `/api/admin` and `/api/v1/admin` share operator IP
+restrictions. Set `NGINX_ALLOWED_IPS_FILE` in `server/.env` to an operator-managed
+allowlist file (default `./nginx/allowed-ips.conf`, deny-by-default). Local Docker
+Desktop may need the actual host gateway address in a git-ignored
+`allowed-ips.local.conf`; discover the gateway from the running container network,
+not an assumed public IP. Never copy a development allowlist to production.
+
+At a TLS terminator, configure its actual peer IP/CIDR in BOTH
+`trusted-proxies.conf` (`set_real_ip_from`, plus `real_ip_header X-Forwarded-For`
+and `real_ip_recursive on`) and `trusted-protocol-proxies.conf` (`IP/CIDR 1;`).
+Only those TLS peers can supply HTTPS metadata. Nginx overwrites client forwarded
+headers before passing them to private Next.js; never expose the trusted Next.js
+listener directly. Keep API/stream ports internal or loopback-bound. Production
+Caddy now routes through Nginx: storefront to 8081, static/media/health to 8080.
+Django's bare liveness/readiness endpoints are exempt from HTTPS redirects so
+internal health probes remain usable; account and commerce paths still enforce TLS.
+
+Kustomize supplies `upstream.kubernetes.conf` as `upstream.conf`; provision an
+internal Django Service named `commerce-api` on port 8000, or replace that DNS
+name for your environment. The template no longer targets the Nginx pod's own
+loopback. Readiness performs `/health/ready/` through the backend with a localhost
+Host header; the TCP liveness check only verifies that Nginx is listening. The
+Kubernetes example exposes the backend gateway; its Docker-only storefront
+listener is not the production Kubernetes frontend ingress configuration.
+## Metrics and storage lifecycle
+
+Compose enables required MinIO/S3 application storage by default. Offline tests
+still replace the storage backend explicitly; disabling production storage is
+not a supported local-file persistence fallback.
+
+When multiprocess metrics are configured, the application entrypoint allocates
+a fresh private `/tmp/proace-metrics.*` directory before Django/Gunicorn startup.
+API and notification-stream inherit their own lifecycle directory; background
+worker and scheduler unset empty HTTP multiprocess settings before Python starts.
+The deprecated lowercase directory variable is removed as well. The old
+named volume is not deleted, but is no longer mounted into application consumers.
+This avoids stale worker/PID metrics crossing process-master lifetimes without
+deleting existing operator data. Scraping remains through the existing endpoint.

@@ -439,6 +439,27 @@ export function AuthPage({ mode }: { mode: string }) {
               </div>
             )}
 
+            {isRegister && params.get('invite') && (
+              <div
+                style={{
+                  padding: '10px 14px',
+                  borderRadius: 8,
+                  background: 'rgba(68, 207, 156, 0.12)',
+                  border: '1px solid rgba(68, 207, 156, 0.3)',
+                  color: 'var(--ink)',
+                  fontSize: '0.85rem',
+                  lineHeight: 1.4,
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                }}
+              >
+                <span>🎉</span>
+                <span>You&apos;ve been invited to join a store team! Create your account to automatically accept the invitation.</span>
+              </div>
+            )}
+
             <form onSubmit={submit} className="form-stack">
               <fieldset className="auth-fields" disabled={busy || authBlocked}>
                 {isRegister && (
@@ -459,6 +480,7 @@ export function AuthPage({ mode }: { mode: string }) {
                       type="email"
                       required
                       autoComplete="email"
+                      defaultValue={params.get('email') || ''}
                       placeholder="you@example.com"
                     />
                   </Field>
@@ -1175,7 +1197,14 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
   });
   const addresses = useQuery({ queryKey: ['addresses', user?.id], queryFn: () => api<Address[]>('addresses'), enabled: !!user && !isBackoffice });
   const wallet = useQuery({ queryKey: ['wallet', user?.id, walletFilters.query], queryFn: () => api<UserWallet>(`wallet?${walletFilters.query}`), enabled: !!user && !isBackoffice });
-  function fundWallet() {
+  let walletBalanceLabel: string = 'Loading…';
+  if (wallet.error) {
+    walletBalanceLabel = 'Unavailable';
+  } else if (wallet.data) {
+    walletBalanceLabel = money(wallet.data.balance);
+  }
+  function fundWallet(): void {
+    if (wallet.isLoading || wallet.isError) return;
     setShowTopupModal(true);
   }
   useEffect(() => {
@@ -1408,7 +1437,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                   </Link>
                   <Link href="/account/wallet">
                     <WalletCards />
-                    <strong>{money(wallet.data?.balance || '0.00')}</strong>
+                    <strong>{walletBalanceLabel}</strong>
                     <span>Wallet balance</span>
                     <ArrowRight size={17} />
                   </Link>
@@ -1483,13 +1512,19 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                       <span style={{ fontWeight: 600 }}>Available Store Balance</span>
                       <WalletCards size={24} color="var(--green)" />
                     </div>
-                    <strong className="wallet-balance-amount">{money(wallet.data?.balance || '0.00')}</strong>
+                    <strong className="wallet-balance-amount" aria-live="polite">{walletBalanceLabel}</strong>
                     <small>Automatically available at checkout to pay for any product.</small>
                   </div>
                 </div>
                 <div className="section-heading" style={{ marginTop: '2rem' }}>
                   <h2>Recent wallet activity</h2>
-                  <button className="button" onClick={fundWallet}>Add funds</button>
+                  <button
+                    className="button"
+                    disabled={wallet.isLoading || wallet.isError}
+                    onClick={fundWallet}
+                  >
+                    Add funds
+                  </button>
                 </div>
                 <CollectionFilters filters={walletFilters} label="wallet transactions" fields={[
                   { key: 'transaction_type', label: 'Type', options: [{ value: 'credit', label: 'Credit' }, { value: 'debit', label: 'Debit' }] },
@@ -1502,7 +1537,7 @@ export function AccountPage({ section = 'overview' }: { section?: string }) {
                 {wallet.isLoading ? (
                   <Loading />
                 ) : wallet.error ? (
-                  <ErrorState error={wallet.error} />
+                  <ErrorState error={wallet.error} retry={() => wallet.refetch()} />
                 ) : !wallet.data?.transactions?.length ? (
                   <Empty
                     title={walletFilters.active ? "No transactions match your filters" : "No transactions yet"}
@@ -1795,14 +1830,21 @@ export function OrderPage({ id }: { id: string }) {
     && ['pending', 'confirmed'].includes(data?.status || '');
   const isAllDigital = data?.items?.every(item => item.is_digital) ?? false;
   const hasPhysical = data?.items?.some(item => !item.is_digital) ?? false;
-  const createdTime = data ? new Date(data.created).getTime() : 0;
-  const daysElapsed = (Date.now() - createdTime) / (1000 * 60 * 60 * 24);
-  const isWithin7Days = daysElapsed <= 7;
+  const createdTime: number = data ? new Date(data.created).getTime() : 0;
+  function isWithinReturnWindow(item: Order['items'][number]): boolean {
+    if (item.is_digital) return false;
+    const deliveredAt: string | null | undefined = data?.fulfillments?.find(
+      fulfillment => fulfillment.store === item.store
+    )?.delivered_at || data?.delivered_at;
+    return !deliveredAt || Date.now() <= new Date(deliveredAt).getTime() + 7 * 24 * 60 * 60 * 1000;
+  }
+  const isWithin7Days: boolean = (data?.items || []).some(isWithinReturnWindow);
   const activeRefund = data?.active_refund;
   const isRefundPending = Boolean(activeRefund?.is_pending);
+  const isRefundEditable: boolean = isRefundPending && activeRefund?.is_editable !== false;
   const claimedProductIds = data?.claimed_product_ids || [];
   const unclaimedPhysicalItems = (data?.items || []).filter(
-    (item) => !item.is_digital && !claimedProductIds.includes(item.product)
+    (item) => isWithinReturnWindow(item) && !claimedProductIds.includes(item.product)
   );
   const canRequestRefund: boolean = !isRefundPending
     && hasPhysical
@@ -1821,7 +1863,7 @@ export function OrderPage({ id }: { id: string }) {
   }
 
   function openEditRefund() {
-    if (!activeRefund) return;
+    if (!activeRefund || !isRefundEditable) return;
     setEditingRefund(true);
     const knownReasons: Record<string, string> = {
       'Item damaged': 'item_damaged',
@@ -2219,7 +2261,9 @@ export function OrderPage({ id }: { id: string }) {
                       </p>
                       {activeRefund.is_pending && (
                         <p style={{ margin: '6px 0 10px', fontSize: '11px', color: 'var(--muted)' }}>
-                          Physical returns are reviewed and processed within 1–2 business days. If you made a mistake or want to adjust items, you can edit your request below.
+                          {isRefundEditable
+                            ? 'Physical returns are reviewed and processed within 1–2 business days. If you made a mistake or want to adjust items, you can edit your request below.'
+                            : 'Your refund is processing with the payment provider and can no longer be edited.'}
                         </p>
                       )}
                       {(activeRefund.failure_reason || activeRefund.processing_reason) && activeRefund.status !== 'approved' && (
@@ -2227,7 +2271,7 @@ export function OrderPage({ id }: { id: string }) {
                           <strong>Note:</strong> {activeRefund.failure_reason || activeRefund.processing_reason}
                         </p>
                       )}
-                      {activeRefund.is_pending && !requestingRefund && isWithin7Days && !['cancelled', 'refunded'].includes(data.status) && (
+                      {isRefundEditable && !requestingRefund && isWithin7Days && !['cancelled', 'refunded'].includes(data.status) && (
                         <button
                           type="button"
                           className="button secondary"
@@ -2263,7 +2307,7 @@ export function OrderPage({ id }: { id: string }) {
                         {data.items.map((item) => {
                           const isClaimedByOther = claimedProductIds.includes(item.product) && !activeRefund?.product_ids?.includes(item.product);
                           const isClaimed = editingRefund ? isClaimedByOther : claimedProductIds.includes(item.product);
-                          const isDisabled = Boolean(item.is_digital) || isClaimed;
+                          const isDisabled = !isWithinReturnWindow(item) || isClaimed;
 
                           return (
                             <label className="order-refund-item" key={item.product}>

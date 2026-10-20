@@ -180,6 +180,7 @@ class StorefrontTests(TestCase):
     @patch('storefront.views.stripe.checkout.Session.retrieve')
     @patch('storefront.views.stripe.checkout.Session.create')
     def test_split_checkout_reserves_wallet_and_refunds_changed_cart(self, create, retrieve, refund) -> None:
+        refund.return_value = {'id': 're_split_fixture', 'status': 'succeeded'}
         from core.services import credit_user_wallet, debit_user_wallet
         from rest_framework.exceptions import ValidationError
         from payment.models import CheckoutAttempt
@@ -208,6 +209,7 @@ class StorefrontTests(TestCase):
     @patch('storefront.views.stripe.checkout.Session.retrieve')
     @patch('storefront.views.stripe.checkout.Session.create')
     def test_coupon_depletion_after_stripe_payment_is_compensated(self, create, retrieve, refund) -> None:
+        refund.return_value = {'id': 're_coupon_fixture', 'status': 'succeeded'}
         from payment.models import CheckoutAttempt
         coupon = Coupon.objects.create(code='LASTONE', discount=10, num_available=1, valid_to=timezone.now() + timedelta(days=1))
         self.add(1)
@@ -264,6 +266,7 @@ class StorefrontTests(TestCase):
         staff = User.objects.create_superuser(email='draft.staff@test.com', password='Strong-test-password-123')
         self.client.force_authenticate(staff)
         self.assertEqual(self.client.get(f'/api/v1/products/{self.product.pk}/').status_code, 404)
+        self.assertEqual(self.client.get(f'/api/v1/products/{self.product.pk}/?preview=1').status_code, 200)
         self.client.force_authenticate(None)
         self.product.visibility = True
         self.product.save()
@@ -1092,7 +1095,10 @@ class StorefrontTests(TestCase):
         self.assertIn('exceeds available cleared balance', payout_resp.data['error']['message'])
 
         # Backdate the order past the 7-day refund window
-        Order.objects.filter(user=self.buyer).update(created=timezone.now() - timedelta(days=8))
+        Order.objects.filter(user=self.buyer).update(
+            created=timezone.now() - timedelta(days=16),
+            delivered_at=timezone.now() - timedelta(days=8),
+        )
         from store.models import StoreEarningsLedger
         StoreEarningsLedger.objects.filter(order__user=self.buyer).update(available_at=timezone.now() - timedelta(days=1))
 
@@ -1576,9 +1582,11 @@ class UnverifiedStorePreviewTests(TestCase):
         self.unverified_product.visibility = False
         self.unverified_product.save()
         url = f'/api/v1/products/{self.unverified_product.pk}/'
-        for client in (self.anon_client, self.stranger_client, self.owner_client, self.staff_client):
+        for client in (self.anon_client, self.stranger_client, self.owner_client):
             for query in ('', '?preview=1'):
                 self.assertEqual(client.get(url + query).status_code, 404)
+        self.assertEqual(self.staff_client.get(url).status_code, 404)
+        self.assertEqual(self.staff_client.get(url + '?preview=1').status_code, 200)
 
     def test_unverified_store_product_detail_is_private(self):
         url = f'/api/v1/products/{self.unverified_product.pk}/'

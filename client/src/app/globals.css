@@ -1629,12 +1629,12 @@ nav[aria-label="Back-office navigation"] { display: flex; flex-wrap: wrap; align
 .account-dropdown-panel { max-width: calc(100vw - 24px); max-height: calc(100dvh - 100px); }
 .modal, .modal-dialog, [role='dialog'] { max-width: calc(100vw - 24px); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
 
-.dialog-backdrop,.admin-dialog-backdrop{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(10,20,13,.62);backdrop-filter:blur(4px)}
+.dialog-backdrop, .admin-dialog-backdrop, .modal-backdrop, .modal-overlay { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(10, 20, 13, 0.65); backdrop-filter: blur(5px); }
 .dialog-card,.admin-dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:14px;box-shadow:0 24px 80px rgba(0,0,0,.3);padding:24px;margin:auto}
 .dialog-card .section-heading,.admin-dialog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;margin-bottom:18px}
 .admin-dialog-head h2,.dialog-card h2{margin:.25rem 0 0}.admin-dialog .form-actions,.dialog-card .form-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
-body:has(.dialog-backdrop),body:has(.admin-dialog-backdrop){overflow:hidden}
-@media(max-width:600px){.dialog-backdrop,.admin-dialog-backdrop{align-items:flex-end;padding:0}.dialog-card,.admin-dialog{width:100%;max-width:none;max-height:90dvh;border-radius:18px 18px 0 0;padding:20px}}
+body:has(.dialog-backdrop), body:has(.admin-dialog-backdrop), body:has(.modal-backdrop), body:has(.modal-overlay) { overflow: hidden; }
+@media(max-width:600px){.dialog-backdrop, .admin-dialog-backdrop{align-items:flex-end;padding:0}.dialog-card,.admin-dialog{width:100%;max-width:none;max-height:90dvh;border-radius:18px 18px 0 0;padding:20px}}
 .pagination { display: flex; align-items: center; justify-content: center; gap: 6px; }
 .pagination-pages, .pagination-pages > span { display: inline-flex; align-items: center; gap: 6px; }
 .pagination-ellipsis { padding: 0 4px; }
@@ -2022,7 +2022,7 @@ select option:disabled {
   }
 }
 
-/* Direct File Upload & MinIO Dropzones */
+/* Direct File Upload Dropzones */
 .upload-dropzone {
   border: 1.5px dashed var(--line);
   background: var(--soft);

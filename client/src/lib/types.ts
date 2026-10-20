@@ -228,6 +228,7 @@ export type OrderActiveRefund = {
   id: number;
   status: 'pending' | 'approved' | 'declined' | 'failed';
   is_pending: boolean;
+  is_editable?: boolean;
   reason: string;
   refund_type: 'store_credit' | 'original_payment';
   refund_amount: string;
@@ -261,6 +262,7 @@ export type Order = LifecycleTimestamps & {
   claimed_product_ids?: number[];
   items: {
     product: number;
+    store?: number;
     title: string;
     image: string;
     quantity: number;
@@ -296,13 +298,15 @@ export type StoreTeamRole = 'owner' | 'store_admin' | 'catalog_manager' | 'fulfi
 
 export type StoreTeamMember = {
   id: number;
-  user_id: number;
+  user_id?: number | null;
   email: string;
   first_name?: string;
   last_name?: string;
   avatar_url?: string;
   role: 'store_admin' | 'catalog_manager' | 'fulfillment_specialist';
   role_display: string;
+  status: 'pending' | 'active';
+  status_display?: string;
   invited_by_email?: string | null;
   created: string;
   updated: string;
@@ -317,6 +321,9 @@ export type Store = ActivityTimestamps & {
   is_official?: boolean;
   seller_tier?: SellerTier;
   user_role?: StoreTeamRole;
+  owner_name?: string;
+  owner_email?: string;
+  owner_avatar_url?: string;
   verified_at?: string | null;
   blocked_reason?: string | null;
 };
@@ -370,7 +377,10 @@ export type MerchantProduct = LifecycleTimestamps & {
   blocked_at?: string | null;
   brand: string;
   image_url: string;
-  images: { id: number; image: string }[];
+  images: { 
+    id: number; 
+    image: string 
+  }[];
   tags: string[];
   sales: number;
   flash_sale_end?: string | null;
@@ -495,7 +505,10 @@ export type Dashboard = {
   };
   orders: {
     total: number;
-    by_status: { status: string; count: number }[];
+    by_status: { 
+      status: string; 
+      count: number 
+    }[];
   };
   sales: {
     units: number;
@@ -514,9 +527,20 @@ export type Dashboard = {
     withdrawable_balance?: string;
     refund_window_days: number;
   };
-  orders_by_day: { date: string; count: number }[];
-  top_products: { product_id: number; product__title: string; units: number }[];
-  low_stock_products: { id: number; title: string; available: number }[];
+  orders_by_day: { 
+    date: string; 
+    count: number 
+  }[];
+  top_products: { 
+    product_id: number; 
+    product__title: string; 
+    units: number 
+  }[];
+  low_stock_products: { 
+    id: number; 
+    title: string; 
+    available: number 
+  }[];
 };
 
 export type NotificationItem = {
@@ -530,11 +554,27 @@ export type NotificationItem = {
   timestamp: string;
   deleted: boolean;
   data?: Record<string, unknown> | null;
-  actor?: { id?: number; type: string; label: string } | null;
-  target?: { id?: number; type: string; label: string } | null;
-  action_object?: { id?: number; type: string; label: string } | null;
+  actor?: { 
+    id?: number; 
+    type: string; 
+    label: string 
+  } | null;
+  target?: { 
+    id?: number; 
+    type: string; 
+    label: string 
+  } | null;
+  action_object?: { 
+    id?: number; 
+    type: string; 
+    label: string 
+  } | null;
   category?: string;
-  store?: { id: number; name: string; username?: string } | null;
+  store?: { 
+    id: number; 
+    name: string; 
+    username?: string 
+  } | null;
 };
 
 export type NotificationCategory = {
@@ -564,20 +604,77 @@ export type NotificationCounts = {
 };
 
 export type AdminDashboardData = {
-  period: { from: string; to: string; days: number };
+  period: { 
+    from: string; 
+    to: string; 
+    days: number 
+  };
   scopes?: Record<string, string>;
-  users: { total: number; active: number; staff: number; new: number };
-  stores: { total: number; active: number; blocked: number; new: number; new_last_30_days: number };
-  products: { total: number; published: number; hidden: number; out_of_stock: number; sponsored: number };
-  orders: { total: number; ordered: number; gross_total: string; by_status: { status: string; count: number }[] };
-  coupons: { total: number; active: number };
-  refunds: { total: number; accepted: number; declined: number; pending: number };
-  marketers: { total: number };
-  referrals?: { total: number; rewarded: number; pending: number; rewarded_amount: string };
-  financials: { escrow_total: string; commission_earned: string };
-  pending_actions: { withdrawals: number; refunds: number };
+  users: { 
+    total: number; 
+    active: number; 
+    staff: number; 
+    new: number 
+  };
+  stores: { 
+    total: number; 
+    active: number; 
+    blocked: number; 
+    new: number; 
+    new_last_30_days: number 
+  };
+  products: { 
+    total: number; 
+    published: number; 
+    hidden: number; 
+    out_of_stock: number; 
+    sponsored: number 
+  };
+  orders: { 
+    total: number; 
+    ordered: number; 
+    gross_total?: string | null; 
+    by_status: { 
+      status: string; 
+      count: number 
+    }[] 
+  };
+  coupons: { 
+    total: number; 
+    active: number 
+  };
+  refunds: { 
+    total: number; 
+    accepted: number; 
+    declined: number; 
+    pending: number 
+  };
+  marketers: { 
+    total: number 
+  };
+  referrals?: { 
+    total: number; 
+    rewarded: number; 
+    pending: number; 
+    rewarded_amount?: string | null 
+  };
+  financials?: { 
+    escrow_total?: string | null; 
+    commission_earned?: string | null 
+  } | null;
+  pending_actions: { 
+    withdrawals: number; 
+    refunds: number 
+  };
   recent_orders: AdminOrder[];
-  top_stores: { id: number; name: string; username: string; status: string; products: number; orders: number }[];
+  top_stores: { 
+    id: number; 
+    name: string; 
+    username: string; 
+    status: string; 
+    products: number; 
+    orders: number 
+  }[];
 };
 
 export type AdminOrder = LifecycleTimestamps & {
@@ -594,7 +691,11 @@ export type AdminOrder = LifecycleTimestamps & {
   tracking_number?: string;
   shipped_at?: string | null;
   delivered_at?: string | null;
-  tracking_events?: Array<{ status: string; description: string; timestamp: string }>;
+  tracking_events?: Array<{ 
+    status: string; 
+    description: string; 
+    timestamp: string 
+  }>;
   items_snapshot?: Array<Record<string, unknown>>;
   address_snapshot?: Record<string, unknown>;
 };
@@ -821,7 +922,7 @@ export type VisualSearchDetectedItem = {
   id: string;
   label: string;
   category: string;
-  confidence: number;
+  confidence: number | null;
   box: number[];
   dominant_colors: string[];
   keywords?: string[];
@@ -829,11 +930,14 @@ export type VisualSearchDetectedItem = {
 
 export type VisualSearchResultItem = {
   product: Product;
-  similarity_score: number;
+  similarity_score: number | null;
   match_reasons: string[];
 };
 
 export type VisualSearchResponse = {
+  selection_required?: boolean;
+  method?: 'local_clip' | 'preset_metadata';
+  message?: string;
   palette: VisualSearchPaletteColor[];
   detected_items: VisualSearchDetectedItem[];
   selected_item_id: string | null;

@@ -11,7 +11,7 @@ from affiliates.models import (
     Marketer,
     Referral,
 )
-from core.models import UserWalletTransaction
+from core.models import UserWallet, UserWalletTransaction
 from core.services import credit_user_wallet
 
 
@@ -65,6 +65,11 @@ def process_referral_reward_for_order(order: Any) -> Optional[Referral]:
         return None
     if not getattr(order, "ordered", False):
         return None
+    if (
+        Decimal(str(getattr(order, "paid_total", 0))) < Decimal(str(order.total))
+        or order.total <= 0
+    ):
+        return None
     if getattr(order, "status", "") in ("cancelled", "refunded"):
         return None
 
@@ -76,7 +81,7 @@ def process_referral_reward_for_order(order: Any) -> Optional[Referral]:
     )
     if referral is None:
         return None
-    if referral.status == Referral.REWARDED:
+    if referral.status in (Referral.REWARDED, "reversed"):
         return referral
 
     marketer = (
@@ -187,3 +192,46 @@ def reward_referral(
         return process_referral_reward_for_order(qualifying_order)
 
     return referral
+
+
+@transaction.atomic
+def reverse_referral_reward_for_order(order: Any) -> None:
+    """Recover promotional credit once, including credit already spent."""
+    referral = (
+        Referral.objects.select_for_update()
+        .filter(
+            order=order,
+            status=Referral.REWARDED,
+        )
+        .select_related("marketer__user")
+        .first()
+    )
+    if referral is None:
+        return
+    wallet = UserWallet.objects.select_for_update().get(user=referral.marketer.user)
+    amount = referral.reward_amount
+    wallet.balance -= amount
+    wallet.save(update_fields=["balance", "updated"])
+    UserWalletTransaction.objects.create(
+        wallet=wallet,
+        amount=amount,
+        transaction_type=UserWalletTransaction.DEBIT,
+        source=UserWalletTransaction.SOURCE_REFERRAL,
+        description="Referral reward reversed after order reversal",
+        reference=f"REF-{referral.pk}",
+        idempotency_key=f"referral-reversal-{referral.pk}",
+    )
+    affiliate = AffiliateWallet.objects.select_for_update().get(
+        user=referral.marketer.user
+    )
+    affiliate.balance -= amount
+    affiliate.save(update_fields=["balance", "updated"])
+    AffiliateWalletTransaction.objects.create(
+        wallet=affiliate,
+        amount=amount,
+        transaction_type=AffiliateWalletTransaction.DEBIT,
+        reason="referral_reversal",
+        metadata={"referral": referral.pk, "order_id": order.pk},
+    )
+    referral.status = "reversed"
+    referral.save(update_fields=["status", "updated"])

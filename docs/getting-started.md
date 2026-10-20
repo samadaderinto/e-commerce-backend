@@ -56,7 +56,7 @@ The catalog search index is rebuilt after the database transaction commits.
   .venv/bin/python server/manage.py populate_fake_data
   ```
 - **Reindexing Search (`rebuild_product_index`)**: Rebuilds the Elasticsearch catalog index (`commerce-products`).
-  *(See [Backend Engineering](backend.md#management-commands--data-seeding) for full flag descriptions and Docker commands).*
+  See [development seeding](backend.md#development-seeding) for presets, overrides, and safety rules.
 
 ### Email backend: local development and Resend testing
 
@@ -143,7 +143,7 @@ The backend Compose stack provides PostgreSQL, Redis and Elasticsearch; the
 monitoring Compose stack is optional. The frontend can also run directly on
 Node.js while the backend stack runs in containers.
 
-Follow the root [container walkthrough](../README.md#run-the-container-stack)
+Follow the root [container walkthrough](../README.md#run-locally)
 for network initialization, Compose commands, exposed ports, and shutdown. Read
 [Infrastructure](infrastructure.md) before changing service definitions,
 volumes or environment variables.
@@ -179,10 +179,11 @@ npm run test:unit
 npm run build                  # or npm --prefix client run build
 ```
 
-Backend test settings are isolated from the local development database. You can run the complete offline pytest suite (184 tests) directly with your virtual environment:
+Backend test settings are isolated from the local development database. Run the
+complete offline pytest suite directly with your virtual environment:
 
 ```sh
-# Fast offline backend pytest suite (184 tests)
+# Offline backend pytest suite
 .venv/bin/pytest server/
 
 # Or using Django's runner with storefront test settings
@@ -219,7 +220,7 @@ See [role matrix, staff activation, and operator setup](access-control.md) and
 
 For isolated browser verification, run a separate seeded API/database and frontend, set the frontend `API_URL` to that API’s `/api/v1`, and set `E2E_BASE_URL` to the test frontend URL. Verify the ports are free first. Integration and browser runs share `artifacts/playwright`; run them sequentially to preserve traces. Commerce tests create products/orders and clear the demo shopper’s active cart, so use a disposable seeded database.
 
-## October commerce audit fixes
+## PostgreSQL concurrency tests
 
 Optional PostgreSQL race verification uses `codematics.postgres_test_settings` against a disposable database. Set `AUDIT_POSTGRES_PASSWORD` and, if needed, `AUDIT_POSTGRES_HOST`, `AUDIT_POSTGRES_PORT` (default 15432), `AUDIT_POSTGRES_USER` and `AUDIT_POSTGRES_DATABASE` (both default `proace_audit`). The configured test database is `test_proace_audit`; use a dedicated instance and a user allowed to create it.
 
@@ -227,7 +228,10 @@ Optional PostgreSQL race verification uses `codematics.postgres_test_settings` a
 .venv/bin/pytest server/payment/test_audit_regressions.py --ds=codematics.postgres_test_settings
 ```
 
-The audit regressions include three concurrent-request tests that skip on SQLite. Run the mandatory offline suites normally, then run this optional suite to verify PostgreSQL row locking. Apply all Django migrations before testing the live app.
+These tests include concurrent-request cases that skip on SQLite. Run the
+mandatory offline suites first, then use PostgreSQL to verify row locking.
+Apply all Django migrations before testing the live app. The backend guide also
+describes the [isolated Compose test database](backend.md#verification-and-operation).
 
 Live wallet-checkout browser tests require a funded seeded `shopper@proace.local` account. Successful checkout tests cancel their own orders afterward to restore inventory and wallet funds. On a slow development frontend, authentication, placement and preview assertions allow up to 30 seconds; per-test execution can be raised with Playwright `--timeout=120000`.
 

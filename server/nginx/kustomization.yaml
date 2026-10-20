@@ -6,8 +6,9 @@ configMapGenerator:
   - name: nginx-security
     files:
       - nginx.conf
-      - upstream.conf
+      - upstream.conf=upstream.kubernetes.conf
       - blocked-ips.conf
       - suspected-ips.conf
       - allowed-ips.conf
       - trusted-proxies.conf
+      - trusted-protocol-proxies.conf

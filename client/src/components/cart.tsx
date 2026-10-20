@@ -28,6 +28,10 @@ import { Empty, ErrorState, Loading, ProductImage, Quantity } from "./ui";
 
 export function CartPage() {
   const { cart, cartLoading, cartError, setQuantity, notify } = useShop();
+  const queryClient = useQueryClient();
+  const canCheckout = cart.items.every(
+    (item) => item.purchasable && item.product.product_type !== "affiliate_clickbank"
+  );
   const hasPhysicalItems = cart.items.some((item) => !item.product.is_digital);
   const [busy, setBusy] = useState<number | null>(null);
   async function update(product: Product, quantity: number) {
@@ -62,7 +66,10 @@ export function CartPage() {
       {cartLoading ? (
         <Loading />
       ) : cartError ? (
-        <ErrorState error={cartError} />
+        <ErrorState
+          error={cartError}
+          retry={() => queryClient.invalidateQueries({ queryKey: ['cart'] })}
+        />
       ) : !cart.items.length ? (
         <Empty
           title="Room for something good"
@@ -107,7 +114,9 @@ export function CartPage() {
                     <span className="form-error">
                       {row.product.is_own_store
                         ? "You cannot buy from your own store. Remove this item."
-                        : "This listing is currently unavailable."}
+                        : row.product.product_type === "affiliate_clickbank"
+                          ? "Use the official partner link on the product page. Remove this item to continue."
+                          : "This listing is currently unavailable."}
                     </span>
                   )}
                   <button
@@ -162,9 +171,15 @@ export function CartPage() {
               <span>{hasPhysicalItems ? "Items total" : "Total"}</span>
               <strong>{money(cart.total)}</strong>
             </div>
-            <Link className="button" href="/checkout">
-              Continue to checkout <ArrowRight size={17} />
-            </Link>
+            {canCheckout ? (
+              <Link className="button" href="/checkout">
+                Continue to checkout <ArrowRight size={17} />
+              </Link>
+            ) : (
+              <button className="button" disabled>
+                Remove unavailable items to continue
+              </button>
+            )}
             <span className="secure-note">
               <LockKeyhole size={14} />
               Secure checkout
@@ -523,7 +538,7 @@ export function CheckoutPage() {
   }
 
   async function handleApplyCoupon() {
-    if (!couponCode.trim()) return;
+    if (validatingCoupon || busy || !couponCode.trim()) return;
     setValidatingCoupon(true);
     setError("");
     try {
@@ -547,6 +562,7 @@ export function CheckoutPage() {
   }
 
   function handleRemoveCoupon() {
+    if (validatingCoupon || busy) return;
     setAppliedCoupon(null);
     setCouponCode("");
   }
@@ -611,6 +627,7 @@ export function CheckoutPage() {
   }, [router, search, user, notify]);
 
   async function placeOrder() {
+    if (validatingCoupon || busy) return;
     if (hasPhysical && !addressId) {
       setError("Choose a delivery address first.");
       return;
@@ -949,6 +966,7 @@ export function CheckoutPage() {
                       type="button"
                       className="icon-button"
                       aria-label="Remove coupon"
+                      disabled={validatingCoupon || busy}
                       onClick={handleRemoveCoupon}
                       style={{ padding: "2px" }}
                     >
@@ -982,6 +1000,7 @@ export function CheckoutPage() {
                 <div style={{ display: "flex", gap: "0.5rem" }}>
                   <input
                     value={couponCode}
+                  disabled={validatingCoupon || busy}
                     onChange={(event) => setCouponCode(event.target.value)}
                     onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleApplyCoupon(); }}}
                     placeholder="Enter coupon code"
@@ -991,7 +1010,7 @@ export function CheckoutPage() {
                   <button
                     type="button"
                     className="button secondary"
-                    disabled={validatingCoupon || !couponCode.trim()}
+                    disabled={validatingCoupon || busy || !couponCode.trim()}
                     onClick={handleApplyCoupon}
                     style={{ padding: "0 0.85rem", whiteSpace: "nowrap" }}
                   >
@@ -1036,7 +1055,7 @@ export function CheckoutPage() {
               <button
                 className="button"
                 disabled={
-                  busy ||
+                  busy || validatingCoupon ||
                   (hasPhysical && !addressId) || !activeShipping?.quote_token || shippingRates.isFetching ||
                   cart.items.some((row) => !row.purchasable)
                 }

@@ -1,13 +1,29 @@
 import type { Cart, Page as ApiPage, Product, User } from '../src/lib/types';
 import { test, expect, Page } from '@playwright/test';
+import { postAuthWithRetry, waitForAuthRetry } from './helpers/auth';
+
+test.setTimeout(180000);
 
 const password = process.env.E2E_DEMO_PASSWORD || 'ProaceDemo2026!';
 
 async function login(page: Page, role = 'shopper', next = '/account') {
   await page.goto(`/login?next=${next}`);
+  await submitLogin(page, role, next);
+}
+
+async function submitLogin(page: Page, role: string, next: string): Promise<void> {
   await page.getByLabel('Email address').fill(`${role}@proace.local`);
   await page.getByLabel('Password', {exact: true}).fill(password);
-  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  for (let attempt: number = 0; attempt < 3; attempt += 1) {
+    const pending = page.waitForResponse(response =>
+      response.request().method() === 'POST' &&
+      /\/api\/auth\/login\/?$/.test(new URL(response.url()).pathname)
+    );
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+    const response = await pending;
+    if (response.status() !== 429) break;
+    await waitForAuthRetry(response);
+  }
   await expect(page).toHaveURL(url => url.pathname === next, { timeout: 30000 });
 }
 
@@ -70,7 +86,7 @@ test('storefront, assets, search and saved items', async ({ page }, testInfo) =>
 
 test('guest bag merges on sign-in and wallet checkout creates an order', async ({ page, baseURL }, testInfo) => {
   const origin: string = new URL(baseURL!).origin;
-  const setupLogin = await page.request.post('/api/auth/login', { headers: { origin }, data: { email: 'shopper@proace.local', password } });
+  const setupLogin = await postAuthWithRetry(page.request, '/api/auth/login', { headers: { origin }, data: { email: 'shopper@proace.local', password } });
   expect(setupLogin.status()).toBe(200);
   const existingCart: Cart = await (await page.request.get('/api/cart')).json();
   for (const item of existingCart.items) {
@@ -89,9 +105,7 @@ test('guest bag merges on sign-in and wallet checkout creates an order', async (
   await noOverflow(page);
   await page.getByRole('link', {name: 'Continue to checkout'}).click();
   await page.locator('main').getByRole('link', {name: 'Sign in', exact: true}).click();
-  await page.getByLabel('Email address').fill('shopper@proace.local');
-  await page.getByLabel('Password', {exact: true}).fill(password);
-  await page.getByRole('button', {name: 'Sign in', exact: true}).click();
+  await submitLogin(page, 'shopper', '/checkout');
   await expect(page).toHaveURL(/\/checkout/, { timeout: 30000 });
   await page.getByRole('radio', {name: /ProAce Wallet Balance/}).check();
   await expect(page.getByRole('button', {name: /^Pay /})).toBeEnabled();

@@ -1,3 +1,4 @@
+from core.listing_filters import ListingQuerySerializer
 from utils.timezones import TimeZoneField
 import json
 import urllib.parse
@@ -26,16 +27,21 @@ from utils.image_uploads import ImageUploadError, normalize_public_image
 class StoreSerializer(serializers.ModelSerializer):
     seller_tier = serializers.SerializerMethodField()
     user_role = serializers.SerializerMethodField()
+    owner_name = serializers.SerializerMethodField()
+    owner_email = serializers.EmailField(source='user.email', read_only=True)
+    owner_avatar_url = serializers.CharField(source='user.avatar_url', read_only=True, default='')
 
     class Meta:
         model = Store
         fields = [
             'id', 'user', 'username', 'name', 'status', 'is_official', 'seller_tier', 'user_role', 'assigned_staff',
+            'owner_name', 'owner_email', 'owner_avatar_url',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated', 'last_active_at',
         ]
         read_only_fields = [
             'id', 'user', 'status', 'is_official', 'seller_tier', 'user_role', 'assigned_staff',
+            'owner_name', 'owner_email', 'owner_avatar_url',
             'blocked_reason', 'blocked_at', 'blocked_by', 'verified_at', 'verified_by',
             'created', 'updated', 'last_active_at',
         ]
@@ -43,6 +49,12 @@ class StoreSerializer(serializers.ModelSerializer):
 
     def get_seller_tier(self, obj):
         return calculate_store_tier(obj)
+
+    def get_owner_name(self, obj: Store) -> str:
+        if not obj.user:
+            return ''
+        full_name = f"{obj.user.first_name or ''} {obj.user.last_name or ''}".strip()
+        return full_name or (obj.user.email.split('@')[0] if obj.user.email else '')
 
     def get_user_role(self, obj: Store) -> str:
         request = self.context.get('request')
@@ -54,28 +66,50 @@ class StoreSerializer(serializers.ModelSerializer):
 
 class StoreTeamMemberSerializer(serializers.ModelSerializer):
     user_id = serializers.IntegerField(source='user.id', read_only=True)
-    email = serializers.EmailField(source='user.email', read_only=True)
-    first_name = serializers.CharField(source='user.first_name', read_only=True)
-    last_name = serializers.CharField(source='user.last_name', read_only=True)
+    email = serializers.SerializerMethodField()
+    first_name = serializers.SerializerMethodField()
+    last_name = serializers.SerializerMethodField()
     avatar_url = serializers.SerializerMethodField()
     role_display = serializers.CharField(source='get_role_display', read_only=True)
     invited_by_email = serializers.EmailField(source='invited_by.email', read_only=True)
+    status = serializers.CharField(read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
 
     class Meta:
         model = StoreTeamMember
         fields = [
             'id', 'user_id', 'email', 'first_name', 'last_name', 'avatar_url',
-            'role', 'role_display', 'invited_by_email', 'created', 'updated',
+            'role', 'role_display', 'status', 'status_display', 'invited_by_email', 'created', 'updated',
         ]
         read_only_fields = [
             'id', 'user_id', 'email', 'first_name', 'last_name', 'avatar_url',
-            'role_display', 'invited_by_email', 'created', 'updated',
+            'role_display', 'status', 'status_display', 'invited_by_email', 'created', 'updated',
         ]
 
+    def get_email(self, obj: StoreTeamMember) -> str:
+        if obj.user and getattr(obj.user, 'email', None):
+            return obj.user.email
+        return obj.invited_email or ''
+
+    def get_first_name(self, obj: StoreTeamMember) -> str:
+        if obj.user:
+            return getattr(obj.user, 'first_name', '') or ''
+        return ''
+
+    def get_last_name(self, obj: StoreTeamMember) -> str:
+        if obj.user:
+            return getattr(obj.user, 'last_name', '') or ''
+        return ''
+
     def get_avatar_url(self, obj: StoreTeamMember) -> str:
-        avatar = getattr(obj.user, 'avatar', None)
-        if avatar:
-            return normalize_media_url(avatar.url)
+        if not obj.user:
+            return ''
+        avatar = getattr(obj.user, 'avatar_url', None)
+        if isinstance(avatar, str) and avatar:
+            return avatar
+        avatar_image = getattr(obj.user, 'avatar_image', None)
+        if avatar_image and hasattr(avatar_image, 'url'):
+            return normalize_media_url(avatar_image.url)
         return ''
 
 
@@ -271,6 +305,8 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
                     choices=['image', 'audio', 'video', 'document'],
                 ).run_validation(row['digital_file_type'])
             digital_file_url = row.get('digital_file_url', '')
+            if not isinstance(digital_file_url, str):
+                raise serializers.ValidationError('Digital asset addresses must be strings.')
             if digital_file_url:
                 try:
                     path = urllib.parse.urlsplit(digital_file_url).path.lstrip('/')
@@ -421,7 +457,7 @@ class MerchantProductSerializer(TaggitSerializer, serializers.ModelSerializer):
 
 
 class InventorySerializer(serializers.Serializer):
-    available = serializers.IntegerField(min_value=0)
+    available = serializers.IntegerField(min_value=0, max_value=2147483647)
 
 
 class DashboardQuerySerializer(serializers.Serializer):
@@ -595,10 +631,14 @@ class MerchantRefundQuerySerializer(serializers.Serializer):
     refund_type = serializers.ChoiceField(choices=['store_credit', 'original_payment'], required=False)
     order_id = serializers.CharField(required=False, allow_blank=True)
     refund_id = serializers.CharField(required=False, allow_blank=True)
-    days = serializers.IntegerField(required=False, min_value=1)
+    days = serializers.IntegerField(required=False, min_value=1, max_value=365000)
     date_from = serializers.CharField(required=False, allow_blank=True)
     date_to = serializers.CharField(required=False, allow_blank=True)
     start_date = serializers.CharField(required=False, allow_blank=True)
     end_date = serializers.CharField(required=False, allow_blank=True)
     ordering = serializers.ChoiceField(choices=['-created', 'created', '-updated', 'updated', '-amount', 'amount'], required=False, default='-created')
 
+
+class StoreTeamQuerySerializer(ListingQuerySerializer):
+    role = serializers.ChoiceField(choices=StoreTeamMember.ROLE_CHOICES, required=False)
+    paginated = serializers.BooleanField(required=False, default=False)

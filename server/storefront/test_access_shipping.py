@@ -13,7 +13,7 @@ from core.onboarding import invite_staff
 from notification.models import NotificationDelivery
 from payment.models import Order
 from payment.carriers import live_rates, calculate_carrier_rates
-from store.models import Store, StoreAddress
+from store.models import Store, StoreAddress, StoreTeamMember
 from product.models import Product
 
 
@@ -60,11 +60,22 @@ class AccessAndShippingTests(TestCase):
         self.assertEqual(self.client.get('/api/v1/stores/').data['count'], 0)
         self.assertEqual(self.client.get(f'/api/v1/stores/{self.store.pk}/products/').status_code, 404)
 
-        # Proace Official Store: all staff automatically granted access upon login
+        # Proace Official Store: staff does not get automatic access without explicit team assignment
         official_store = Store.objects.create(
             user=self.admin, name='Official Store', is_official=True, status='active', verified_at=timezone.now()
         )
         prod = Product.objects.create(store=official_store, title='Official Product', price=Decimal('30'), discount=0, available=5)
+        self.assertEqual(self.client.get('/api/v1/stores/').data['count'], 0)
+        self.assertEqual(self.client.get(f'/api/v1/stores/{official_store.pk}/products/').status_code, 404)
+
+        # Admin explicitly delegates staff to official store team
+        StoreTeamMember.objects.create(
+            store=official_store,
+            user=self.staff,
+            invited_email=self.staff.email,
+            role=StoreTeamMember.ROLE_CATALOG_MANAGER,
+            status=StoreTeamMember.STATUS_ACTIVE,
+        )
         self.assertEqual(self.client.get('/api/v1/stores/').data['count'], 1)
         self.assertEqual(self.client.get(f'/api/v1/stores/{official_store.pk}/products/').status_code, 200)
         self.assertEqual(self.client.get(f'/api/v1/products/{prod.pk}/').status_code, 200)

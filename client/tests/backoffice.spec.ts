@@ -174,6 +174,8 @@ test('store detail provides suspension controls and centers its loading state', 
   await mockApi(page, { ...profile, is_business_admin: true });
   let status = 'active';
   let suspensionReason = '';
+  let releaseLoading: () => void = () => {};
+  const pendingStore: Promise<void> = new Promise(resolve => { releaseLoading = resolve; });
   await page.route('**/api/admin/staff/stores/44**', async route => {
     const path = new URL(route.request().url()).pathname.replace(/\/$/, '');
     if (route.request().method() === 'POST') {
@@ -187,7 +189,7 @@ test('store detail provides suspension controls and centers its loading state', 
       return route.fulfill({ json: { detail: 'Store status updated' } });
     }
     if (path.endsWith('/products')) return route.fulfill({ json: { count: 0, results: [] } });
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await pendingStore;
     return route.fulfill({ json: {
       id: 44,
       name: 'Audit store',
@@ -199,16 +201,19 @@ test('store detail provides suspension controls and centers its loading state', 
     } });
   });
 
-  await page.goto('/admin/stores/44');
+  await page.goto('/admin/stores/44', { waitUntil: 'domcontentloaded' });
   const pageLoader = page.locator('.loading.full-page');
-  await expect(pageLoader).toBeVisible();
-  const loaderBox = await pageLoader.boundingBox();
-  const viewport = page.viewportSize();
-  expect(loaderBox).not.toBeNull();
-  expect(viewport).not.toBeNull();
-  expect(Math.abs(loaderBox!.x + loaderBox!.width / 2 - viewport!.width / 2)).toBeLessThan(2);
-  expect(Math.abs(loaderBox!.y + loaderBox!.height / 2 - viewport!.height / 2)).toBeLessThan(2);
-
+  try {
+    await expect(pageLoader).toBeVisible();
+    const loaderBox = await pageLoader.boundingBox();
+    const viewport = page.viewportSize();
+    expect(loaderBox).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(Math.abs(loaderBox!.x + loaderBox!.width / 2 - viewport!.width / 2)).toBeLessThan(2);
+    expect(Math.abs(loaderBox!.y + loaderBox!.height / 2 - viewport!.height / 2)).toBeLessThan(2);
+  } finally {
+    releaseLoading();
+  }
   await expect(page.getByRole('button', { name: 'Suspend store' })).toBeVisible();
   await page.getByRole('button', { name: 'Suspend store' }).click();
   const dialog = page.getByRole('dialog');

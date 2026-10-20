@@ -9,9 +9,10 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-async function exercise({ route = 'products', method = 'GET', failure = 'network', aborted = false } = {}) {
+async function exercise({ route = 'products', method = 'GET', failure = 'network', aborted = false, trusted = false, forwardedProto = 'http', asset = false } = {}) {
   const calls = [];
   const cookies = [];
+  const timers = new Set();
   class MockResponse extends Response {
     cookies = { set: (...args) => cookies.push(args) };
     static json(body, options) {
@@ -22,8 +23,10 @@ async function exercise({ route = 'products', method = 'GET', failure = 'network
   }
   const module = { exports: {} };
   const context = vm.createContext({
-    module, exports: module.exports, Response, Headers, URL, AbortSignal,
-    performance, process, console: { error() {} },
+    module, exports: module.exports, Response, Headers, URL, AbortSignal, AbortController,
+    setTimeout(callback) { timers.add(callback); return callback; },
+    clearTimeout(timer) { timers.delete(timer); },
+    performance, process: { env: { ...process.env, TRUSTED_EDGE_PROXY: trusted ? 'true' : 'false' } }, console: { error() {} },
     require(name) {
       if (name === 'next/server') return { NextResponse: MockResponse };
       if (name.endsWith('/auth-refresh')) {
@@ -35,7 +38,8 @@ async function exercise({ route = 'products', method = 'GET', failure = 'network
       throw new Error(`Unexpected import: ${name}`);
     },
     async fetch(url, options) {
-      calls.push({ path: new URL(url).pathname, authorization: options.headers.Authorization });
+      calls.push({ path: new URL(url).pathname, authorization: options.headers.Authorization, protocol: options.headers['X-Forwarded-Proto'], signal: options.signal });
+      if (asset) return new Response('purchased bytes', { headers: { 'Content-Type': 'application/octet-stream' } });
       if (url.includes('/auth/refresh/')) {
         if (failure === 'network') throw new TypeError('Controlled fetch failure');
         if (failure === 'timeout') throw new DOMException('Timed out', 'TimeoutError');
@@ -53,7 +57,7 @@ async function exercise({ route = 'products', method = 'GET', failure = 'network
   const request = {
     method, url: `http://frontend.test/api/${route}`,
     nextUrl: new URL(`http://frontend.test/api/${route}`),
-    headers: new Headers({ host: 'frontend.test' }),
+    headers: new Headers({ host: 'frontend.test', 'x-forwarded-proto': forwardedProto }),
     cookies: { get: name => ({ value: name === 'proace_access' ? 'expired' : 'refresh-fixture' }) },
     signal: controller.signal,
     arrayBuffer: async () => new ArrayBuffer(0),
@@ -61,7 +65,7 @@ async function exercise({ route = 'products', method = 'GET', failure = 'network
   const response = await module.exports[method](request, {
     params: Promise.resolve({ path: route.split('/') }),
   });
-  return { response, calls, cookies };
+  return { response, calls, cookies, timers, controller };
 }
 
 for (const failure of ['network', 'timeout', 'malformed', 'http']) {
@@ -86,4 +90,27 @@ test('cancelled public requests do not trigger anonymous recovery', async () => 
   const { response, calls } = await exercise({ aborted: true });
   assert.equal(response.status, 503);
   assert.equal(calls.length, 2);
+});
+
+
+test('trusted HTTPS metadata reaches both initial API call and token refresh', async () => {
+  const { calls } = await exercise({ trusted: true, forwardedProto: 'https' });
+  assert.equal(calls[0].protocol, 'https');
+  assert.equal(calls[1].protocol, 'https');
+});
+
+test('a public standalone listener ignores client supplied HTTPS metadata', async () => {
+  const { calls } = await exercise({ trusted: false, forwardedProto: 'https' });
+  assert.equal(calls[0].protocol, 'http');
+  assert.equal(calls[1].protocol, 'http');
+});
+
+test('download header deadline is cleared before body streaming and client cancellation remains active', async () => {
+  const { response, calls, timers, controller } = await exercise({ route: 'orders/1/downloads/2', asset: true });
+  assert.equal(response.status, 200);
+  assert.equal(timers.size, 0);
+  assert.equal(calls[0].signal.aborted, false);
+  assert.equal(await response.text(), 'purchased bytes');
+  controller.abort();
+  assert.equal(calls[0].signal.aborted, true);
 });

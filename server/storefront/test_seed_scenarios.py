@@ -7,6 +7,7 @@ from django.core.management import call_command, CommandError
 from rest_framework.test import APIClient
 
 from core.management.commands.populate_fake_data import Command
+from cart.models import CartItem
 from core.models import User
 from product.models import Product
 from staff.models import Post
@@ -25,6 +26,9 @@ class DemoScenarioTests(TestCase):
             stdout=output,
         )
 
+        self.assertFalse(CartItem.objects.filter(
+            product__product_type=Product.PRODUCT_TYPE_AFFILIATE_CLICKBANK,
+        ).exists())
         self.assertTrue(Post.objects.filter(tags__name="engineering").exists())
         self.assertGreaterEqual(Product.objects.count(), 45)
         for email in (

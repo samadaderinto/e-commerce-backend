@@ -155,6 +155,6 @@ Existing `is_superuser` accounts are technical admins; existing plain `is_staff`
 
 Grafana remains bound to loopback on port 3002; anonymous authentication and signup are disabled. Sign in using technical credentials configured by `DEFAULT_ADMIN_EMAIL`/`DEFAULT_ADMIN_PASSWORD`. Commerce business admins and staff are not provisioned Grafana accounts. For remote production access, use a private tunnel or a TLS gateway with technical-team-only authentication. Do not enable anonymous access or share Grafana credentials with business users. Silk remains disabled by default and requires an active Django superuser when enabled.
 
-## October commerce audit fixes
+## Fulfillment and financial permissions
 
 Merchants can change only their own physical store fulfillment through forward shipping/delivery transitions. They cannot set financial statuses or complete other stores’ shipments. Customer refunds require actual paid funds and available claim quantities; digital downloads require full settlement.

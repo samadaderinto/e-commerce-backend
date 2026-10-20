@@ -121,7 +121,7 @@ is ready for production:
 | JSON-backed product variants with dedicated price modifiers and inventory. | Allows merchants to define options (Size, Color, Material) with independent stock tracking and pricing without relational database overhead. |
 | Make Elasticsearch optional and retain a database search fallback. | Local development can run without search, while indexing failures do not become the only path to catalog results. |
 | Separate application database from logging infrastructure. | Application emits structured JSON to stdout; Grafana Alloy ships logs to Loki for aggregation in Grafana. |
-| Implement 7-day buyer refund review escrow and 4% platform commission. | Merchant earnings from orders placed within the 7-day refund window are held in review before unlocking for withdrawal requests. |
+| Implement 7-day buyer refund review escrow and 4% platform commission. | Physical proceeds stay in review until recorded store delivery plus seven days, never before the original sale hold; undelivered proceeds remain held. Digital proceeds retain the seven-day sale hold. |
 | ClickBank affiliate partner coexistence with attribution HopLink tracking. | External ClickBank products exist alongside standard listings; cart addition is blocked and outbound HopLinks route through `/api/affiliates/clickbank/outbound/<id>` with secure TID tracking, while the Next.js proxy transparently passes HTTP 302 redirects. |
 | Hybrid destination sales tax engine (local DB rules with Stripe Tax fallback). | Destination state and ZIP jurisdiction rates, digital exemptions, and shipping fee taxability are calculated accurately and snapshotted per order. |
 | Use SQLite for direct local development/tests and PostgreSQL for Compose/production. | Direct setup is lightweight; production data must use persistent managed storage. |
@@ -146,6 +146,6 @@ production service boundaries. Never commit production secrets or env files.
 See [role matrix, staff activation, and operator setup](access-control.md) and
 [multi-carrier API, environment variables, sandbox setup, and fulfillment boundaries](shipping-integrations.md).
 
-## October commerce audit fixes
+## Financial service ownership
 
 Payment accounting is centralized in `payment/accounting.py` and `payment/services.py`; `payment/fulfillment.py` owns store-level shipping transitions and `payment/funding.py` owns reserved wallet deposits and recovery. Financial mutations serialize on the order/user row, and unique wallet receipts protect retries.

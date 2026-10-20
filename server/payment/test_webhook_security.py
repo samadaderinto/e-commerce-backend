@@ -33,6 +33,34 @@ class SignedWebhookTests(TransactionTestCase):
         cache.clear()
 
     @patch('storefront.views.stripe.Webhook.construct_event')
+    def test_verified_malformed_envelopes_return_clean_400(self, verify: Any) -> None:
+        for data in (None, [], {'object': None}, {'object': []}):
+            with self.subTest(data=data):
+                verify.return_value = {'type': 'checkout.session.completed', 'data': data}
+                response = self.client.post(
+                    '/api/v1/stripe/webhook/', {}, format='json',
+                    HTTP_STRIPE_SIGNATURE='verified-by-mocked-provider',
+                )
+                self.assertEqual(response.status_code, 400)
+
+    @patch('payment.funding.confirm_funding', side_effect=RuntimeError('private provider diagnostic'))
+    @patch('storefront.views.stripe.Webhook.construct_event')
+    def test_settlement_failure_is_retryable_without_exposing_diagnostics(
+        self, verify: Any, confirm: Any,
+    ) -> None:
+        verify.return_value = {'type': 'checkout.session.completed', 'data': {'object': {
+            'id': 'cs_retry_audit', 'payment_status': 'paid',
+            'client_reference_id': str(self.buyer.pk), 'metadata': {'wallet_topup': 'true'},
+        }}}
+        response = self.client.post(
+            '/api/v1/stripe/webhook/', {}, format='json',
+            HTTP_STRIPE_SIGNATURE='verified-by-mocked-provider',
+        )
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('private provider diagnostic', str(response.data))
+        confirm.assert_called_once()
+
+    @patch('storefront.views.stripe.Webhook.construct_event')
     def test_signed_checkout_callback_commits_once_and_duplicate_is_idempotent(self, verify: Any) -> None:
         verify.return_value = {'type': 'checkout.session.completed', 'data': {'object': {
             'id': 'cs_signed_audit', 'payment_status': 'paid', 'currency': 'usd',
